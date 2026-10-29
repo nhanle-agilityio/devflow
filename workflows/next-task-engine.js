@@ -1,7 +1,7 @@
 export const meta = {
-  name: 'next-tasks',
+  name: 'next-task-engine',
   description: 'Pick up ready GitHub issues one at a time: implement test-first, run checks, verify, review, and open a PR for each.',
-  whenToUse: 'Started by /devflow:next-task after preflight. Needs args: config (parsed .claude/devflow.json), limit, issues, startBranch, prTemplatePath.',
+  whenToUse: 'Internal engine of /devflow:next-task; do not run it directly. Started by /devflow:next-task after preflight. Needs args: config (parsed .claude/devflow.json), limit, issues, startBranch, prTemplatePath.',
   phases: [
     { title: 'Select', detail: 'list ready issues, dependencies first' },
     { title: 'Implement', detail: 'claim, branch, test first, then the change' },
@@ -16,6 +16,18 @@ export const meta = {
 // ---------------------------------------------------------------------------------------------
 // Config. Everything stack-specific comes from args.config; nothing is hardcoded here.
 // ---------------------------------------------------------------------------------------------
+
+// Run through /devflow:next-task only: it does the preflight and builds args. Calling this workflow
+// directly (e.g. /devflow:next-task-engine) arrives without args, so stop with a clear message.
+const missing = ['config', 'startBranch'].filter((k) => !args || !args[k])
+if (!missing.length && (!args.config.github || !args.config.baseBranch || !Array.isArray(args.config.checks))) {
+  missing.push('config.github / config.baseBranch / config.checks')
+}
+if (missing.length) {
+  const message = `Missing args: ${missing.join(', ')}. Run /devflow:next-task [limit | #issue ...] instead of this workflow directly.`
+  log(message)
+  return [{ issue: 0, status: 'skipped', reason: message }]
+}
 
 const cfg = args.config
 const gh = cfg.github

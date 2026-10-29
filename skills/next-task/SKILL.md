@@ -1,6 +1,6 @@
 ---
 name: next-task
-description: Pick up ready GitHub issues and take each from implementation to an open PR (test first, checks, verification, review) by running the devflow:next-tasks workflow. Humans merge.
+description: Pick up ready GitHub issues and take each from implementation to an open PR (test first, checks, verification, review) by running the devflow:next-task-engine workflow. Humans merge.
 argument-hint: "[limit | #issue ...]"
 disable-model-invocation: true
 ---
@@ -9,7 +9,7 @@ disable-model-invocation: true
 
 Arguments: $ARGUMENTS
 
-This skill is only the entry point. The work is done by the `devflow:next-tasks` workflow. Running this command is the user's opt-in to run that workflow.
+This skill is only the entry point. The work is done by the `devflow:next-task-engine` workflow. Running this command is the user's opt-in to run that workflow.
 
 ## 1. Preflight
 
@@ -30,7 +30,7 @@ Fail fast with a clear message if any check fails; do not start the workflow.
 
 ## 3. Run the workflow
 
-Call the Workflow tool with name `devflow:next-tasks` and this `args` object (a real JSON object, not a string):
+Call the Workflow tool with name `devflow:next-task-engine` and this `args` object (a real JSON object, not a string):
 
 ```json
 {

@@ -9,7 +9,7 @@ Nothing in the plugin knows about a specific stack. Project mechanics live in `.
 
 ## Principles
 
-- **Deterministic where it matters.** The loop and the order of stages in `next-task` are a Workflow script (`workflows/next-tasks.js`), not prose. Safety rules are hooks, not instructions.
+- **Deterministic where it matters.** The loop and the order of stages in `next-task` are a Workflow script (`workflows/next-task-engine.js`), not prose. Safety rules are hooks, not instructions.
 - **Humans own merges.** The plugin opens PRs and pushes its own feature branches, never merges, never pushes to the base branch, never force-pushes (except `--force-with-lease` on its own branch).
 - **Model tiers.** Opus plans and reviews; Sonnet implements; Haiku runs mechanical steps (listing, checks, labels).
 - **GitHub via the GitHub MCP server** (issues, labels, PRs, comments). `gh` is optional, never required. Adding a missing label to an issue creates it.
@@ -36,7 +36,7 @@ skills/spec/templates/issue.md      issue body template
 skills/next-task/SKILL.md           /devflow:next-task  (thin entry: preflight, then calls the workflow)
 skills/next-task/templates/pr.md    PR body template
 skills/address-reviews/SKILL.md     /devflow:address-reviews
-workflows/next-tasks.js             meta.name "next-tasks" → /devflow:next-tasks
+workflows/next-task-engine.js       meta.name "next-task-engine" → /devflow:next-task-engine (internal; users run /devflow:next-task)
 hooks/hooks.json                    PreToolUse guard
 hooks/guard.py                      python3 (3.9+, stdlib only)
 hooks/test_guard.py                 unittest for guard.py
@@ -104,9 +104,9 @@ Preflight (inline, fail fast with a clear message):
 - `git fetch <remote> <baseBranch>` succeeds.
 - GitHub MCP reachable (get the authenticated user).
 
-Then call the Workflow tool with name `devflow:next-tasks` and `args = { config: <parsed devflow.json>, limit: <n or config default>, issues: [<explicit issue numbers>] , startBranch: <current branch> }`. When it returns, print the summary table: issue → PR / blocked (reason) / skipped.
+Then call the Workflow tool with name `devflow:next-task-engine` and `args = { config: <parsed devflow.json>, limit: <n or config default>, issues: [<explicit issue numbers>] , startBranch: <current branch> }`. When it returns, print the summary table: issue → PR / blocked (reason) / skipped.
 
-## Workflow `next-tasks.js`
+## Workflow `next-task-engine.js`
 
 Plain JS, no `Date.now()`/`Math.random()`, no filesystem. Tasks run **sequentially** in the main checkout (they share one working tree and often touch the same files). Every agent gets the config in its prompt. Every agent returns structured output (schemas below); a stage that fails marks the issue blocked and moves on to the next issue.
 
