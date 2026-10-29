@@ -10,7 +10,7 @@ Nothing in the plugin knows about a specific stack. Project mechanics live in `.
 ## Install
 
 ```
-/plugin marketplace add <path-or-repo-of-this-plugin>
+/plugin marketplace add nhanle-agilityio/devflow
 /plugin install devflow@nhanle-devflow
 ```
 
@@ -25,7 +25,7 @@ Required config keys: `github`, `baseBranch`, `checks`. Everything else has defa
 ## Usage
 
 - `/devflow:spec add CSV export to the reports page`: runs in a cloud session or locally. Stops at Gate 1 until you merge the spec PR, then creates the issues.
-- `/devflow:next-task`: up to `nextTask.defaultLimit` ready issues, sequentially in your checkout. `/devflow:next-task 2` or `/devflow:next-task #12 #15` for a specific number or issues. Your working tree must be clean; your branch is restored after each issue.
+- `/devflow:next-task`: up to `nextTask.defaultLimit` ready issues, sequentially in your checkout. `/devflow:next-task 2` or `/devflow:next-task #12 #15` for a specific number or issues. Your working tree must be clean; your branch is restored after each issue. The command also lists `/devflow:next-task-engine`: that is the workflow script it runs internally (Claude Code registers every plugin workflow as a command). Do not run it directly; without the arguments the skill builds it stops with a message.
 - `/devflow:address-reviews [#pr ...]`: fixes, answers or declines each unresolved review thread, pushes new commits, replies, and asks for one more automated review (limited by `nextTask.maxReviewRounds`).
 
 Issue state is a label state machine: ready, in-progress, review, blocked (names configurable). A blocked issue gets a comment saying which stage failed and what a human must decide; its branch is pushed so no work is lost.
