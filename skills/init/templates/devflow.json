@@ -1,0 +1,35 @@
+{
+  // Annotated example. init writes plain JSON (no comments) to .claude/devflow.json.
+  "$schema": "./devflow.schema.json",
+  // remote = the git remote that points at GitHub
+  "github": { "owner": "acme", "repo": "shop", "remote": "origin" },
+  // Branches start from <remote>/<baseBranch>; PRs target it.
+  "baseBranch": "main",
+  // The guard hook blocks pushes to these and to baseBranch.
+  "protectedBranches": ["main", "develop"],
+  // type is one of feat|fix|chore|docs|refactor|test; slug is at most 5 words, kebab-case.
+  "branchPattern": "{type}/{issue}-{slug}",
+  // Conventional Commits scope, e.g. feat(#12): ...
+  "commitScope": "#{issue}",
+  "specDir": "docs/specs",
+  "labels": {
+    "ready": "agent:ready",
+    "inProgress": "agent:in-progress",
+    "review": "agent:review",
+    "blocked": "agent:blocked",
+    "e2e": "needs-e2e"
+  },
+  // Run in order; all must pass before review. Use the project's own commands.
+  "checks": [
+    { "name": "test", "run": "npm test" },
+    { "name": "lint", "run": "npm run lint" }
+  ],
+  "verify": {
+    // Subset of "http" | "browser"; [] disables verification.
+    "modes": ["http", "browser"],
+    "devServer": { "run": "npm run dev", "url": "http://localhost:3000", "readyTimeoutSec": 60 },
+    // "playwright" (Playwright MCP) or "chrome" (Claude in Chrome)
+    "browserTool": "playwright"
+  },
+  "nextTask": { "defaultLimit": 3, "maxFixRounds": 2, "maxReviewRounds": 2 }
+}

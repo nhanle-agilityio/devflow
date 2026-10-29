@@ -1,0 +1,7 @@
+{
+  "name": "devflow",
+  "description": "Project-agnostic spec-to-PR workflow: turn an idea into a reviewed spec and GitHub issues, then implement ready issues test-first with checks, verification and review, and open PRs for a human to merge.",
+  "author": { "name": "Nhan Le" },
+  "repository": "https://github.com/nhanle-agilityio/devflow",
+  "license": "MIT"
+}

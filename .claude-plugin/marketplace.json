@@ -1,0 +1,16 @@
+{
+  "name": "nhanle-devflow",
+  "owner": {
+    "name": "Nhan Le"
+  },
+  "metadata": {
+    "description": "Project-agnostic spec-to-PR workflow plugins by Nhan Le."
+  },
+  "plugins": [
+    {
+      "name": "devflow",
+      "source": "./",
+      "description": "Spec-to-PR workflow for any project: /devflow:init, /devflow:spec, /devflow:next-task, /devflow:address-reviews, plus a guard hook that blocks merges and pushes to protected branches."
+    }
+  ]
+}

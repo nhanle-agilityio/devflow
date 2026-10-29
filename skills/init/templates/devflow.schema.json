@@ -1,0 +1,92 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "devflow project configuration",
+  "type": "object",
+  "required": ["github", "baseBranch", "checks"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "github": {
+      "type": "object",
+      "required": ["owner", "repo"],
+      "additionalProperties": false,
+      "properties": {
+        "owner": { "type": "string", "minLength": 1 },
+        "repo": { "type": "string", "minLength": 1 },
+        "remote": { "type": "string", "default": "origin", "description": "Git remote that points at GitHub." }
+      }
+    },
+    "baseBranch": { "type": "string", "minLength": 1, "description": "Branches start from <remote>/<baseBranch>; PRs target it." },
+    "protectedBranches": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": ["main", "master", "develop"],
+      "description": "The guard hook blocks pushes to these and to baseBranch."
+    },
+    "branchPattern": {
+      "type": "string",
+      "default": "{type}/{issue}-{slug}",
+      "description": "Placeholders: {type} (feat|fix|chore|docs|refactor|test), {issue}, {slug} (at most 5 words, kebab-case)."
+    },
+    "commitScope": { "type": "string", "default": "#{issue}", "description": "Conventional Commits scope." },
+    "specDir": { "type": "string", "default": "docs/specs" },
+    "labels": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ready": { "type": "string", "default": "agent:ready" },
+        "inProgress": { "type": "string", "default": "agent:in-progress" },
+        "review": { "type": "string", "default": "agent:review" },
+        "blocked": { "type": "string", "default": "agent:blocked" },
+        "e2e": { "type": "string", "default": "needs-e2e" }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Run in order; all must pass before review.",
+      "items": {
+        "type": "object",
+        "required": ["name", "run"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "run": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "verify": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "modes": {
+          "type": "array",
+          "items": { "enum": ["http", "browser"] },
+          "uniqueItems": true,
+          "default": [],
+          "description": "[] disables verification."
+        },
+        "devServer": {
+          "type": "object",
+          "required": ["run", "url"],
+          "additionalProperties": false,
+          "properties": {
+            "run": { "type": "string", "minLength": 1 },
+            "url": { "type": "string", "minLength": 1 },
+            "readyTimeoutSec": { "type": "integer", "minimum": 1, "default": 60 }
+          }
+        },
+        "browserTool": { "enum": ["playwright", "chrome"], "default": "playwright" }
+      }
+    },
+    "nextTask": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaultLimit": { "type": "integer", "minimum": 1, "default": 3 },
+        "maxFixRounds": { "type": "integer", "minimum": 0, "default": 2 },
+        "maxReviewRounds": { "type": "integer", "minimum": 0, "default": 2 }
+      }
+    }
+  }
+}
