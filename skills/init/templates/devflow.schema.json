@@ -38,7 +38,63 @@
         "inProgress": { "type": "string", "default": "agent:in-progress" },
         "review": { "type": "string", "default": "agent:review" },
         "blocked": { "type": "string", "default": "agent:blocked" },
-        "e2e": { "type": "string", "default": "needs-e2e" }
+        "e2e": { "type": "string", "default": "needs-e2e" },
+        "devflow": { "type": "string", "default": "devflow", "description": "Put on every PR devflow opens; /devflow:sync targets PRs with it." },
+        "riskLow": { "type": "string", "default": "risk:low", "description": "Issue/PR label: eligible for the merge gate." },
+        "riskHigh": { "type": "string", "default": "risk:high", "description": "Issue/PR label: waits for a human merge." },
+        "stacked": { "type": "string", "default": "stacked", "description": "PR label: the PR is based on another open devflow PR." }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How /devflow:spec and next-task judge whether a change needs a human merge. Unsure means high.",
+      "properties": {
+        "highWhen": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [
+            "authentication or permissions",
+            "data migration or deleting stored data",
+            "a change to a public API contract that breaks existing clients",
+            "security-sensitive input handling",
+            "payments or money"
+          ],
+          "description": "Plain-language conditions; a task matching any is risk:high."
+        },
+        "highPaths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Globs (** * ?). A PR touching a matching file is escalated to risk:high before it is opened."
+        }
+      }
+    },
+    "mergeGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read by the devflow merge gate GitHub Action. Claude itself never merges.",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "dryRun": { "type": "boolean", "default": true, "description": "Log what would be merged without merging." },
+        "requiredChecks": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["devflow/review"],
+          "description": "Names of check runs or commit-status contexts that must be green before the gate merges."
+        },
+        "method": { "enum": ["merge"], "default": "merge", "description": "Merge commits are required for stacked PRs." }
+      }
+    },
+    "testing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "e2eFramework": {
+          "type": "boolean",
+          "default": false,
+          "description": "True when the project has an automated e2e/browser test setup that can hold committed e2e tests. When false, e2e test rows are covered by the verify stage only."
+        }
       }
     },
     "checks": {
