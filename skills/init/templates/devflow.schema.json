@@ -79,6 +79,22 @@
         "browserTool": { "enum": ["playwright", "chrome"], "default": "playwright" }
       }
     },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "testMatrix": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run the QA step in /devflow:spec: an agent drafts a test matrix from the acceptance criteria and reports criteria it cannot test."
+        },
+        "qaModel": {
+          "enum": ["opus", "sonnet"],
+          "default": "opus",
+          "description": "Model for the QA agent. Opus is better at spotting untestable criteria and cases the spec leaves out; Sonnet is cheaper."
+        }
+      }
+    },
     "nextTask": {
       "type": "object",
       "additionalProperties": false,

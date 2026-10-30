@@ -246,6 +246,7 @@ Instructions:
 1. Read the issue's acceptance criteria and the spec it links (read the spec file from the repo or from ${baseRef}). The spec and issue are the source of truth for expected behaviour, not the current code.
 2. Follow the project's CLAUDE.md for architecture, conventions and its "Never" list.
 3. For behaviour changes and bug fixes: first write and commit a failing test (\`test(${scopeFor(issue)}): ...\`), run it and confirm it fails for the right reason, then commit the implementation (\`feat|fix|chore|refactor(${scopeFor(issue)}): ...\`, pick the type that fits). For work without behaviour change (docs, config) one commit is fine. Use Conventional Commits in English.
+   If the issue has a "Test cases" table (rows of the spec's test matrix), write a test for every row with priority "must" and make each traceable to its row id (in the test name or a short comment). "should" rows are optional. If the issue has only a test plan, follow it.
 4. Stage files by name only; never stage everything at once. Make small commits. Add no Co-Authored-By or AI attribution unless CLAUDE.md says otherwise.
 5. Stay inside the issue's scope. Anything else you notice goes into "outOfScope", unchanged in the code.
 6. If a requirement is ambiguous in a way that changes behaviour or a contract and the spec does not answer it, do NOT guess: return status "blocked" with blockedReason stating the question. For minor ambiguity, decide, and record the decision in "assumptions".
@@ -302,7 +303,7 @@ ${dev ? `Dev server: run \`${dev.run}\` in the background, then poll ${dev.url} 
 
 Steps:
 1. Start the dev server in the background and wait until the URL answers.
-2. Walk EVERY acceptance criterion of the issue. mode "http": call the API with curl and compare status and body to the criterion. mode "browser": use ${browser} to navigate, act as the user, and read the page (accessibility tree or text) to check the visible result; take screenshots only for your own check. Use whichever allowed mode fits each criterion and report the mode(s) used.
+2. Walk EVERY acceptance criterion of the issue, and every "Test cases" row with level "http" or "e2e" if the issue has that table. mode "http": call the API with curl and compare status and body to the criterion. mode "browser": use ${browser} to navigate, act as the user, and read the page (accessibility tree or text) to check the visible result; take screenshots only for your own check. Use whichever allowed mode fits each criterion and report the mode(s) used.
 3. Record each step as action / expected / actual / pass.
 4. ALWAYS stop the dev server you started, also when a step fails, and make sure no process is left listening on its port.
 5. Do not edit or commit any file, and do not push.
@@ -320,7 +321,7 @@ ${issueBlock(issue)}
 Run \`git diff ${baseRef}...HEAD\` and \`git log ${baseRef}..HEAD --oneline\`. Read the spec the issue links and the project's CLAUDE.md.
 Review, in this order:
 1. Correctness against the issue's acceptance criteria and the spec (bugs, missed edge cases, wrong contracts).
-2. Tests: does each behaviour change have a test that would fail without it? Were tests weakened?
+2. Tests: does each behaviour change have a test that would fail without it? Were tests weakened? If the issue has a "Test cases" table, every row with priority "must" needs a test traceable to its row id; a missing one is a warning that names the row.
 3. Scope creep: changes not needed for the acceptance criteria.
 4. CLAUDE.md conventions and its "Never" list.
 Severity: critical = wrong behaviour / data loss / security / rule violation; warning = likely bug, missing test, scope creep; suggestion = optional improvement. Only report real problems with a file and line. verdict "pass" means no critical or warning findings.

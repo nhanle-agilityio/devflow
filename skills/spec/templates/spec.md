@@ -89,4 +89,25 @@ One block per task. Rules:
 
 **Test plan**
 
+<!-- With the QA step on: "Test cases: T1.1-T1.n (see Test matrix)", plus any note the matrix cannot hold (fixtures, data setup). Without it: the tests that prove the criteria. -->
+
 - 
+
+## Test matrix
+
+<!--
+Written by the QA step (spec.testMatrix). The QA agent sees only the tasks and their acceptance
+criteria, not the grill session, and writes one row per test case:
+- Id: <task>.<n>, stable once the spec PR is merged.
+- Case: happy | error | edge | boundary.
+- Given / When / Then: concrete inputs and the observable result (status and body, or what the user sees).
+- Level: unit | integration | http | e2e. http and e2e rows are also walked by the verify stage.
+- Priority: must (a test is required before the PR opens) | should (nice to have).
+Every acceptance criterion is covered by at least one must row. Criteria the QA agent could not turn into a
+test were resolved with the user before this table was written; anything still open is listed under
+Risks and unknowns.
+-->
+
+| Id | Task | Criterion | Case | Given / When / Then | Level | Priority |
+| --- | --- | --- | --- | --- | --- | --- |
+| T1.1 | T1 |  | happy |  | http | must |
