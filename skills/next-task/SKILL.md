@@ -1,6 +1,6 @@
 ---
 name: next-task
-description: Pick up ready GitHub issues and take each from implementation to an open PR (test first, checks, verification, review) by running the devflow:next-task-engine workflow. Humans merge.
+description: Pick up ready GitHub issues and take each from implementation to an open PR (test first, checks, verification, review) by running the devflow:next-task-engine workflow. Never merges; the merge gate Action or a human does.
 argument-hint: "[limit | #issue ...]"
 disable-model-invocation: true
 ---
@@ -46,6 +46,8 @@ Fill `config` with the full parsed config object, and the other values from step
 
 ## 4. Report
 
-When the workflow returns, print a table: issue, then PR link, or blocked with the reason, or skipped with the reason. Mention that blocked issues have a comment explaining what a human must decide, and that PRs are open for human review and merge. Remind the user that `/devflow:address-reviews` handles review comments.
+When the workflow returns, print a table: issue, then PR link (with its risk and, when stacked, the PR it is stacked on), or blocked with the reason, or skipped with the reason. Mention that blocked issues have a comment explaining what a human must decide.
+
+Explain who merges: `risk:low` PRs are merged by the merge gate GitHub Action when it is enabled (`mergeGate.enabled`) and its required checks are green; `risk:high` PRs (and PRs without a risk label) wait for a human. `/devflow:sync` handles conflicts, retargeting of stacked PRs and review comments.
 
 Never merge a PR, never push to the base branch.

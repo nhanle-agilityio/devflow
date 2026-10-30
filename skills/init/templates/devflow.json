@@ -17,8 +17,31 @@
     "inProgress": "agent:in-progress",
     "review": "agent:review",
     "blocked": "agent:blocked",
-    "e2e": "needs-e2e"
+    "e2e": "needs-e2e",
+    // devflow: on every PR devflow opens. riskLow/riskHigh: set by /devflow:spec on issues, copied to PRs.
+    // stacked: PR based on another open devflow PR.
+    "devflow": "devflow",
+    "riskLow": "risk:low",
+    "riskHigh": "risk:high",
+    "stacked": "stacked"
   },
+  // Unsure means high. highPaths are globs (** * ?): a PR touching one is escalated to high before it is opened.
+  "risk": {
+    "highWhen": [
+      "authentication or permissions",
+      "data migration or deleting stored data",
+      "a change to a public API contract that breaks existing clients",
+      "security-sensitive input handling",
+      "payments or money"
+    ],
+    "highPaths": []
+  },
+  // Read by the merge gate GitHub Action (Claude itself never merges). Only risk:low PRs are merged.
+  // dryRun logs what would be merged. requiredChecks = check run names or commit-status contexts that must be green.
+  // method "merge": merge commits are required for stacked PRs.
+  "mergeGate": { "enabled": false, "dryRun": true, "requiredChecks": ["devflow/review"], "method": "merge" },
+  // e2eFramework: true when the project has an automated e2e/browser test setup that can hold committed e2e tests.
+  "testing": { "e2eFramework": false },
   // Run in order; all must pass before review. Use the project's own commands.
   "checks": [
     { "name": "test", "run": "npm test" },

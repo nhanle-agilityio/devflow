@@ -65,11 +65,13 @@ One block per task. Rules:
 - Acceptance criteria are checkable behaviour. API: request -> response. UI: user action -> visible result.
 - Every task has a test plan. needs-e2e is "yes" when the task changes a user-visible flow that needs the running app to verify.
 - depends-on lists task ids; the issue creation step turns them into issue numbers.
+- Risk is low or high with a one-line reason, judged against risk.highWhen / risk.highPaths in the config. Unsure means high.
+- Hotspots: files likely to be touched by other tasks too (routes, registries, schema, shared config). Recorded only.
 -->
 
-| Id | Title | Type | Area | Depends on | Size | Needs e2e |
-| --- | --- | --- | --- | --- | --- | --- |
-| T1 |  | feat |  | - | S | no |
+| Id | Title | Type | Area | Depends on | Size | Needs e2e | Risk | Risk reason |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| T1 |  | feat |  | - | S | no | low |  |
 
 ### T1: <task title>
 
@@ -78,6 +80,8 @@ One block per task. Rules:
 - **Depends on:** none
 - **Size:** S | M
 - **Needs e2e:** yes | no
+- **Risk:** low | high - <one-line reason>
+- **Hotspot files:** <files other tasks are likely to touch too, or none>
 
 **Acceptance criteria**
 
@@ -98,7 +102,7 @@ One block per task. Rules:
 <!--
 Written by the QA step (spec.testMatrix). The QA agent sees only the tasks and their acceptance
 criteria, not the grill session, and writes one row per test case:
-- Id: <task>.<n>, stable once the spec PR is merged.
+- Id: <task>.<n>, stable once the spec PR is merged. Escape a | inside a cell as \|.
 - Case: happy | error | edge | boundary.
 - Given / When / Then: concrete inputs and the observable result (status and body, or what the user sees).
 - Level: unit | integration | http | e2e. http and e2e rows are also walked by the verify stage.
@@ -106,6 +110,7 @@ criteria, not the grill session, and writes one row per test case:
 Every acceptance criterion is covered by at least one must row. Criteria the QA agent could not turn into a
 test were resolved with the user before this table was written; anything still open is listed under
 Risks and unknowns.
+Tests are named test_t<task>_<n>_<description> (e.g. test_t1_2_duplicate_name_returns_409) or carry a comment `# T1.2`.
 -->
 
 | Id | Task | Criterion | Case | Given / When / Then | Level | Priority |

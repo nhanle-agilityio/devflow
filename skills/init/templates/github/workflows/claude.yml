@@ -1,3 +1,4 @@
+# Installed by the devflow plugin (/devflow:init). Copy of the upstream Claude Code workflow, unchanged.
 name: Claude Code
 
 # Runs when someone mentions Claude in an issue, a PR comment or a review (the trigger word is the

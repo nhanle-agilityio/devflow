@@ -167,6 +167,13 @@ class HookProcess(unittest.TestCase):
             result = run_hook({"tool_name": "mcp__github__update_pull_request_branch", "tool_input": {}}, tmp)
             self.assertEqual(result.returncode, 0)
 
+    def test_pull_request_update_tools_are_allowed(self):
+        # /devflow:sync retargets and updates PR branches; only merge_pull_request is blocked.
+        with tempfile.TemporaryDirectory() as tmp:
+            for tool in ("mcp__github__update_pull_request_branch", "mcp__github__update_pull_request"):
+                result = run_hook({"tool_name": tool, "tool_input": {}}, tmp)
+                self.assertEqual(result.returncode, 0, tool)
+
     def test_bash_block_message_and_exit_code(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = run_hook({"tool_name": "Bash", "tool_input": {"command": "gh pr merge 1"}}, tmp)
