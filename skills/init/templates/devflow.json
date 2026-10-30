@@ -31,5 +31,7 @@
     // "playwright" (Playwright MCP) or "chrome" (Claude in Chrome)
     "browserTool": "playwright"
   },
+  // QA step of /devflow:spec: draft a test matrix from the acceptance criteria. qaModel is "opus" or "sonnet".
+  "spec": { "testMatrix": true, "qaModel": "opus" },
   "nextTask": { "defaultLimit": 3, "maxFixRounds": 2, "maxReviewRounds": 2 }
 }
