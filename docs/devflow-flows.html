@@ -1,0 +1,951 @@
+<title>devflow Flow Map</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a dark node-canvas (dot grid) like the user's own flow sketch; each section is one
+   flow you can play. Colour encodes WHO acts: orange = you, cyan/violet/pink = Claude model tier,
+   green = GitHub output, red = blocked/guard. Single dark look by choice. */
+:root {
+  color-scheme: dark;
+  --bg: #0e1116;
+  --panel: #151a22;
+  --panel-2: #1b212b;
+  --line: #2b3240;
+  --dot: #212733;
+  --fg: #e6e9ef;
+  --muted: #8e97a8;
+  --human: #f2913d;
+  --haiku: #45c4dc;
+  --sonnet: #a08bff;
+  --opus: #ec72c0;
+  --out: #3fbf8e;
+  --block: #f0625f;
+  --skip: #6b7385;
+  --script: #c9d1de;
+  --f-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", sans-serif;
+  --f-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --r: 10px;
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body {
+  background: var(--bg);
+  background-image: radial-gradient(var(--dot) 1px, transparent 1.2px);
+  background-size: 22px 22px;
+  color: var(--fg);
+  font: 15px/1.6 var(--f-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 64px;
+}
+.wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 56px; }
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; margin: 0; line-height: 1.15; }
+h1 { font-size: clamp(34px, 6vw, 56px); font-weight: 700; letter-spacing: -0.02em; }
+h2 { font-size: clamp(22px, 3.2vw, 30px); font-weight: 700; }
+h3 { font-size: 16px; font-weight: 700; }
+p { margin: 0; max-width: 68ch; }
+code, .mono { font-family: var(--f-mono); font-size: 0.86em; }
+.muted { color: var(--muted); }
+.eyebrow { font: 600 11px/1 var(--f-mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+
+/* header */
+header { display: grid; gap: 18px; }
+header .lead { font-size: 17px; color: var(--muted); }
+header .lead b { color: var(--fg); font-weight: 600; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+.chip { display: inline-flex; align-items: center; gap: 7px; font: 500 12px/1 var(--f-mono); color: var(--muted); }
+.chip i { width: 10px; height: 10px; border-radius: 3px; background: var(--c); box-shadow: 0 0 10px var(--c); }
+nav.toc { display: flex; flex-wrap: wrap; gap: 8px; }
+nav.toc a { font: 500 12.5px/1 var(--f-mono); color: var(--fg); text-decoration: none; padding: 8px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); }
+nav.toc a:hover, nav.toc a:focus-visible { border-color: var(--sonnet); outline: none; }
+
+/* sections */
+section { display: grid; gap: 18px; scroll-margin-top: 20px; }
+.sec-head { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 12px 24px; }
+.sec-head > div { display: grid; gap: 8px; min-width: 0; }
+.cmd { font: 600 13px/1 var(--f-mono); color: var(--fg); background: var(--panel-2); border: 1px solid var(--line); padding: 6px 9px; border-radius: 6px; justify-self: start; }
+.controls { display: flex; gap: 8px; }
+button.ctl { font: 600 13px/1 var(--f-mono); color: var(--fg); background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; cursor: pointer; }
+button.ctl:hover { border-color: var(--muted); }
+button.ctl:focus-visible { outline: 2px solid var(--sonnet); outline-offset: 2px; }
+button.ctl.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.canvas { background: color-mix(in srgb, var(--panel) 88%, transparent); border: 1px solid var(--line); border-radius: 14px; padding: 22px; display: grid; gap: 20px; }
+/* overflow-x:auto also clips vertically, so leave room for the badges (top:-9px) and the packet (top:-14px) */
+.scroll-x { overflow-x: auto; padding-top: 18px; padding-bottom: 4px; }
+
+/* nodes */
+.node {
+  --c: var(--script);
+  position: relative; border: 1.5px solid color-mix(in srgb, var(--c) 70%, transparent);
+  background: color-mix(in srgb, var(--c) 9%, var(--panel-2));
+  border-radius: var(--r); padding: 11px 13px; display: grid; gap: 3px; min-width: 0;
+  transition: box-shadow .25s, transform .25s, opacity .25s, border-color .25s;
+}
+.node .t { font: 700 14.5px/1.25 var(--f-display); }
+.node .s { font: 400 11.5px/1.35 var(--f-mono); color: var(--muted); }
+.node .badge { position: absolute; top: -9px; right: 10px; font: 600 10px/1 var(--f-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--bg); background: var(--c); padding: 3px 6px; border-radius: 4px; }
+.node.human { --c: var(--human); }
+.node.haiku { --c: var(--haiku); }
+.node.sonnet { --c: var(--sonnet); }
+.node.opus { --c: var(--opus); }
+.node.out { --c: var(--out); }
+.node.block { --c: var(--block); }
+.node.active { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 35%, transparent), 0 0 28px color-mix(in srgb, var(--c) 45%, transparent); transform: translateY(-2px); border-color: var(--c); }
+.node.done { border-color: var(--c); }
+.node.done::after { content: "✓"; position: absolute; left: 10px; top: -9px; font: 700 10px/1 var(--f-mono); background: var(--out); color: var(--bg); padding: 3px 5px; border-radius: 4px; }
+.node.dim { opacity: .38; }
+.node.skipped::after { content: "bỏ qua"; position: absolute; left: 10px; top: -9px; font: 600 10px/1 var(--f-mono); background: var(--skip); color: var(--bg); padding: 3px 5px; border-radius: 4px; }
+.node.failed::after { content: "fail"; position: absolute; left: 10px; top: -9px; font: 700 10px/1 var(--f-mono); background: var(--block); color: var(--bg); padding: 3px 5px; border-radius: 4px; }
+
+/* connectors */
+.arrow { position: relative; align-self: center; height: 2px; min-width: 22px; background: var(--line); overflow: hidden; }
+.arrow::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--fg), transparent); transform: translateX(-100%); }
+.arrow.flow::after { animation: zip .7s ease-out; }
+@keyframes zip { to { transform: translateX(100%); } }
+.arrow-head { width: 0; height: 0; border-left: 7px solid var(--line); border-top: 5px solid transparent; border-bottom: 5px solid transparent; align-self: center; margin-left: -2px; }
+
+/* ---------- overview ---------- */
+.lifecycle { display: grid; grid-template-columns: repeat(7, minmax(108px, 1fr)); gap: 0; align-items: stretch; min-width: 860px; position: relative; }
+.lc { display: grid; grid-template-columns: 1fr 26px; }
+.lc:last-child { grid-template-columns: 1fr; }
+.lc .arrow { margin: 0 2px; }
+.packet { position: absolute; top: -14px; width: 12px; height: 12px; border-radius: 50%; background: var(--fg); box-shadow: 0 0 14px var(--fg); transition: left .6s cubic-bezier(.5,0,.3,1), background .3s, box-shadow .3s; left: 0; }
+.layers { display: grid; grid-template-columns: 1fr 1.6fr 1fr; gap: 14px; }
+.layer { border: 1px dashed var(--line); border-radius: 12px; padding: 14px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.layer .eyebrow { margin-bottom: 2px; }
+.layer .row { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+@media (max-width: 760px) { .layers { grid-template-columns: 1fr; } }
+
+/* ---------- spec ---------- */
+.pipe { display: grid; grid-template-columns: 1fr 30px 1fr 30px 1fr 30px 1fr 30px 1fr; align-items: stretch; min-width: 880px; }
+.pipe > .conn { display: flex; align-items: center; }
+.pipe > .conn .arrow { flex: 1; }
+.split { display: grid; grid-template-columns: 1.15fr 1fr; gap: 18px; }
+@media (max-width: 820px) { .split { grid-template-columns: 1fr; } }
+.panel { background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.panel h3 { display: flex; gap: 8px; align-items: center; }
+.dotc { width: 9px; height: 9px; border-radius: 50%; background: var(--c, var(--muted)); flex: none; }
+.chat { display: grid; gap: 8px; min-height: 120px; align-content: start; }
+.bubble { max-width: 92%; padding: 8px 11px; border-radius: 10px; font-size: 13.5px; animation: pop .3s ease-out; }
+.bubble.q { background: color-mix(in srgb, var(--sonnet) 16%, var(--panel)); border: 1px solid color-mix(in srgb, var(--sonnet) 40%, transparent); }
+.bubble.a { justify-self: end; background: color-mix(in srgb, var(--human) 16%, var(--panel)); border: 1px solid color-mix(in srgb, var(--human) 45%, transparent); }
+.bubble small { display: block; font: 600 10px/1.4 var(--f-mono); color: var(--muted); letter-spacing: .05em; text-transform: uppercase; }
+@keyframes pop { from { opacity: 0; transform: translateY(6px) scale(.98); } }
+.issues { display: flex; flex-wrap: wrap; gap: 10px; min-height: 64px; align-content: start; }
+.issue { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 9px 11px; display: grid; gap: 6px; min-width: 0; flex: 1 1 210px; animation: pop .35s ease-out; }
+.issue .it { font: 600 13px/1.3 var(--f-body); }
+.issue .it b { font-family: var(--f-mono); color: var(--out); font-weight: 600; }
+.labels { display: flex; flex-wrap: wrap; gap: 5px; }
+.lbl { font: 600 10.5px/1 var(--f-mono); padding: 4px 6px; border-radius: 999px; border: 1px solid var(--c); color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); transition: all .3s; }
+.lbl.ready { --c: var(--out); } .lbl.prog { --c: var(--sonnet); } .lbl.rev { --c: var(--haiku); }
+.lbl.blk { --c: var(--block); } .lbl.e2e { --c: var(--human); } .lbl.type { --c: var(--muted); }
+.dep { font: 400 11px/1 var(--f-mono); color: var(--muted); }
+.empty { font: 400 12.5px/1.4 var(--f-mono); color: var(--muted); border: 1px dashed var(--line); border-radius: 8px; padding: 12px; flex: 1; }
+
+/* ---------- next-task ---------- */
+.preflight { display: flex; flex-wrap: wrap; gap: 8px; }
+.pf { font: 500 12px/1 var(--f-mono); padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); color: var(--muted); background: var(--panel-2); transition: all .3s; }
+.pf.ok { color: var(--out); border-color: color-mix(in srgb, var(--out) 60%, transparent); }
+.pf.ok::before { content: "✓ "; }
+.engine-label { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.engine-label .js { font: 600 11px/1 var(--f-mono); color: var(--script); border: 1px solid var(--line); padding: 5px 8px; border-radius: 6px; }
+.track { display: grid; grid-template-columns: repeat(7, minmax(112px, 1fr)); column-gap: 26px; row-gap: 0; min-width: 920px; position: relative; }
+.track .node { z-index: 1; }
+.track .node:not(:last-child)::before { content: ""; position: absolute; top: 50%; right: -27px; width: 26px; height: 2px; background: linear-gradient(90deg, var(--line), var(--muted)); }
+.loops { display: grid; grid-template-columns: repeat(7, minmax(112px, 1fr)); column-gap: 26px; min-width: 920px; margin-top: 10px; }
+.loop { grid-column: var(--col); border: 1.5px dashed color-mix(in srgb, var(--sonnet) 55%, transparent); border-radius: 0 0 12px 12px; border-top: none; padding: 14px 8px 8px; text-align: center; font: 500 11px/1.35 var(--f-mono); color: var(--muted); transition: all .3s; }
+.loop b { color: var(--sonnet); }
+.loop.on { color: var(--fg); border-color: var(--sonnet); background: color-mix(in srgb, var(--sonnet) 12%, transparent); }
+.nt-grid { display: grid; grid-template-columns: 220px 1fr; gap: 18px; }
+@media (max-width: 820px) { .nt-grid { grid-template-columns: 1fr; } }
+.queue { display: grid; gap: 8px; align-content: start; }
+.q-item { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel-2); display: grid; gap: 5px; transition: all .3s; }
+.q-item .it { font: 600 12.5px/1.3 var(--f-body); }
+.q-item .it b { font-family: var(--f-mono); color: var(--fg); }
+.q-item.current { border-color: var(--sonnet); box-shadow: 0 0 18px color-mix(in srgb, var(--sonnet) 30%, transparent); }
+.q-item.gone { opacity: .35; }
+.outcomes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+@media (max-width: 680px) { .outcomes { grid-template-columns: 1fr; } }
+.bin { border-radius: 10px; border: 1px solid color-mix(in srgb, var(--c) 50%, transparent); background: color-mix(in srgb, var(--c) 7%, var(--panel)); padding: 12px; display: grid; gap: 8px; align-content: start; min-height: 96px; min-width: 0; }
+.bin h3 { color: var(--c); font-size: 14px; }
+.bin.pr { --c: var(--out); } .bin.blk { --c: var(--block); } .bin.skp { --c: var(--skip); }
+.res { font: 500 12px/1.45 var(--f-mono); padding: 7px 9px; border-radius: 7px; background: var(--panel-2); border: 1px solid var(--line); animation: pop .35s ease-out; overflow-wrap: anywhere; }
+.res b { color: var(--fg); }
+.log { background: #0a0d11; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font: 400 12px/1.6 var(--f-mono); color: var(--muted); height: 168px; overflow-y: auto; }
+.log div { animation: pop .25s ease-out; }
+.log .k { color: var(--c, var(--fg)); }
+
+/* ---------- reviews ---------- */
+.rv { display: grid; grid-template-columns: 1fr 1.4fr; gap: 18px; }
+@media (max-width: 820px) { .rv { grid-template-columns: 1fr; } }
+.threads { display: grid; gap: 8px; align-content: start; }
+.thread { border: 1px solid var(--line); background: var(--panel-2); border-radius: 8px; padding: 9px 11px; font-size: 13px; display: grid; gap: 4px; transition: all .35s; }
+.thread small { font: 600 10.5px/1 var(--f-mono); color: var(--muted); }
+.thread.moved { opacity: .3; transform: translateX(8px); }
+.rbins { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+@media (max-width: 560px) { .rbins { grid-template-columns: 1fr; } }
+.rounds { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font: 500 12.5px/1.4 var(--f-mono); color: var(--muted); }
+.pip { width: 26px; height: 8px; border-radius: 4px; background: var(--line); transition: background .3s; }
+.pip.on { background: var(--haiku); box-shadow: 0 0 10px var(--haiku); }
+.trigger { font: 600 12px/1 var(--f-mono); color: var(--haiku); border: 1px solid var(--haiku); padding: 6px 9px; border-radius: 6px; opacity: .25; transition: opacity .3s; }
+.trigger.on { opacity: 1; }
+
+/* ---------- labels state machine ---------- */
+.sm { width: 100%; min-width: 720px; height: auto; display: block; }
+.sm text { font-family: var(--f-mono); }
+.sm .st rect { transition: all .3s; }
+.sm .st.on rect { stroke-width: 3; filter: url(#glow); }
+.sm .edge { stroke: var(--line); stroke-width: 2; fill: none; }
+.sm .edge.on { stroke: var(--fg); stroke-dasharray: 6 6; animation: dash 0.8s linear infinite; }
+@keyframes dash { to { stroke-dashoffset: -24; } }
+
+/* ---------- guard ---------- */
+.guard { display: grid; grid-template-columns: 1.3fr 160px 1fr; gap: 16px; align-items: center; }
+@media (max-width: 820px) { .guard { grid-template-columns: 1fr; } }
+.cmdq { display: grid; gap: 7px; }
+.gcmd { font: 500 12.5px/1.4 var(--f-mono); padding: 8px 10px; border-radius: 7px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); transition: all .3s; overflow-wrap: anywhere; }
+.gcmd.cur { color: var(--fg); border-color: var(--fg); }
+.gcmd.allow { color: var(--out); border-color: color-mix(in srgb, var(--out) 55%, transparent); }
+.gcmd.deny { color: var(--block); border-color: color-mix(in srgb, var(--block) 55%, transparent); text-decoration: line-through; text-decoration-thickness: 1px; }
+.hook { aspect-ratio: 1; max-width: 160px; width: 100%; justify-self: center; border-radius: 50%; border: 2px solid var(--line); display: grid; place-content: center; text-align: center; gap: 4px; transition: all .3s; }
+.hook .t { font: 700 15px/1.2 var(--f-display); }
+.hook .s { font: 500 11px/1.3 var(--f-mono); color: var(--muted); }
+.hook.allow { border-color: var(--out); box-shadow: 0 0 30px color-mix(in srgb, var(--out) 40%, transparent); }
+.hook.deny { border-color: var(--block); box-shadow: 0 0 30px color-mix(in srgb, var(--block) 45%, transparent); }
+.verdict { display: grid; gap: 8px; align-content: center; }
+.verdict .big { font: 700 22px/1.2 var(--f-display); }
+.verdict .why { font: 400 13px/1.5 var(--f-body); color: var(--muted); }
+
+.top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.lang { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px; background: var(--panel); }
+.lang button { font: 600 12px/1 var(--f-mono); color: var(--muted); background: none; border: 0; border-radius: 999px; padding: 7px 12px; cursor: pointer; }
+.lang button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+.lang button:focus-visible { outline: 2px solid var(--sonnet); outline-offset: 2px; }
+
+footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 18px; display: grid; gap: 6px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}
+</style>
+
+<div class="wrap">
+
+<header>
+  <div class="top">
+    <span class="eyebrow">Claude Code plugin · nhanle-agilityio/devflow</span>
+    <div class="lang" role="group" aria-label="Language">
+      <button type="button" id="lang-en" aria-pressed="true">EN</button>
+      <button type="button" id="lang-vi" aria-pressed="false">VI</button>
+    </div>
+  </div>
+  <h1>devflow</h1>
+  <p class="lead" data-i18n="lead">Từ <b>ý tưởng</b> đến <b>PR chờ bạn merge</b>, theo hai luồng: <b>/devflow:spec</b> biến ý tưởng thành issue, <b>/devflow:next-task</b> biến issue thành PR. Bạn chỉ quyết định ở những ô màu cam.</p>
+  <div class="legend" aria-label="Chú thích màu">
+    <span class="chip" style="--c:var(--human)"><i></i>Bạn quyết định</span>
+    <span class="chip" style="--c:var(--haiku)"><i></i>Claude Haiku · việc cơ học</span>
+    <span class="chip" style="--c:var(--sonnet)"><i></i>Claude Sonnet · viết code</span>
+    <span class="chip" style="--c:var(--opus)"><i></i>Claude Opus · review</span>
+    <span class="chip" style="--c:var(--out)"><i></i>Kết quả trên GitHub</span>
+    <span class="chip" style="--c:var(--block)"><i></i>Blocked / bị chặn</span>
+  </div>
+  <nav class="toc" aria-label="Mục lục">
+    <a href="#overview">Toàn cảnh</a>
+    <a href="#spec">/devflow:spec</a>
+    <a href="#next">/devflow:next-task</a>
+    <a href="#reviews">/devflow:address-reviews</a>
+    <a href="#labels">Vòng đời label</a>
+    <a href="#guard">Guard hook</a>
+  </nav>
+</header>
+
+<!-- ================= OVERVIEW ================= -->
+<section id="overview">
+  <div class="sec-head">
+    <div>
+      <span class="eyebrow">Toàn cảnh</span>
+      <h2>Một ý tưởng đi qua plugin như thế nào</h2>
+      <p class="muted">Chấm sáng là một ý tưởng đang di chuyển. Nó chỉ dừng lại chờ ở hai ô màu cam: merge spec và merge PR.</p>
+    </div>
+  </div>
+  <div class="canvas">
+    <div class="scroll-x">
+      <div class="lifecycle" id="lifecycle">
+        <span class="packet" id="lc-packet" aria-hidden="true"></span>
+        <div class="lc"><div class="node human"><span class="t">Ý tưởng</span><span class="s">bạn gõ /devflow:spec</span></div><div class="arrow"></div></div>
+        <div class="lc"><div class="node sonnet"><span class="badge">Claude</span><span class="t">Phân tích + grill</span><span class="s">hỏi đến hết mơ hồ</span></div><div class="arrow"></div></div>
+        <div class="lc"><div class="node human"><span class="badge">Gate 1</span><span class="t">Merge PR spec</span><span class="s">bạn duyệt thiết kế</span></div><div class="arrow"></div></div>
+        <div class="lc"><div class="node out"><span class="t">Issues</span><span class="s">label agent:ready</span></div><div class="arrow"></div></div>
+        <div class="lc"><div class="node sonnet"><span class="badge">Workflow</span><span class="t">next-task</span><span class="s">code · check · review</span></div><div class="arrow"></div></div>
+        <div class="lc"><div class="node out"><span class="t">Pull requests</span><span class="s">Closes #n</span></div><div class="arrow"></div></div>
+        <div class="lc"><div class="node human"><span class="badge">Gate 2</span><span class="t">Merge PR</span><span class="s">luôn là bạn</span></div></div>
+      </div>
+    </div>
+    <div class="layers">
+      <div class="layer">
+        <span class="eyebrow">Dự án tự khai báo</span>
+        <div class="node"><span class="t">CLAUDE.md</span><span class="s">luật: kiến trúc, convention, "Never"</span></div>
+        <div class="node"><span class="t">.claude/devflow.json</span><span class="s">cơ chế: base branch, checks, verify, labels</span></div>
+      </div>
+      <div class="layer">
+        <span class="eyebrow">Plugin devflow · dùng cho mọi dự án</span>
+        <div class="row">
+          <div class="node human"><span class="t">/devflow:init</span><span class="s">dò stack → sinh config (1 lần)</span></div>
+          <div class="node sonnet"><span class="t">/devflow:spec</span><span class="s">ý tưởng → spec → issues</span></div>
+          <div class="node sonnet"><span class="t">/devflow:next-task</span><span class="s">issues → PRs (script JS)</span></div>
+          <div class="node sonnet"><span class="t">/devflow:address-reviews</span><span class="s">comment review → commit sửa</span></div>
+        </div>
+        <div class="node block"><span class="t">guard.py (hook)</span><span class="s">luôn bật · chặn merge, push vào branch bảo vệ, force push</span></div>
+      </div>
+      <div class="layer">
+        <span class="eyebrow">GitHub (qua MCP)</span>
+        <div class="node out"><span class="t">Issues + labels</span><span class="s">trạng thái của từng task</span></div>
+        <div class="node out"><span class="t">Pull requests</span><span class="s">review bởi Action + bạn</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= SPEC ================= -->
+<section id="spec">
+  <div class="sec-head">
+    <div>
+      <span class="eyebrow">Luồng 1 · chạy trong session cloud hoặc local</span>
+      <h2>Ý tưởng → spec → issues</h2>
+      <span class="cmd">/devflow:spec Allow editing and deleting a project</span>
+    </div>
+    <div class="controls">
+      <button class="ctl primary" id="spec-play" type="button">▶ Chạy</button>
+      <button class="ctl" id="spec-reset" type="button">↺</button>
+    </div>
+  </div>
+  <div class="canvas">
+    <div class="scroll-x">
+      <div class="pipe" id="spec-pipe">
+        <div class="node sonnet" data-step="0"><span class="badge">1 · Analyse</span><span class="t">Phân tích</span><span class="s">đọc CLAUDE.md, config, code liên quan</span></div>
+        <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
+        <div class="node sonnet" data-step="1"><span class="badge">2 · Grill</span><span class="t">grill-me</span><span class="s">mỗi câu hỏi kèm đáp án đề xuất</span></div>
+        <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
+        <div class="node sonnet" data-step="2"><span class="badge">3 · Spec PR</span><span class="t">Spec + tasks</span><span class="s">spec/&lt;slug&gt; · docs/specs/*.md</span></div>
+        <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
+        <div class="node human" data-step="3"><span class="badge">4 · Gate 1</span><span class="t">"Merge PR spec?"</span><span class="s">Claude hỏi đúng 1 câu</span></div>
+        <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
+        <div class="node out" data-step="4"><span class="badge">5 · Issues</span><span class="t">Tạo issue</span><span class="s">theo thứ tự phụ thuộc</span></div>
+      </div>
+    </div>
+    <div class="split">
+      <div class="panel">
+        <h3><span class="dotc" id="spec-dot" style="--c:var(--sonnet)"></span><span id="spec-title">Bấm ▶ để xem từng bước</span></h3>
+        <p class="muted" id="spec-desc">Mỗi bước có một đầu ra cụ thể. Bước 4 là chốt chặn: issue chỉ được tạo sau khi bạn đã merge spec.</p>
+        <div class="chat" id="spec-chat" aria-live="polite"></div>
+      </div>
+      <div class="panel">
+        <h3><span class="dotc" style="--c:var(--out)"></span>Issues trên GitHub</h3>
+        <div class="issues" id="spec-issues"><div class="empty">Chưa có issue. Chúng xuất hiện ở bước 5, sau Gate 1.</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= NEXT-TASK ================= -->
+<section id="next">
+  <div class="sec-head">
+    <div>
+      <span class="eyebrow">Luồng 2 · bạn gọi ở local khi muốn</span>
+      <h2>Issues → pull requests</h2>
+      <span class="cmd">/devflow:next-task 3</span>
+    </div>
+    <div class="controls">
+      <button class="ctl primary" id="nt-play" type="button">▶ Chạy</button>
+      <button class="ctl" id="nt-reset" type="button">↺</button>
+    </div>
+  </div>
+  <div class="canvas">
+    <div class="engine-label">
+      <span class="eyebrow">Skill next-task · preflight</span>
+    </div>
+    <div class="preflight" id="pf">
+      <span class="pf">devflow.json hợp lệ</span>
+      <span class="pf">working tree sạch</span>
+      <span class="pf">nhớ branch hiện tại</span>
+      <span class="pf">git fetch base</span>
+      <span class="pf">GitHub MCP kết nối</span>
+    </div>
+    <div class="engine-label">
+      <span class="eyebrow">Workflow next-task-engine</span>
+      <span class="js">workflows/next-task-engine.js · tất định, từng issue một</span>
+    </div>
+    <div class="scroll-x">
+      <div class="track" id="track">
+        <div class="node haiku" data-st="select"><span class="badge">haiku</span><span class="t">Select</span><span class="s">ready, đủ phụ thuộc, ≤ limit</span></div>
+        <div class="node haiku" data-st="claim"><span class="badge">haiku</span><span class="t">Claim</span><span class="s">label in-progress + branch</span></div>
+        <div class="node sonnet" data-st="impl"><span class="badge">sonnet</span><span class="t">Implement</span><span class="s">test fail trước → code</span></div>
+        <div class="node haiku" data-st="check"><span class="badge">haiku</span><span class="t">Check</span><span class="s">chạy mọi lệnh trong checks</span></div>
+        <div class="node sonnet" data-st="verify"><span class="badge">sonnet</span><span class="t">Verify</span><span class="s">curl / trình duyệt theo AC</span></div>
+        <div class="node opus" data-st="review"><span class="badge">opus</span><span class="t">Review</span><span class="s">diff vs issue, spec, CLAUDE.md</span></div>
+        <div class="node out" data-st="ship"><span class="badge">sonnet</span><span class="t">Ship</span><span class="s">push + mở PR + label review</span></div>
+      </div>
+      <div class="loops">
+        <div class="loop" id="loop-check" style="--col:4"><b>↻ Fix (sonnet)</b><br>fail → sửa → check lại<br><span id="loop-check-n">tối đa 2 vòng</span></div>
+        <div class="loop" id="loop-verify" style="--col:5"><b>chỉ khi cần</b><br>needs-e2e hoặc đụng UI<br>1 vòng sửa</div>
+        <div class="loop" id="loop-review" style="--col:6"><b>↻ Fix (sonnet)</b><br>critical/warning → sửa<br><span id="loop-review-n">tối đa 2 vòng</span></div>
+      </div>
+    </div>
+    <div class="nt-grid">
+      <div class="queue" id="queue" aria-label="Hàng đợi issue"></div>
+      <div class="outcomes">
+        <div class="bin pr"><h3>PR đã mở</h3><div id="bin-pr" class="queue"></div></div>
+        <div class="bin blk"><h3>Blocked · cần bạn</h3><div id="bin-blk" class="queue"></div></div>
+        <div class="bin skp"><h3>Bỏ qua</h3><div id="bin-skp" class="queue"></div></div>
+      </div>
+    </div>
+    <div class="log" id="nt-log" aria-live="polite"><div>Bấm ▶ để chạy kịch bản mẫu: 5 issue sẵn sàng, limit = 3.</div></div>
+  </div>
+</section>
+
+<!-- ================= REVIEWS ================= -->
+<section id="reviews">
+  <div class="sec-head">
+    <div>
+      <span class="eyebrow">Sau khi PR được mở</span>
+      <h2>Comment review → commit sửa → review lại</h2>
+      <span class="cmd">/devflow:address-reviews #41</span>
+    </div>
+    <div class="controls">
+      <button class="ctl primary" id="rv-play" type="button">▶ Chạy</button>
+      <button class="ctl" id="rv-reset" type="button">↺</button>
+    </div>
+  </div>
+  <div class="canvas">
+    <div class="rv">
+      <div class="panel">
+        <h3><span class="dotc" style="--c:var(--haiku)"></span>Thread chưa xử lý trên PR #41</h3>
+        <div class="threads" id="threads"></div>
+      </div>
+      <div class="panel">
+        <h3><span class="dotc" style="--c:var(--sonnet)"></span>Phân loại và xử lý</h3>
+        <div class="rbins">
+          <div class="bin pr"><h3>Sửa</h3><div class="queue" id="rb-fix"></div></div>
+          <div class="bin" style="--c:var(--haiku)"><h3>Trả lời</h3><div class="queue" id="rb-ans"></div></div>
+          <div class="bin skp"><h3>Không sửa</h3><div class="queue" id="rb-wont"></div></div>
+        </div>
+        <div class="rounds">
+          <span class="trigger" id="rv-trigger">@claude review again</span>
+          <span>vòng</span><span class="pip" id="pip1"></span><span class="pip" id="pip2"></span>
+          <span id="rv-note">tối đa 2 vòng, sau đó báo bạn</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= LABELS ================= -->
+<section id="labels">
+  <div class="sec-head">
+    <div>
+      <span class="eyebrow">Trạng thái = label</span>
+      <h2>Vòng đời của một issue</h2>
+      <p class="muted">Nhìn label là biết agent đang ở đâu, không cần board riêng. Tên label đổi được trong devflow.json.</p>
+    </div>
+  </div>
+  <div class="canvas">
+    <div class="scroll-x">
+      <svg class="sm" viewBox="0 0 960 250" role="img" aria-label="Sơ đồ trạng thái label: ready, in-progress, review, closed, và nhánh blocked">
+        <defs>
+          <filter id="glow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#8e97a8"/></marker>
+        </defs>
+        <path class="edge" id="e0" d="M150 70 H230" marker-end="url(#ah)"/>
+        <path class="edge" id="e1" d="M390 70 H470" marker-end="url(#ah)"/>
+        <path class="edge" id="e2" d="M630 70 H710" marker-end="url(#ah)"/>
+        <path class="edge" id="e3" d="M310 98 V160" marker-end="url(#ah)"/>
+        <path class="edge" id="e4" d="M240 190 C 120 190, 75 150, 75 102" marker-end="url(#ah)"/>
+        <g class="st" id="s0"><rect x="10" y="42" width="140" height="56" rx="10" fill="#16241f" stroke="#3fbf8e" stroke-width="1.5"/><text x="80" y="66" text-anchor="middle" fill="#e6e9ef" font-size="14" font-weight="600">agent:ready</text><text x="80" y="86" text-anchor="middle" fill="#8e97a8" font-size="11">/spec tạo ra</text></g>
+        <g class="st" id="s1"><rect x="230" y="42" width="160" height="56" rx="10" fill="#1f1c33" stroke="#a08bff" stroke-width="1.5"/><text x="310" y="66" text-anchor="middle" fill="#e6e9ef" font-size="14" font-weight="600">agent:in-progress</text><text x="310" y="86" text-anchor="middle" fill="#8e97a8" font-size="11">Claim</text></g>
+        <g class="st" id="s2"><rect x="470" y="42" width="160" height="56" rx="10" fill="#132630" stroke="#45c4dc" stroke-width="1.5"/><text x="550" y="66" text-anchor="middle" fill="#e6e9ef" font-size="14" font-weight="600">agent:review</text><text x="550" y="86" text-anchor="middle" fill="#8e97a8" font-size="11">Ship mở PR</text></g>
+        <g class="st" id="s3"><rect x="710" y="42" width="160" height="56" rx="10" fill="#2a1f14" stroke="#f2913d" stroke-width="1.5"/><text x="790" y="66" text-anchor="middle" fill="#e6e9ef" font-size="14" font-weight="600">closed</text><text x="790" y="86" text-anchor="middle" fill="#8e97a8" font-size="11">bạn merge PR</text></g>
+        <g class="st" id="s4"><rect x="240" y="162" width="140" height="56" rx="10" fill="#2c1717" stroke="#f0625f" stroke-width="1.5"/><text x="310" y="186" text-anchor="middle" fill="#e6e9ef" font-size="14" font-weight="600">agent:blocked</text><text x="310" y="206" text-anchor="middle" fill="#8e97a8" font-size="11">+ comment câu hỏi</text></g>
+        <text x="410" y="196" fill="#8e97a8" font-size="12">kẹt ở bất kỳ bước nào → branch vẫn được push, không mất công</text>
+        <text x="20" y="232" fill="#8e97a8" font-size="12">bạn trả lời câu hỏi, gắn lại agent:ready → issue quay lại hàng đợi</text>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<!-- ================= GUARD ================= -->
+<section id="guard">
+  <div class="sec-head">
+    <div>
+      <span class="eyebrow">An toàn bằng code, không bằng lời dặn</span>
+      <h2>Guard hook kiểm tra mọi lệnh trước khi chạy</h2>
+      <p class="muted">hooks/guard.py chạy trước mỗi lệnh Bash và mỗi tool merge của MCP. Exit 2 nghĩa là lệnh không bao giờ được thực thi.</p>
+    </div>
+  </div>
+  <div class="canvas">
+    <div class="guard">
+      <div class="cmdq" id="gq"></div>
+      <div class="hook" id="hook"><span class="t">guard.py</span><span class="s">PreToolUse</span></div>
+      <div class="verdict"><span class="big" id="g-big">Đang chờ lệnh…</span><span class="why" id="g-why">Branch bảo vệ: baseBranch + protectedBranches (TaskBoard: feature/example_taskboard, main, develop).</span></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <span>devflow · plugin Claude Code · cài bằng <code>/plugin marketplace add nhanle-agilityio/devflow</code></span>
+  <span>Kịch bản trên trang là ví dụ minh hoạ dựa trên TaskBoard (số issue và PR là giả định).</span>
+</footer>
+
+</div>
+
+<script>
+(() => {
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
+
+  /* ---------------- i18n ---------------- */
+  // Static markup is written in Vietnamese; EN maps each text fragment. Dynamic text uses t(vi, en).
+  let lang = 'en';
+  try { const saved = localStorage.getItem('devflow-lang'); if (saved === 'vi' || saved === 'en') lang = saved; } catch (e) {}
+  const t = (vi, en) => (lang === 'vi' ? vi : en);
+  const BLOCKS = {
+    lead: {
+      vi: 'Từ <b>ý tưởng</b> đến <b>PR chờ bạn merge</b>, theo hai luồng: <b>/devflow:spec</b> biến ý tưởng thành issue, <b>/devflow:next-task</b> biến issue thành PR. Bạn chỉ quyết định ở những ô màu cam.',
+      en: 'From an <b>idea</b> to a <b>PR waiting for your merge</b>, in two flows: <b>/devflow:spec</b> turns an idea into issues, <b>/devflow:next-task</b> turns issues into PRs. You only decide at the orange boxes.',
+    },
+  };
+  const EN = {
+    'Bạn quyết định': 'You decide',
+    'Claude Haiku · việc cơ học': 'Claude Haiku · mechanical steps',
+    'Claude Sonnet · viết code': 'Claude Sonnet · writes code',
+    'Kết quả trên GitHub': 'Output on GitHub',
+    'Blocked / bị chặn': 'Blocked / denied',
+    'Toàn cảnh': 'Overview',
+    'Vòng đời label': 'Label lifecycle',
+    'Một ý tưởng đi qua plugin như thế nào': 'How one idea travels through the plugin',
+    'Chấm sáng là một ý tưởng đang di chuyển. Nó chỉ dừng lại chờ ở hai ô màu cam: merge spec và merge PR.': 'The glowing dot is an idea on the move. It only waits at the two orange boxes: merging the spec and merging the PR.',
+    'Ý tưởng': 'Idea',
+    'bạn gõ /devflow:spec': 'you type /devflow:spec',
+    'Phân tích + grill': 'Analyse + grill',
+    'hỏi đến hết mơ hồ': 'asks until nothing is vague',
+    'Merge PR spec': 'Merge spec PR',
+    'bạn duyệt thiết kế': 'you approve the design',
+    'luôn là bạn': 'always you',
+    'Dự án tự khai báo': 'Declared by the project',
+    'luật: kiến trúc, convention, "Never"': 'rules: architecture, conventions, "Never"',
+    'cơ chế: base branch, checks, verify, labels': 'mechanics: base branch, checks, verify, labels',
+    'Plugin devflow · dùng cho mọi dự án': 'devflow plugin · reused by every project',
+    'dò stack → sinh config (1 lần)': 'detects the stack → writes config (once)',
+    'ý tưởng → spec → issues': 'idea → spec → issues',
+    'issues → PRs (script JS)': 'issues → PRs (JS script)',
+    'comment review → commit sửa': 'review comments → fix commits',
+    'luôn bật · chặn merge, push vào branch bảo vệ, force push': 'always on · blocks merges, pushes to protected branches, force pushes',
+    'GitHub (qua MCP)': 'GitHub (via MCP)',
+    'trạng thái của từng task': 'the state of each task',
+    'review bởi Action + bạn': 'reviewed by the Action + you',
+    'Luồng 1 · chạy trong session cloud hoặc local': 'Flow 1 · runs in a cloud or local session',
+    'Ý tưởng → spec → issues': 'Idea → spec → issues',
+    '▶ Chạy': '▶ Play',
+    'Phân tích': 'Analyse',
+    'đọc CLAUDE.md, config, code liên quan': 'reads CLAUDE.md, config, related code',
+    'mỗi câu hỏi kèm đáp án đề xuất': 'every question comes with a recommended answer',
+    '"Merge PR spec?"': '"Spec PR merged?"',
+    'Claude hỏi đúng 1 câu': 'Claude asks exactly 1 question',
+    'Tạo issue': 'Create issues',
+    'theo thứ tự phụ thuộc': 'in dependency order',
+    'Issues trên GitHub': 'Issues on GitHub',
+    'Luồng 2 · bạn gọi ở local khi muốn': 'Flow 2 · you run it locally, on demand',
+    'devflow.json hợp lệ': 'devflow.json is valid',
+    'working tree sạch': 'clean working tree',
+    'nhớ branch hiện tại': 'remember current branch',
+    'GitHub MCP kết nối': 'GitHub MCP connected',
+    'workflows/next-task-engine.js · tất định, từng issue một': 'workflows/next-task-engine.js · deterministic, one issue at a time',
+    'ready, đủ phụ thuộc, ≤ limit': 'ready, deps closed, ≤ limit',
+    'test fail trước → code': 'failing test first → code',
+    'chạy mọi lệnh trong checks': 'runs every command in checks',
+    'curl / trình duyệt theo AC': 'curl / browser per AC',
+    'push + mở PR + label review': 'push + open PR + review label',
+    'fail → sửa → check lại': 'fail → fix → check again',
+    'tối đa 2 vòng': 'up to 2 rounds',
+    'chỉ khi cần': 'only when needed',
+    'needs-e2e hoặc đụng UI': 'needs-e2e or UI touched',
+    '1 vòng sửa': '1 fix round',
+    'critical/warning → sửa': 'critical/warning → fix',
+    'PR đã mở': 'PR opened',
+    'Blocked · cần bạn': 'Blocked · needs you',
+    'Bỏ qua': 'Skipped',
+    'Sau khi PR được mở': 'After the PR is opened',
+    'Comment review → commit sửa → review lại': 'Review comment → fix commit → re-review',
+    'Thread chưa xử lý trên PR #41': 'Unresolved threads on PR #41',
+    'Phân loại và xử lý': 'Classify and act',
+    'Sửa': 'Fix',
+    'Trả lời': 'Answer',
+    'Không sửa': "Won't fix",
+    'vòng': 'round',
+    'Trạng thái = label': 'State = label',
+    'Vòng đời của một issue': 'The life of an issue',
+    'Nhìn label là biết agent đang ở đâu, không cần board riêng. Tên label đổi được trong devflow.json.': 'The label tells you where the agent is, no separate board needed. Label names are configurable in devflow.json.',
+    '/spec tạo ra': 'created by /spec',
+    'Ship mở PR': 'Ship opens a PR',
+    'bạn merge PR': 'you merge the PR',
+    '+ comment câu hỏi': '+ question comment',
+    'kẹt ở bất kỳ bước nào → branch vẫn được push, không mất công': 'stuck at any stage → the branch is still pushed, no work lost',
+    'bạn trả lời câu hỏi, gắn lại agent:ready → issue quay lại hàng đợi': 'you answer, relabel agent:ready → the issue rejoins the queue',
+    'An toàn bằng code, không bằng lời dặn': 'Safety in code, not in instructions',
+    'Guard hook kiểm tra mọi lệnh trước khi chạy': 'The guard hook checks every command before it runs',
+    'hooks/guard.py chạy trước mỗi lệnh Bash và mỗi tool merge của MCP. Exit 2 nghĩa là lệnh không bao giờ được thực thi.': 'hooks/guard.py runs before every Bash command and every MCP merge tool. Exit 2 means the command never runs.',
+    'Đang chờ lệnh…': 'Waiting for a command…',
+    'devflow · plugin Claude Code · cài bằng': 'devflow · Claude Code plugin · install with',
+    'Kịch bản trên trang là ví dụ minh hoạ dựa trên TaskBoard (số issue và PR là giả định).': 'The scenarios on this page are illustrative examples based on TaskBoard (issue and PR numbers are made up).',
+  };
+  const ATTR_EN = {
+    'Chú thích màu': 'Colour legend', 'Mục lục': 'Contents', 'Hàng đợi issue': 'Issue queue',
+    'Sơ đồ trạng thái label: ready, in-progress, review, closed, và nhánh blocked': 'Label state diagram: ready, in-progress, review, closed, and the blocked branch',
+  };
+  // Capture the static Vietnamese text once, before any simulation adds dynamic nodes.
+  const staticText = [];
+  (function collect() {
+    const walker = document.createTreeWalker($('.wrap'), NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => (n.parentElement.closest('[data-i18n], script') || !n.nodeValue.trim() ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+    });
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const key = n.nodeValue.trim();
+      if (EN[key]) staticText.push({ n, vi: n.nodeValue, en: n.nodeValue.replace(key, EN[key]) });
+    }
+  })();
+  const staticAttr = $$('[aria-label]').filter((e) => ATTR_EN[e.getAttribute('aria-label')]).map((e) => ({ e, vi: e.getAttribute('aria-label') }));
+  function applyStatic() {
+    document.documentElement.lang = lang;
+    staticText.forEach((s) => (s.n.nodeValue = s[lang]));
+    staticAttr.forEach((a) => a.e.setAttribute('aria-label', lang === 'vi' ? a.vi : ATTR_EN[a.vi]));
+    $$('[data-i18n]').forEach((e) => (e.innerHTML = BLOCKS[e.dataset.i18n][lang]));
+    $('#lang-en').setAttribute('aria-pressed', String(lang === 'en'));
+    $('#lang-vi').setAttribute('aria-pressed', String(lang === 'vi'));
+  }
+
+  // A runner owns one async scenario and can be cancelled by reset.
+  function runner() {
+    let token = 0;
+    return {
+      start(fn) { const my = ++token; const sleep = (ms) => new Promise((res, rej) => setTimeout(() => (my === token ? res() : rej('stop')), reduce ? Math.min(ms, 60) : ms)); return fn(sleep).catch((e) => { if (e !== 'stop') throw e; }); },
+      stop() { token++; },
+    };
+  }
+  const flash = (arrow) => { if (!arrow) return; arrow.classList.remove('flow'); void arrow.offsetWidth; arrow.classList.add('flow'); };
+
+  /* ---------------- overview packet ---------------- */
+  const lc = $('#lifecycle'), packet = $('#lc-packet');
+  const lcNodes = $$('.lc > .node', lc);
+  const lcColors = ['--human', '--sonnet', '--human', '--out', '--sonnet', '--out', '--human'];
+  let lcI = 0;
+  function lcTick() {
+    lcNodes.forEach((n) => n.classList.remove('active'));
+    const n = lcNodes[lcI];
+    n.classList.add('active');
+    const box = n.getBoundingClientRect(), base = lc.getBoundingClientRect();
+    packet.style.left = (box.left - base.left + box.width / 2 - 6) + 'px';
+    const c = getComputedStyle(document.documentElement).getPropertyValue(lcColors[lcI]);
+    packet.style.background = c; packet.style.boxShadow = `0 0 14px ${c}`;
+    flash($('.arrow', n.parentElement.previousElementSibling || n.parentElement));
+    const wait = lcColors[lcI] === '--human' && lcI > 0 ? 1900 : 1100;
+    lcI = (lcI + 1) % lcNodes.length;
+    setTimeout(lcTick, reduce ? 4000 : wait);
+  }
+
+  /* ---------------- spec flow ---------------- */
+  const specR = runner();
+  const sNodes = $$('#spec-pipe .node');
+  const sArrows = $$('#spec-pipe .arrow');
+  const sTitle = $('#spec-title'), sDesc = $('#spec-desc'), sChat = $('#spec-chat'), sDot = $('#spec-dot'), sIssues = $('#spec-issues');
+  const SPEC = () => [
+    { c: '--sonnet', t: t('1 · Phân tích', '1 · Analyse'),
+      d: t('Claude đọc CLAUDE.md, .claude/devflow.json và các file projects (routes → services → repository). Chưa ghi file nào.', 'Claude reads CLAUDE.md, .claude/devflow.json and the projects code (routes → services → repository). No files are written yet.'),
+      chat: [['q', t('Kết quả phân tích', 'Analysis'), t('Hiện chỉ có tạo và xem project. Ảnh hưởng: routes, services, repository, tests. Chưa rõ: xử lý task khi xoá, tên trùng.', 'Projects can only be created and read today. Affected: routes, services, repository, tests. Open: what happens to tasks on delete, duplicate names.')]] },
+    { c: '--sonnet', t: '2 · grill-me',
+      d: t('Hỏi từng câu, mỗi câu kèm đáp án đề xuất. Chỉ đi tiếp khi không còn điểm mở.', 'One question at a time, each with a recommended answer. It moves on only when nothing is left open.'),
+      chat: [['q', t('Claude hỏi', 'Claude asks'), t('Xoá project còn task: xoá luôn task hay chặn lại? Đề xuất: chặn, trả 409.', 'Deleting a project that still has tasks: delete them too, or refuse? Recommended: refuse with 409.')],
+             ['a', t('Bạn', 'You'), t('Đồng ý, trả 409.', 'Agreed, 409.')],
+             ['q', t('Claude hỏi', 'Claude asks'), t('PATCH với tên đã tồn tại: 400 hay 409? Đề xuất: 409 cho nhất quán.', 'PATCH to a name that already exists: 400 or 409? Recommended: 409, for consistency.')],
+             ['a', t('Bạn', 'You'), '409.']] },
+    { c: '--sonnet', t: t('3 · Spec + tasks', '3 · Spec + tasks'),
+      d: t('Tạo branch spec/project-edit-delete, viết docs/specs/2026-10-29-project-edit-delete.md, push và mở PR spec (không cần hỏi).', 'Creates branch spec/project-edit-delete, writes docs/specs/2026-10-29-project-edit-delete.md, pushes and opens the spec PR (no need to ask).'),
+      chat: [['q', t('PR spec đã mở', 'Spec PR opened'), 'spec: project edit and delete · T1 PATCH /projects/<id> (S) · T2 DELETE /projects/<id> (S, depends on T1)']] },
+    { c: '--human', t: '4 · Gate 1',
+      d: t('Claude dừng và hỏi đúng một câu. Bạn review và merge; Claude kiểm tra lại qua MCP rằng PR đã merge thật.', 'Claude stops and asks exactly one question. You review and merge; Claude checks through MCP that the PR really is merged.'),
+      chat: [['q', t('Claude hỏi', 'Claude asks'), t('PR spec #39 đã merge chưa? (merged / changes requested / abandon)', 'Is spec PR #39 merged? (merged / changes requested / abandon)')], ['a', t('Bạn', 'You'), 'merged ✓']] },
+    { c: '--out', t: t('5 · Tạo issues', '5 · Create issues'),
+      d: t('Tìm issue trùng trước, tạo theo thứ tự phụ thuộc để dòng "Depends on" dùng số thật, rồi comment danh sách vào PR spec.', 'Searches for duplicates first, creates issues in dependency order so "Depends on" lines use real numbers, then comments the list on the spec PR.'),
+      chat: [['q', t('Hoàn tất', 'Done'), t('Đã tạo 2 issue và comment danh sách vào PR #39.', 'Created 2 issues and listed them on PR #39.')]] },
+  ];
+  const ISSUES = [
+    { n: 31, t: 'T1: PATCH /projects/<id>', l: ['ready', 'type:feat'] },
+    { n: 32, t: 'T2: DELETE /projects/<id>', l: ['ready', 'type:feat', 'needs-e2e'], dep: 'Depends on #31' },
+  ];
+  const lblClass = (l) => l === 'ready' ? 'ready' : l === 'needs-e2e' ? 'e2e' : 'type';
+  const lblText = (l) => l === 'ready' ? 'agent:ready' : l;
+  const emptyIssues = () => `<div class="empty">${t('Chưa có issue. Chúng xuất hiện ở bước 5, sau Gate 1.', 'No issues yet. They appear at step 5, after Gate 1.')}</div>`;
+  function specReset() {
+    specR.stop();
+    sNodes.forEach((n) => n.classList.remove('active', 'done'));
+    sTitle.textContent = t('Bấm ▶ để xem từng bước', 'Press ▶ to step through');
+    sDesc.textContent = t('Mỗi bước có một đầu ra cụ thể. Bước 4 là chốt chặn: issue chỉ được tạo sau khi bạn đã merge spec.', 'Every step has a concrete output. Step 4 is the gate: issues are created only after you merge the spec.');
+    sDot.style.setProperty('--c', 'var(--sonnet)');
+    sChat.innerHTML = '';
+    sIssues.innerHTML = emptyIssues();
+  }
+  function specPlay() {
+    specReset();
+    const steps = SPEC();
+    specR.start(async (sleep) => {
+      for (let i = 0; i < steps.length; i++) {
+        const s = steps[i];
+        if (i) { sNodes[i - 1].classList.remove('active'); sNodes[i - 1].classList.add('done'); flash(sArrows[i - 1]); await sleep(450); }
+        sNodes[i].classList.add('active');
+        sTitle.textContent = s.t; sDesc.textContent = s.d; sDot.style.setProperty('--c', `var(${s.c})`);
+        sChat.innerHTML = '';
+        for (const [k, who, txt] of s.chat) { await sleep(k === 'a' ? 900 : 600); const b = el('div', `bubble ${k}`); b.innerHTML = `<small>${who}</small>`; b.append(txt); sChat.append(b); }
+        if (i === 4) {
+          sIssues.innerHTML = '';
+          for (const it of ISSUES) {
+            await sleep(600);
+            const card = el('div', 'issue');
+            card.innerHTML = `<span class="it"><b>#${it.n}</b> [project-edit-delete] </span><div class="labels"></div>`;
+            card.querySelector('.it').append(it.t);
+            it.l.forEach((l) => card.querySelector('.labels').append(el('span', `lbl ${lblClass(l)}`, lblText(l))));
+            if (it.dep) card.append(el('span', 'dep', it.dep));
+            sIssues.append(card);
+          }
+        }
+        await sleep(i === 3 ? 1400 : 1500);
+      }
+      sNodes[4].classList.remove('active'); sNodes[4].classList.add('done');
+    });
+  }
+  $('#spec-play').addEventListener('click', specPlay);
+  $('#spec-reset').addEventListener('click', specReset);
+
+  /* ---------------- next-task flow ---------------- */
+  const ntR = runner();
+  const stage = (k) => $(`#track [data-st="${k}"]`);
+  const logBox = $('#nt-log'), queue = $('#queue');
+  const POOL = [
+    { n: 31, t: 'PATCH /projects/<id>', l: ['ready', 'type:feat'] },
+    { n: 32, t: 'DELETE /projects/<id>', l: ['ready', 'needs-e2e'], dep: 31 },
+    { n: 34, t: 'GET /tasks?tag=', l: ['ready', 'type:feat'] },
+    { n: 35, t: 'GET /projects/<id>/tags', l: ['ready', 'needs-e2e'] },
+    { n: 36, t: 'PATCH /tasks/bulk', l: ['ready', 'type:feat'] },
+  ];
+  const STAGE_COLOR = { select: '--haiku', claim: '--haiku', impl: '--sonnet', check: '--haiku', verify: '--sonnet', review: '--opus', ship: '--out', fix: '--sonnet', block: '--block' };
+  function log(k, msg) {
+    const d = el('div');
+    const tag = el('span', 'k', `[${k}] `); tag.style.setProperty('--c', `var(${STAGE_COLOR[k] || '--fg'})`);
+    d.append(tag, msg); logBox.append(d); logBox.scrollTop = logBox.scrollHeight;
+  }
+  const labelsHtml = (ls) => ls.map((l) => {
+    const map = { ready: ['ready', 'agent:ready'], prog: ['prog', 'agent:in-progress'], rev: ['rev', 'agent:review'], blk: ['blk', 'agent:blocked'] };
+    const [c, txt] = map[l] || [l === 'needs-e2e' ? 'e2e' : 'type', l];
+    return `<span class="lbl ${c}">${txt}</span>`;
+  }).join('');
+  function qItem(it) {
+    const d = el('div', 'q-item'); d.dataset.n = it.n;
+    d.innerHTML = `<span class="it"><b>#${it.n}</b> </span><div class="labels">${labelsHtml(it.l)}</div>`;
+    d.querySelector('.it').append(it.t);
+    return d;
+  }
+  function setLabels(n, ls) { const q = $(`.q-item[data-n="${n}"] .labels`, queue); if (q) q.innerHTML = labelsHtml(ls); }
+  const upTo = () => t('tối đa 2 vòng', 'up to 2 rounds');
+  function clearTrack() { $$('#track .node').forEach((n) => n.classList.remove('active', 'done', 'dim', 'skipped', 'failed')); $$('.loop').forEach((l) => l.classList.remove('on')); $('#loop-check-n').textContent = upTo(); $('#loop-review-n').textContent = upTo(); }
+  function ntReset() {
+    ntR.stop(); clearTrack();
+    $$('#pf .pf').forEach((p) => p.classList.remove('ok'));
+    queue.innerHTML = `<span class="eyebrow">${t('Hàng đợi (agent:ready)', 'Queue (agent:ready)')}</span>`;
+    POOL.forEach((it) => queue.append(qItem(it)));
+    ['#bin-pr', '#bin-blk', '#bin-skp'].forEach((s) => ($(s).innerHTML = ''));
+    logBox.innerHTML = `<div>${t('Bấm ▶ để chạy kịch bản mẫu: 5 issue sẵn sàng, limit = 3.', 'Press ▶ to run the sample scenario: 5 ready issues, limit = 3.')}</div>`;
+  }
+  const res = (bin, html) => $(bin).append(el('div', 'res', html));
+
+  async function go(sleep, k, msg, ms = 900) {
+    $$('#track .node').forEach((n) => n.classList.remove('active'));
+    const n = stage(k); n.classList.remove('dim', 'skipped', 'failed'); n.classList.add('active');
+    log(k, msg); await sleep(ms);
+    n.classList.remove('active'); n.classList.add('done');
+  }
+  async function fail(sleep, k, msg) {
+    $$('#track .node').forEach((n) => n.classList.remove('active'));
+    const n = stage(k); n.classList.add('active'); log(k, msg); await sleep(900);
+    n.classList.remove('active'); n.classList.add('failed');
+  }
+  async function fixLoop(sleep, loopId, countId, round, msg) {
+    const l = $(loopId); l.classList.add('on'); $(countId).textContent = t(`vòng ${round}/2`, `round ${round}/2`);
+    log('fix', msg); await sleep(1100); l.classList.remove('on');
+  }
+
+  function ntPlay() {
+    ntReset();
+    ntR.start(async (sleep) => {
+      const pfs = $$('#pf .pf');
+      log('skill', t('Preflight trước khi gọi workflow…', 'Preflight before calling the workflow…'));
+      for (const p of pfs) { await sleep(280); p.classList.add('ok'); }
+      await sleep(400);
+      log('skill', t('Gọi Workflow "devflow:next-task-engine" với args { config, limit: 3, startBranch }', 'Calls Workflow "devflow:next-task-engine" with args { config, limit: 3, startBranch }'));
+      await sleep(700);
+
+      await go(sleep, 'select', t('Đọc 5 issue có agent:ready…', 'Reads 5 issues labelled agent:ready…'), 1000);
+      const skip = (n, why) => { const q = $(`.q-item[data-n="${n}"]`, queue); q.classList.add('gone'); res('#bin-skp', `<b>#${n}</b> ${why}`); log('select', t(`#${n} bỏ qua: ${why}`, `#${n} skipped: ${why}`)); };
+      skip(32, t('Depends on #31 (chưa đóng)', 'Depends on #31 (still open)')); await sleep(500);
+      skip(36, t('vượt limit 3', 'over limit 3')); await sleep(500);
+      log('select', t('Chọn #31, #34, #35. Chạy tuần tự.', 'Picks #31, #34, #35. Runs them one by one.')); await sleep(600);
+
+      // #31 — check fails once, then passes; no verify; review passes
+      const cur = (n) => { $$('.q-item', queue).forEach((q) => q.classList.remove('current')); const q = $(`.q-item[data-n="${n}"]`, queue); if (q) q.classList.add('current'); };
+      clearTrack(); stage('select').classList.add('done'); cur(31);
+      await go(sleep, 'claim', '#31 → agent:in-progress, git switch -c feat/31-patch-project github/feature/example_taskboard');
+      setLabels(31, ['prog', 'type:feat']);
+      await go(sleep, 'impl', t('#31 commit test(#31) fail đúng lý do → commit feat(#31): allow renaming a project', '#31 commits test(#31), which fails for the right reason → commits feat(#31): allow renaming a project'), 1300);
+      await fail(sleep, 'check', '#31 make test: 1 failed (test_patch_duplicate_name: expected 409, got 500)');
+      await fixLoop(sleep, '#loop-check', '#loop-check-n', 1, '#31 fix(#31): map duplicate-name IntegrityError to 409');
+      await go(sleep, 'check', '#31 make test ✓ · ruff ✓');
+      stage('verify').classList.add('skipped'); log('verify', t('#31 bỏ qua: không có needs-e2e, không đụng UI', '#31 skipped: no needs-e2e label, no UI change')); await sleep(700);
+      await go(sleep, 'review', t('#31 review (opus): pass · 1 suggestion ghi vào PR', '#31 review (opus): pass · 1 suggestion noted in the PR'), 1200);
+      await go(sleep, 'ship', '#31 push feat/31-patch-project → PR #40 "feat(#31): allow editing a project" · Closes #31');
+      setLabels(31, ['rev', 'type:feat']); res('#bin-pr', '<b>PR #40</b> ← #31'); log('ship', t('git switch về branch ban đầu', 'git switch back to the starting branch')); await sleep(900);
+
+      // #34 — implement blocked on ambiguity
+      clearTrack(); stage('select').classList.add('done'); cur(34);
+      await go(sleep, 'claim', t('#34 → agent:in-progress, branch feat/34-filter-tasks-by-tag', '#34 → agent:in-progress, branch feat/34-filter-tasks-by-tag'));
+      setLabels(34, ['prog', 'type:feat']);
+      await fail(sleep, 'impl', t('#34 dừng: "?tag=a&tag=b" là AND hay OR? Spec không nói, đây là contract → không đoán', '#34 stops: is "?tag=a&tag=b" AND or OR? The spec is silent and it is a contract → no guessing'));
+      log('block', t('#34 push branch (nếu có commit), comment câu hỏi lên issue, gắn agent:blocked', '#34 pushes the branch (if it has commits), comments the question on the issue, labels agent:blocked'));
+      setLabels(34, ['blk', 'type:feat']); res('#bin-blk', t('<b>#34</b> Implement: AND hay OR khi lọc nhiều tag?', '<b>#34</b> Implement: AND or OR when filtering by several tags?')); await sleep(1200);
+
+      // #35 — verify runs (needs-e2e), review asks for a fix
+      clearTrack(); stage('select').classList.add('done'); cur(35);
+      await go(sleep, 'claim', '#35 → agent:in-progress, branch feat/35-project-tags');
+      setLabels(35, ['prog', 'needs-e2e']);
+      await go(sleep, 'impl', '#35 commit test(#35) → commit feat(#35): list tags with counts', 1200);
+      await go(sleep, 'check', '#35 make test ✓ · ruff ✓');
+      $('#loop-verify').classList.add('on');
+      await go(sleep, 'verify', t('#35 make run → curl GET /projects/1/tags → 200 [{"tag":"bug","count":3}] ✓ · dừng server', '#35 make run → curl GET /projects/1/tags → 200 [{"tag":"bug","count":3}] ✓ · server stopped'), 1400);
+      $('#loop-verify').classList.remove('on');
+      await fail(sleep, 'review', t('#35 review: warning repository.py:88 thiếu ORDER BY → thứ tự tag không ổn định', '#35 review: warning repository.py:88 has no ORDER BY → tag order is unstable'));
+      await fixLoop(sleep, '#loop-review', '#loop-review-n', 1, '#35 fix(#35): order tags by count desc, then name');
+      await go(sleep, 'check', t('#35 check lại sau fix ✓', '#35 checks again after the fix ✓'));
+      await go(sleep, 'review', t('#35 review vòng 2: pass', '#35 review round 2: pass'), 1100);
+      await go(sleep, 'ship', '#35 push → PR #41 "feat(#35): list project tags with counts" · Closes #35');
+      setLabels(35, ['rev', 'needs-e2e']); res('#bin-pr', '<b>PR #41</b> ← #35');
+      $$('.q-item', queue).forEach((q) => q.classList.remove('current'));
+      log('skill', t('Xong: 2 PR chờ bạn merge · 1 blocked cần bạn trả lời · 2 bỏ qua', 'Done: 2 PRs waiting for your merge · 1 blocked needs your answer · 2 skipped'));
+    });
+  }
+  $('#nt-play').addEventListener('click', ntPlay);
+  $('#nt-reset').addEventListener('click', ntReset);
+
+  /* ---------------- address-reviews ---------------- */
+  const rvR = runner();
+  const THREADS = () => [
+    { id: 't1', w: 'services.py:41', txt: t('Thiếu test cho project không tồn tại (404).', 'Missing a test for a project that does not exist (404).'), to: '#rb-fix', out: t('commit 7c1e2a9 · "fixed in 7c1e2a9"', 'commit 7c1e2a9 · "fixed in 7c1e2a9"') },
+    { id: 't2', w: 'routes.py:30', txt: t('Vì sao trả count dạng int mà không phải string?', 'Why is count an int and not a string?'), to: '#rb-ans', out: t('trả lời: theo spec, mục API contract', 'answer: per the spec, API contract section') },
+    { id: 't3', w: 'repository.py:90', txt: t('Nên thêm cache cho endpoint này.', 'This endpoint should be cached.'), to: '#rb-wont', out: t('không sửa: ngoài scope #35, ghi chú cho task sau', "won't fix: outside #35's scope, noted for a later task") },
+  ];
+  function rvReset() {
+    rvR.stop();
+    const box = $('#threads'); box.innerHTML = '';
+    THREADS().forEach((th) => { const d = el('div', 'thread'); d.id = th.id; d.innerHTML = `<small>${th.w}</small>`; d.append(th.txt); box.append(d); });
+    ['#rb-fix', '#rb-ans', '#rb-wont'].forEach((s) => ($(s).innerHTML = ''));
+    $('#pip1').classList.remove('on'); $('#pip2').classList.remove('on'); $('#rv-trigger').classList.remove('on');
+    $('#rv-note').textContent = t('tối đa 2 vòng, sau đó báo bạn', 'up to 2 rounds, then it tells you');
+  }
+  function rvPlay() {
+    rvReset();
+    const threads = THREADS();
+    rvR.start(async (sleep) => {
+      for (const th of threads) {
+        await sleep(900);
+        $('#' + th.id).classList.add('moved');
+        $(th.to).append(el('div', 'res', th.out));
+      }
+      await sleep(900);
+      $('#rv-note').textContent = t('checks ✓ → push → trả lời từng thread', 'checks ✓ → push → reply on every thread');
+      await sleep(1200);
+      $('#rv-trigger').classList.add('on'); $('#pip1').classList.add('on');
+      $('#rv-note').textContent = t('đã yêu cầu review lại · vòng 1/2', 're-review requested · round 1/2');
+    });
+  }
+  $('#rv-play').addEventListener('click', rvPlay);
+  $('#rv-reset').addEventListener('click', rvReset);
+
+  /* ---------------- label state machine ---------------- */
+  const PATHS = [
+    [['s0'], []], [['s1'], ['e0']], [['s2'], ['e1']], [['s3'], ['e2']],
+    [['s0'], []], [['s1'], ['e0']], [['s4'], ['e3']], [['s0'], ['e4']],
+  ];
+  let pi = 0;
+  function smTick() {
+    $$('.sm .st').forEach((g) => g.classList.remove('on')); $$('.sm .edge').forEach((e) => e.classList.remove('on'));
+    const [states, edges] = PATHS[pi];
+    states.forEach((s) => $('#' + s).classList.add('on')); edges.forEach((e) => $('#' + e).classList.add('on'));
+    pi = (pi + 1) % PATHS.length;
+    setTimeout(smTick, reduce ? 4000 : 1500);
+  }
+
+  /* ---------------- guard ---------------- */
+  const CMDS = () => [
+    ['git push -u github feat/31-patch-project', true, t('Branch của chính Claude: được phép.', "Claude's own branch: allowed.")],
+    ['git push github HEAD:feature/example_taskboard', false, t('Push vào base branch: bị chặn.', 'Push to the base branch: denied.')],
+    ['gh pr merge 40 --squash', false, t('Merge PR: chỉ bạn được làm.', 'Merging a PR: only you do that.')],
+    ['mcp · merge_pull_request(#40)', false, t('Tool merge của GitHub MCP: bị chặn.', 'The GitHub MCP merge tool: denied.')],
+    ['git push --force github feat/35-project-tags', false, t('Force push: bị chặn.', 'Force push: denied.')],
+    ['git push --force-with-lease github feat/35-project-tags', true, t('--force-with-lease trên branch riêng: được phép.', '--force-with-lease on its own branch: allowed.')],
+    ["bash -c 'git push origin main'", false, t('Nhìn xuyên lệnh bọc bash -c: vẫn bị chặn.', 'Looks through the bash -c wrapper: still denied.')],
+    ['git commit -m "docs: never git push -f"', true, t('Chỉ nhắc tới push -f trong message: không phải lệnh push, được phép.', 'push -f only appears in a commit message: not a push, allowed.')],
+  ];
+  const gq = $('#gq'), hook = $('#hook'), big = $('#g-big'), why = $('#g-why');
+  CMDS().forEach(([c]) => { const d = el('div', 'gcmd'); d.textContent = c; gq.append(d); });
+  let gi = 0;
+  function gTick() {
+    const rows = $$('.gcmd', gq), cmds = CMDS();
+    if (gi === 0) rows.forEach((r) => r.classList.remove('cur', 'allow', 'deny'));
+    const [, ok, msg] = cmds[gi];
+    rows[gi].classList.add('cur');
+    hook.classList.remove('allow', 'deny'); big.textContent = t('Đang kiểm tra…', 'Checking…'); big.style.color = 'var(--fg)'; why.textContent = rows[gi].textContent;
+    setTimeout(() => {
+      rows[gi].classList.remove('cur'); rows[gi].classList.add(ok ? 'allow' : 'deny');
+      hook.classList.add(ok ? 'allow' : 'deny');
+      big.textContent = ok ? t('Cho phép · exit 0', 'Allowed · exit 0') : t('Chặn · exit 2', 'Denied · exit 2');
+      big.style.color = ok ? 'var(--out)' : 'var(--block)';
+      why.textContent = msg;
+      gi = (gi + 1) % rows.length;
+      setTimeout(gTick, reduce ? 3000 : 1700);
+    }, reduce ? 50 : 700);
+  }
+
+  /* ---------------- language switch ---------------- */
+  function setLang(next) {
+    lang = next;
+    try { localStorage.setItem('devflow-lang', lang); } catch (e) {}
+    applyStatic();
+    specReset(); ntReset(); rvReset();
+  }
+  $('#lang-en').addEventListener('click', () => setLang('en'));
+  $('#lang-vi').addEventListener('click', () => setLang('vi'));
+
+  applyStatic();
+  specReset(); ntReset(); rvReset();
+  lcTick(); smTick(); gTick();
+
+  // Play the simulations once when they first scroll into view.
+  const seen = new WeakSet();
+  const io = new IntersectionObserver((entries) => entries.forEach((e) => {
+    if (!e.isIntersecting || seen.has(e.target)) return;
+    seen.add(e.target);
+    if (e.target.id === 'spec') specPlay();
+    if (e.target.id === 'next') ntPlay();
+    if (e.target.id === 'reviews') rvPlay();
+  }), { threshold: 0.35 });
+  ['#spec', '#next', '#reviews'].forEach((s) => io.observe($(s)));
+})();
+</script>
