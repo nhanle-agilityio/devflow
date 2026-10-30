@@ -11,6 +11,14 @@ Title: <type>(<scope>): <summary>. Never write the at-sign handle of the review 
 
 <!-- The approach, and why it is the smallest change that satisfies the acceptance criteria. -->
 
+## Risk
+
+<!-- One line: "Risk: low|high - <reason>". Low PRs are merged by the merge gate when it is enabled and its checks are green; high PRs wait for a human. -->
+
+Risk: 
+
+<!-- Only when the PR is stacked on another open PR: "Stacked on #<pr> (<branch>); it retargets to <base> when that PR merges." Otherwise delete this comment. -->
+
 ## Tests
 
 <!-- Test name: what it proves. State which tests were committed first and failed for the right reason. When the issue has a Test cases table, start each line with the row id it covers (e.g. "T1.2 test_name: ..."), and list any "must" row without a test. -->

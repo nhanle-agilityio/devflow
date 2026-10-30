@@ -8,7 +8,7 @@ export const meta = {
     { title: 'Check', detail: 'run the configured checks, fix failures' },
     { title: 'Verify', detail: 'walk acceptance criteria against the dev server' },
     { title: 'Review', detail: 'read-only review of the diff, fix findings' },
-    { title: 'Ship', detail: 'push the branch and open the PR' },
+    { title: 'Ship', detail: 'push the branch, open the PR, label risk' },
     { title: 'Report', detail: 'one row per issue' },
   ],
 }
@@ -35,9 +35,21 @@ const remote = gh.remote || 'origin'
 const base = cfg.baseBranch
 const baseRef = `${remote}/${base}`
 const labels = Object.assign(
-  { ready: 'agent:ready', inProgress: 'agent:in-progress', review: 'agent:review', blocked: 'agent:blocked', e2e: 'needs-e2e' },
+  {
+    ready: 'agent:ready',
+    inProgress: 'agent:in-progress',
+    review: 'agent:review',
+    blocked: 'agent:blocked',
+    e2e: 'needs-e2e',
+    devflow: 'devflow',
+    riskLow: 'risk:low',
+    riskHigh: 'risk:high',
+    stacked: 'stacked',
+  },
   cfg.labels,
 )
+const riskCfg = Object.assign({ highPaths: [] }, cfg.risk)
+const testingCfg = Object.assign({ e2eFramework: false }, cfg.testing)
 const nt = Object.assign({ defaultLimit: 3, maxFixRounds: 2, maxReviewRounds: 2 }, cfg.nextTask)
 const verifyCfg = Object.assign({ modes: [], browserTool: 'playwright' }, cfg.verify)
 const branchPattern = cfg.branchPattern || '{type}/{issue}-{slug}'
@@ -69,8 +81,19 @@ const SELECT_SCHEMA = {
           labels: { type: 'array', items: { type: 'string' } },
           body: { type: 'string' },
           dependsOn: { type: 'array', items: { type: 'integer' } },
+          stackOn: {
+            type: ['object', 'null'],
+            description: 'The one open dependency (with an open PR) this issue is stacked on, or null',
+            properties: {
+              issue: { type: 'integer' },
+              prNumber: { type: 'integer' },
+              branch: { type: 'string', description: 'Head branch of that PR' },
+              inRun: { type: 'boolean', description: 'True when the dependency is selected in this run and has no PR yet' },
+            },
+            required: ['issue', 'prNumber', 'branch', 'inRun'],
+          },
         },
-        required: ['number', 'title', 'labels', 'body', 'dependsOn'],
+        required: ['number', 'title', 'labels', 'body', 'dependsOn', 'stackOn'],
       },
     },
     skipped: {
@@ -189,6 +212,81 @@ const RESTORE_SCHEMA = {
 // Prompt builders. One small function per stage.
 // ---------------------------------------------------------------------------------------------
 
+// Where the issue's branch starts and where its PR goes: the base branch, or the parent PR's branch when stacked.
+function parentRefFor(issue) {
+  return issue.stackOn ? `${remote}/${issue.stackOn.branch}` : baseRef
+}
+
+function prBaseFor(issue) {
+  return issue.stackOn ? issue.stackOn.branch : base
+}
+
+// True when the issue body has a Test cases table row whose Level cell is "http" or "e2e".
+function hasHttpOrE2eRow(body) {
+  return String(body || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('|'))
+    .some((line) =>
+      line
+        .split(/(?<!\\)\|/)
+        .map((cell) => cell.trim().toLowerCase())
+        .some((cell) => cell === 'http' || cell === 'e2e'),
+    )
+}
+
+// Glob to anchored RegExp: ** crosses "/", * and ? do not. "**/" also matches zero directories.
+function globToRegExp(glob) {
+  let re = ''
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]
+    if (c === '*') {
+      if (glob[i + 1] === '*') {
+        if (glob[i + 2] === '/') {
+          re += '(?:.*/)?'
+          i += 2
+        } else {
+          re += '.*'
+          i += 1
+        }
+      } else {
+        re += '[^/]*'
+      }
+    } else if (c === '?') {
+      re += '[^/]'
+    } else {
+      re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    }
+  }
+  return new RegExp(`^${re}$`)
+}
+
+// Deterministic risk: the issue's label, then escalation by touched paths. Unlabelled counts as high.
+function issueRisk(issue) {
+  if (issue.labels.indexOf(labels.riskHigh) !== -1) return 'high'
+  if (issue.labels.indexOf(labels.riskLow) !== -1) return 'low'
+  return 'unknown'
+}
+
+function escalationFor(files) {
+  for (const glob of riskCfg.highPaths) {
+    const re = globToRegExp(glob)
+    const hit = files.find((f) => re.test(f))
+    if (hit) return `touches ${hit} (risk.highPaths)`
+  }
+  return ''
+}
+
+// The e2e rule differs by project: with an e2e framework the rows need committed tests, otherwise verify covers them.
+function e2eRule(forReview) {
+  if (testingCfg.e2eFramework) {
+    return 'Rows with Level "e2e" need committed tests like every other row (the project has an e2e test framework).'
+  }
+  return forReview
+    ? 'The project has no automated e2e test framework (testing.e2eFramework is false): do NOT flag a missing committed test for a row with Level "e2e"; the Verify stage covers those rows.'
+    : 'The project has no automated e2e test framework (testing.e2eFramework is false): do NOT write or commit tests for rows with Level "e2e"; the Verify stage covers them against the running app. All other must rows still need committed tests.'
+}
+
 function scopeFor(issue) {
   return (cfg.commitScope || '#{issue}').split('{issue}').join(String(issue.number))
 }
@@ -210,14 +308,19 @@ ${explicit}
 
 Rules:
 - Skip an issue that already has an open pull request referencing it (search open PRs for "#<number>", check "Closes"/"Fixes" lines and branch names).
-- The issue body may contain lines "Depends on #<n>". An issue is eligible only when every such issue is closed. Report the others in "skipped" with the reason (name the open dependency). A dependency that is itself in your selection but still open counts as open.
-- Order: dependencies first, then oldest first (lowest number).
-- Return at most ${limit} issues in "issues". Everything else that was eligible but over the limit goes in "skipped" with reason "over limit".
+- The issue body may contain lines "Depends on #<n>". If every such issue is closed, the issue is eligible as normal: stackOn = null.
+- If EXACTLY ONE dependency is still open AND that dependency has an open pull request (find open PRs whose body contains "Closes #<dep>"), the issue is eligible as stacked: stackOn = {issue: <dep>, prNumber: <that PR's number>, branch: <that PR's head branch>, inRun: false}.
+- If EXACTLY ONE dependency is still open, has no open PR, and is itself in your selection (it will be worked on earlier in this run), the issue is still eligible: stackOn = {issue: <dep>, prNumber: 0, branch: "", inRun: true}. The workflow fills in the PR once the parent ships.
+- Any other case with an open dependency (two or more open, or one open that has no PR and is not in your selection) goes in "skipped" with the reason (name the open dependency).
+- Order: parents before children, then oldest first (lowest number).
+- Return at most ${limit * 3} eligible issues in "issues" (the workflow applies the limit of ${limit}, because a child whose parent does not ship is not worked on and does not count). Everything beyond that goes in "skipped" with reason "over limit".
 - For each selected issue return its full body verbatim, its label names, and the dependency numbers from its "Depends on" lines.
 This is read-only: do not change anything on GitHub or in the checkout.`
 }
 
 function claimPrompt(issue) {
+  const parentRef = parentRefFor(issue)
+  const fetchBranch = issue.stackOn ? issue.stackOn.branch : base
   return `Claim GitHub issue #${issue.number} in ${gh.owner}/${gh.repo} and create its branch. ${MCP_NOTE}
 
 devflow config:
@@ -227,7 +330,7 @@ Steps, in order:
 1. Add the label "${labels.inProgress}" to issue #${issue.number} and remove "${labels.ready}" (keep all other labels).
 2. Work out the branch name from branchPattern "${branchPattern}": {issue} = ${issue.number}; {type} = the value of the issue's "type:<type>" label if present, otherwise infer one of feat|fix|chore|docs|refactor|test from the title; {slug} = at most 5 words of the title, kebab-case, ASCII only, without the "[<slug>] T<n>:" prefix.
 3. Run \`git status --porcelain\`; it must be empty. If not, return ok=false with the problem.
-4. Run \`git fetch ${remote} ${base}\` then \`git switch -c <branch> ${baseRef}\`. If the branch name already exists, return ok=false with the problem (do not reuse or delete it).
+4. Run \`git fetch ${remote} ${fetchBranch}\` then \`git switch -c <branch> ${parentRef}\`. If the branch name already exists, return ok=false with the problem (do not reuse or delete it).
 Return the branch name you created.
 
 Issue title: ${issue.title}
@@ -235,7 +338,8 @@ Issue labels: ${issue.labels.join(', ')}`
 }
 
 function implementPrompt(issue, branch) {
-  return `Implement GitHub issue #${issue.number} on branch ${branch} (already checked out, created from ${baseRef}). ${MCP_NOTE}
+  const parentRef = parentRefFor(issue)
+  return `Implement GitHub issue #${issue.number} on branch ${branch} (already checked out, created from ${parentRef}${issue.stackOn ? `, the branch of PR #${issue.stackOn.prNumber} this issue is stacked on` : ''}). ${MCP_NOTE}
 
 devflow config:
 ${cfgJson}
@@ -246,12 +350,13 @@ Instructions:
 1. Read the issue's acceptance criteria and the spec it links (read the spec file from the repo or from ${baseRef}). The spec and issue are the source of truth for expected behaviour, not the current code.
 2. Follow the project's CLAUDE.md for architecture, conventions and its "Never" list.
 3. For behaviour changes and bug fixes: first write and commit a failing test (\`test(${scopeFor(issue)}): ...\`), run it and confirm it fails for the right reason, then commit the implementation (\`feat|fix|chore|refactor(${scopeFor(issue)}): ...\`, pick the type that fits). For work without behaviour change (docs, config) one commit is fine. Use Conventional Commits in English.
-   If the issue has a "Test cases" table (rows of the spec's test matrix), write a test for every row with priority "must" and make each traceable to its row id (in the test name or a short comment). "should" rows are optional. If the issue has only a test plan, follow it.
+   If the issue has a "Test cases" table (rows of the spec's test matrix), write a test for every row with priority "must" and make each traceable to its row id (in the test name, e.g. test_t1_2_..., or a short comment such as "# T1.2"). "should" rows are optional. If the issue has only a test plan, follow it.
+   ${e2eRule(false)}
 4. Stage files by name only; never stage everything at once. Make small commits. Add no Co-Authored-By or AI attribution unless CLAUDE.md says otherwise.
 5. Stay inside the issue's scope. Anything else you notice goes into "outOfScope", unchanged in the code.
 6. If a requirement is ambiguous in a way that changes behaviour or a contract and the spec does not answer it, do NOT guess: return status "blocked" with blockedReason stating the question. For minor ambiguity, decide, and record the decision in "assumptions".
 7. Do not push, open a PR, or touch GitHub labels.
-Return: status, a short summary, the commits you made ("<sha> <message>"), files changed, assumptions, outOfScope, and touchesUi (true when the diff against ${baseRef} changes user-facing UI).`
+Return: status, a short summary, the commits you made ("<sha> <message>"), files changed, assumptions, outOfScope, and touchesUi (true when the diff against ${parentRef} changes user-facing UI).`
 }
 
 function checkPrompt() {
@@ -311,6 +416,7 @@ If you cannot run verification at all (server never started, tool unavailable), 
 }
 
 function reviewPrompt(issue, branch, state, round) {
+  const parentRef = parentRefFor(issue)
   return `Review the change for issue #${issue.number} on branch ${branch}. You are read-only: do not edit, commit, push, or change GitHub. Review round ${round + 1}.
 
 devflow config:
@@ -318,10 +424,10 @@ ${cfgJson}
 
 ${issueBlock(issue)}
 
-Run \`git diff ${baseRef}...HEAD\` and \`git log ${baseRef}..HEAD --oneline\`. Read the spec the issue links and the project's CLAUDE.md.
+Run \`git diff ${parentRef}...HEAD\` and \`git log ${parentRef}..HEAD --oneline\`.${issue.stackOn ? ` This PR is stacked on PR #${issue.stackOn.prNumber}; the parent's changes are excluded from this diff, review only what is new.` : ''} Read the spec the issue links and the project's CLAUDE.md.
 Review, in this order:
 1. Correctness against the issue's acceptance criteria and the spec (bugs, missed edge cases, wrong contracts).
-2. Tests: does each behaviour change have a test that would fail without it? Were tests weakened? If the issue has a "Test cases" table, every row with priority "must" needs a test traceable to its row id; a missing one is a warning that names the row.
+2. Tests: does each behaviour change have a test that would fail without it? Were tests weakened? If the issue has a "Test cases" table, every row with priority "must" needs a test traceable to its row id; a missing one is a warning that names the row. ${e2eRule(true)}
 3. Scope creep: changes not needed for the acceptance criteria.
 4. CLAUDE.md conventions and its "Never" list.
 Severity: critical = wrong behaviour / data loss / security / rule violation; warning = likely bug, missing test, scope creep; suggestion = optional improvement. Only report real problems with a file and line. verdict "pass" means no critical or warning findings.
@@ -330,7 +436,12 @@ Implementation summary: ${state.summary}
 Assumptions recorded so far: ${JSON.stringify(state.assumptions)}`
 }
 
-function shipPrompt(issue, branch, state) {
+function shipPrompt(issue, branch, state, risk) {
+  const prBase = prBaseFor(issue)
+  const stack = issue.stackOn
+  const prRisk = risk.level === 'low' ? labels.riskLow : labels.riskHigh
+  const riskLine = `Risk: ${risk.level === 'unknown' ? 'high (the issue has no risk label; treated as high)' : risk.level}${risk.escalation ? ' - escalated from the issue label: ' + risk.escalation : risk.reason ? ' - ' + risk.reason : ''}`
+  const prLabels = [labels.devflow, prRisk].concat(stack ? [labels.stacked] : [])
   const template = args.prTemplatePath
     ? `Read the PR body template at ${args.prTemplatePath} and fill every section from the data below (keep its headings).`
     : 'Write the PR body with sections: What, How, Tests, Checks, Verification, Review notes, Assumptions, Out of scope.'
@@ -352,12 +463,14 @@ Data:
 - Review notes (suggestions that were NOT applied): ${JSON.stringify(state.suggestions)}
 - Assumptions: ${JSON.stringify(state.assumptions)}
 - Out of scope: ${JSON.stringify(state.outOfScope)}
-
+- ${riskLine}
+${stack ? `- Stacked on PR #${stack.prNumber} (branch ${stack.branch}).\n` : ''}
 Steps:
 1. \`git push -u ${remote} ${branch}\`. Never push to ${base} or any protected branch; never force-push.
-2. Open a PR with head ${branch} and base ${base} in ${gh.owner}/${gh.repo}. Title: Conventional Commits style summary with scope "${scopeFor(issue)}", English, under 72 characters. Body as described, ending with the line "Closes #${issue.number}". The body must not contain any at-sign mention of a bot or user, and no AI attribution.
-3. On issue #${issue.number} add the label "${labels.review}" and remove "${labels.inProgress}" (keep other labels).
-4. \`git switch ${startBranch}\`.
+2. Open a PR with head ${branch} and base ${prBase} in ${gh.owner}/${gh.repo}. Title: Conventional Commits style summary with scope "${scopeFor(issue)}", English, under 72 characters. Body as described, with a "Risk" section holding exactly this line: "${riskLine}"${stack ? `, and the line "Stacked on #${stack.prNumber} (${stack.branch}); it retargets to ${base} when that PR merges."` : ''}, ending with the line "Closes #${issue.number}". The body must not contain any at-sign mention of a bot or user, and no AI attribution.
+3. Label the new PR (a PR is an issue: use issue_write with the PR number; read its labels first, keep existing ones): ${prLabels.map((l) => '"' + l + '"').join(', ')}.
+4. On issue #${issue.number} add the label "${labels.review}" and remove "${labels.inProgress}" (keep other labels).${risk.escalation ? ` Also add "${labels.riskHigh}" to the issue and remove "${labels.riskLow}" (the change was escalated to high).` : ''}
+5. \`git switch ${startBranch}\`.
 Return the PR number and URL. If any step fails, return ok=false with the problem.`
 }
 
@@ -372,7 +485,7 @@ Branch: ${branch || '(none created)'}
 
 Steps, in order:
 1. Do not make any more code changes or commits. If uncommitted changes exist, leave them; do not discard anything.
-2. ${branch ? `If \`git log ${baseRef}..${branch} --oneline\` shows commits, push the branch so work is not lost: \`git push -u ${remote} ${branch}\` (never force, never push to ${base}).` : 'No branch to push.'}
+2. ${branch ? `If \`git log ${parentRefFor(issue)}..${branch} --oneline\` shows commits, push the branch so work is not lost: \`git push -u ${remote} ${branch}\` (never force, never push to ${base}).` : 'No branch to push.'}
 3. Comment on issue #${issue.number}: the stage ("${stage}"), the reason, and the concrete question or decision a human must provide to unblock it${branch ? `, and the branch name ${branch}` : ''}. No at-sign mentions of bots.
 4. On the issue add the label "${labels.blocked}" and remove "${labels.inProgress}" (keep other labels).
 5. \`git switch ${startBranch}\` (if the working tree is dirty, use \`git stash push -u -m devflow-blocked-${issue.number}\` first and say so in note).
@@ -494,7 +607,8 @@ async function runIssue(issue) {
 
   // Verify
   const needsVerify =
-    verifyCfg.modes.length > 0 && (issue.labels.indexOf(labels.e2e) !== -1 || state.touchesUi)
+    verifyCfg.modes.length > 0 &&
+    (issue.labels.indexOf(labels.e2e) !== -1 || state.touchesUi || hasHttpOrE2eRow(issue.body))
   if (needsVerify) {
     for (let round = 0; round <= 1; round++) {
       phase('Verify')
@@ -546,16 +660,36 @@ async function runIssue(issue) {
     if (!again.ok) return block('Check', again.reason)
   }
 
+  // Risk: label first, then deterministic escalation by touched paths.
+  const reasonMatch = /^\s*Risk:\s*(?:low|high)\s*[-:\u2013\u2014]\s*(.+)$/im.exec(issue.body || '')
+  const risk = { level: issueRisk(issue), reason: reasonMatch ? reasonMatch[1].trim() : '', escalation: '' }
+  if (risk.level === 'unknown') log(`#${issue.number}: no risk label; treated as high (human merge).`)
+  const escalation = escalationFor(state.filesChanged)
+  if (escalation && risk.level !== 'high') {
+    risk.level = 'high'
+    risk.escalation = escalation
+    log(`#${issue.number}: risk escalated to high: ${escalation}`)
+  }
+  if (issue.stackOn) log(`#${issue.number}: stacked on PR #${issue.stackOn.prNumber} (${issue.stackOn.branch}); PR base is ${prBaseFor(issue)}.`)
+
   // Ship
   phase('Ship')
-  const ship = await agent(shipPrompt(issue, branch, state), {
+  const ship = await agent(shipPrompt(issue, branch, state, risk), {
     label: `ship #${issue.number}`,
     phase: 'Ship',
     schema: SHIP_SCHEMA,
     model: 'sonnet', // writes the PR body reviewers read; worth more than haiku
   })
   if (!ship || !ship.ok) return block('Ship', (ship && ship.problem) || 'The ship agent died.')
-  return { issue: issue.number, status: 'pr', url: ship.url, prNumber: ship.prNumber }
+  return {
+    issue: issue.number,
+    status: 'pr',
+    url: ship.url,
+    prNumber: ship.prNumber,
+    risk: risk.level === 'unknown' ? 'high' : risk.level,
+    stackedOn: issue.stackOn ? issue.stackOn.prNumber : null,
+    branch,
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -577,28 +711,45 @@ for (const s of selected.skipped) {
   log(`Skipped #${s.number}: ${s.reason}`)
   report.push({ issue: s.number, status: 'skipped', reason: s.reason })
 }
-let queue = selected.issues
-if (queue.length > limit) {
-  for (const extra of queue.slice(limit)) {
-    log(`Skipped #${extra.number}: over limit (${limit})`)
-    report.push({ issue: extra.number, status: 'skipped', reason: `over limit (${limit})` })
-  }
-  queue = queue.slice(0, limit)
-}
-log(queue.length ? `Working on ${queue.map((i) => '#' + i.number).join(', ')} sequentially.` : 'No eligible issues.')
+const queue = selected.issues
+log(queue.length ? `Candidates: ${queue.map((i) => '#' + i.number).join(', ')}; working on at most ${limit}, sequentially.` : 'No eligible issues.')
+
+// Parents that shipped in this run: issue number -> {prNumber, branch}. Children stack on them.
+const shipped = {}
+const status = {}
+let worked = 0
 
 for (const issue of queue) {
+  if (worked >= limit) {
+    log(`Skipped #${issue.number}: over limit (${limit})`)
+    report.push({ issue: issue.number, status: 'skipped', reason: `over limit (${limit})` })
+    continue
+  }
+  if (issue.stackOn && issue.stackOn.inRun) {
+    const parent = shipped[issue.stackOn.issue]
+    if (!parent) {
+      const why = `parent #${issue.stackOn.issue} did not ship (${status[issue.stackOn.issue] || 'not worked on'})`
+      log(`Skipped #${issue.number}: ${why}`)
+      report.push({ issue: issue.number, status: 'skipped', reason: why })
+      continue
+    }
+    issue.stackOn = { issue: issue.stackOn.issue, prNumber: parent.prNumber, branch: parent.branch, inRun: false }
+    log(`#${issue.number}: parent #${issue.stackOn.issue} shipped as PR #${parent.prNumber}; stacking on ${parent.branch}.`)
+  }
+  worked++
   let result
   try {
     result = await runIssue(issue)
   } catch (e) {
     result = { issue: issue.number, status: 'blocked', reason: `Workflow error: ${e && e.message ? e.message : e}` }
   }
+  status[issue.number] = result.status
+  if (result.status === 'pr') shipped[issue.number] = { prNumber: result.prNumber, branch: result.branch }
   report.push(result)
   // Every issue starts from a clean checkout of the original branch.
   await agent(restorePrompt(), { label: `restore ${startBranch}`, phase: 'Report', schema: RESTORE_SCHEMA, model: 'haiku' })
 }
 
 phase('Report')
-log(report.map((r) => `#${r.issue}: ${r.status}${r.url ? ' ' + r.url : ''}${r.reason ? ' (' + r.reason + ')' : ''}`).join('\n'))
+log(report.map((r) => `#${r.issue}: ${r.status}${r.url ? ' ' + r.url : ''}${r.risk ? ' risk:' + r.risk : ''}${r.stackedOn ? ' stacked on #' + r.stackedOn : ''}${r.reason ? ' (' + r.reason + ')' : ''}`).join('\n'))
 return report
