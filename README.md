@@ -3,7 +3,7 @@
 A Claude Code plugin with three project-agnostic workflows (v2 wave 1):
 
 1. `/devflow:spec <idea>`: idea, analysis, grill-me interview, spec with a risk level per task, QA test matrix, spec PR, Gate 1 (a human merges, which also approves the risk levels), then one GitHub issue per task labelled ready and `risk:low|high`.
-2. `/devflow:next-task [limit | #issue ...]`: pick up to N ready issues, implement each test first, run checks, verify against the running app, review, and open a PR labelled with its risk. An issue whose single open dependency has an open PR is stacked on that PR.
+2. `/devflow:next-task [limit | #issue ...]`: pick up to N ready issues, implement each test first, run checks, verify against the running app, review, and open a PR labelled with its risk. An issue whose open dependencies all have open PRs is stacked on them.
 3. `/devflow:sync [#pr ...]`: keep those PRs mergeable: retarget stacked PRs, update behind branches, resolve conflicts, address review threads.
 
 Claude never merges. `risk:low` PRs are merged by an optional GitHub Action (the merge gate) once its checks are green; `risk:high` PRs wait for a human.
@@ -37,7 +37,7 @@ Skip this if humans merge everything. The gate exists for private repos on GitHu
 6. Set `mergeGate.requiredChecks` to the check run names or status contexts that must be green. Default `["devflow/review"]`; add your CI job names.
 7. Set `mergeGate.enabled` to true but keep `dryRun` true at first. The run summary lists what each PR would get (merge, update, block, skip). Set `dryRun` to false when it looks right.
 
-The gate merges at most one PR per run. A PR is merged only when: it has the `devflow` and `risk:low` labels and is not a draft or labelled blocked; its base is `baseBranch`; it is mergeable; it is not behind its base (otherwise the branch is updated and CI runs again); every `requiredChecks` entry is green on the head SHA; and no review thread is unanswered. Then it merges with a merge commit, retargets PRs stacked on it to `baseBranch` and deletes the head branch. A conflicting PR and its issue get the blocked label and a comment pointing at `/devflow:sync`.
+The gate merges at most one PR per run. A PR is merged only when: it has the `devflow` and `risk:low` labels and is not a draft or labelled blocked; its base is `baseBranch`; no `Depends on` issue of its linked issue is still open; it is mergeable; it is not behind its base (otherwise the branch is updated and CI runs again); every `requiredChecks` entry is green on the head SHA; and no review thread is unanswered. Then it merges with a merge commit, retargets PRs stacked on it to `baseBranch` and deletes the head branch. A conflicting PR and its issue get the blocked label and a comment pointing at `/devflow:sync`.
 
 ## Usage
 
@@ -53,11 +53,13 @@ Each issue and PR carries `labels.riskLow` or `labels.riskHigh`. The spec judges
 
 ### Review check
 
-`claude-code-review.yml` reviews each PR with Opus and publishes the commit status `devflow/review` (success or failure) from a verdict file; a missing verdict is a failure. It re-runs on every push (`synchronize`), but when the only new commits are clean base merges made by GitHub's update-branch it carries the previous result over instead of reviewing again. The PR also gets one summary comment and inline comments; the review never approves or requests changes.
+`claude-code-review.yml` reviews each PR with Opus and publishes the commit status `devflow/review` (success or failure) from a hidden `devflow-verdict` marker that the review bot puts at the end of its summary comment (it carries the head SHA; only the bot's comment counts); a missing marker, or one for another SHA, is a failure. It re-runs on every push (`synchronize`), but when the only new commits are clean base merges made by GitHub's update-branch it carries the previous result over instead of reviewing again. The PR also gets one summary comment and inline comments; the review never approves or requests changes.
 
 ### Stacked PRs
 
-If an issue has exactly one open `Depends on` issue and that issue has an open PR, or that issue shipped earlier in the same run, `next-task` branches from the parent PR's branch and opens the PR against it, labelled `labels.stacked`. A parent that did not ship in the run means the child is skipped. After the parent merges, the merge gate (or `/devflow:sync`) retargets the child to `baseBranch`. Two or more open dependencies, or one without a PR, skip the issue with the reason.
+If every open `Depends on` issue has an open PR, or shipped earlier in the same run, the issue is stacked and labelled `labels.stacked`. One parent: `next-task` branches from the parent PR's branch and opens the PR against it; after the parent merges, the merge gate (or `/devflow:sync`) retargets the child to `baseBranch`. Several parents: the branch starts from `baseBranch`, an Integrate stage (sonnet) merges every parent branch into it (resolving conflicts between them), and the PR targets `baseBranch`; its diff shrinks to the child's own changes as the parents merge. The merge gate never merges a PR while any `Depends on` issue of its linked issue is open. A parent that did not ship in the run, or an open dependency without a PR, skips the issue with the reason.
+
+Implement must read the spec: the engine takes the spec path from the issue body, tells the agent to start with `git show <base>:<path>`, and requires `specRead` in its result. If the path is missing there, one Fix round re-checks the change against the spec; if it is still missing, the issue is blocked.
 
 ### Verification and e2e rows
 

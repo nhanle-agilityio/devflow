@@ -31,7 +31,7 @@ function makePr(number, over = {}) {
 }
 
 // In-memory fake of the Octokit surface the gate uses. `calls` records every call as [name, args].
-function makeEnv({ prs = [], runs = {}, statuses = {}, behind = {}, unresolved = {}, comments = [] } = {}) {
+function makeEnv({ prs = [], runs = {}, statuses = {}, behind = {}, unresolved = {}, comments = [], issues = {} } = {}) {
   const calls = [];
   const rec = (name, fn) => async (args) => {
     calls.push([name, args]);
@@ -62,6 +62,9 @@ function makeEnv({ prs = [], runs = {}, statuses = {}, behind = {}, unresolved =
     },
     checks: { listForRef: rec('checks', (a) => ({ data: { check_runs: runs[a.ref] || [] } })) },
     issues: {
+      get: rec('issues.get', (a) => {
+        return { data: issues[a.issue_number] || { state: 'open', body: '' } };
+      }),
       addLabels: rec('addLabels'),
       createComment: rec('createComment', (a) => {
         comments.push({ body: a.body });
@@ -289,4 +292,43 @@ test('a per-PR error does not stop the run', async () => {
   await run(env, CONFIG());
   assert.equal(env.decisions()[0].action, 'error');
   assert.equal(env.decisions()[1].action, 'merged');
+});
+
+test('open dependency of the linked issue is skipped', async () => {
+  const env = makeEnv({
+    prs: [makePr(1)],
+    issues: { 101: { state: 'open', body: 'Depends on #50 and depends on #51' }, 50: { state: 'closed' }, 51: { state: 'open' } },
+    ...green(1),
+  });
+  await run(env, CONFIG());
+  assert.equal(env.decisions()[0].action, 'skipped');
+  assert.equal(env.decisions()[0].reason, 'waits for dependency #51 (open)');
+  assert.equal(env.names('pulls.merge').length, 0);
+  assert.equal(env.names('pulls.get').length, 0);
+});
+
+test('all dependencies closed: merges', async () => {
+  const env = makeEnv({
+    prs: [makePr(1)],
+    issues: { 101: { state: 'open', body: 'Depends on #50, Depends on #51' }, 50: { state: 'closed' }, 51: { state: 'closed' } },
+    ...green(1),
+  });
+  await run(env, CONFIG());
+  assert.equal(env.decisions()[0].action, 'merged');
+});
+
+test('no linked issue: dependency rule does not apply', async () => {
+  const env = makeEnv({ prs: [makePr(1, { body: 'no link' })], ...green(1) });
+  await run(env, CONFIG());
+  assert.equal(env.decisions()[0].action, 'merged');
+  assert.equal(env.names('issues.get').length, 0);
+});
+
+test('issue reads are cached within a run', async () => {
+  const env = makeEnv({
+    prs: [makePr(1, { body: 'Closes #7' }), makePr(2, { body: 'Closes #7' })],
+    issues: { 7: { state: 'open', body: 'Depends on #50' }, 50: { state: 'open' } },
+  });
+  await run(env, CONFIG());
+  assert.equal(env.names('issues.get').length, 2); // #7 and #50, once each
 });

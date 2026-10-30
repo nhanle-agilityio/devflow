@@ -46,8 +46,8 @@ Fill `config` with the full parsed config object, and the other values from step
 
 ## 4. Report
 
-When the workflow returns, print a table: issue, then PR link (with its risk and, when stacked, the PR it is stacked on), or blocked with the reason, or skipped with the reason. Mention that blocked issues have a comment explaining what a human must decide.
+When the workflow returns, print a table: issue, then PR link (with its risk and, when stacked, the PR or PRs it is stacked on: `stackedOn` is a list, empty when not stacked), or blocked with the reason, or skipped with the reason. Mention that blocked issues have a comment explaining what a human must decide.
 
-Explain who merges: `risk:low` PRs are merged by the merge gate GitHub Action when it is enabled (`mergeGate.enabled`) and its required checks are green; `risk:high` PRs (and PRs without a risk label) wait for a human. `/devflow:sync` handles conflicts, retargeting of stacked PRs and review comments.
+Explain who merges: `risk:low` PRs are merged by the merge gate GitHub Action when it is enabled (`mergeGate.enabled`) and its required checks are green; `risk:high` PRs (and PRs without a risk label) wait for a human. A PR stacked on one or more other PRs is merged by the gate only after every dependency is closed; `risk:high` still waits for a human. `/devflow:sync` handles conflicts, retargeting of stacked PRs and review comments.
 
 Never merge a PR, never push to the base branch.
