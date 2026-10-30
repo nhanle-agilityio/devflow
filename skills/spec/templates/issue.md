@@ -1,6 +1,6 @@
 <!--
 Body of one GitHub issue per spec task. Title: [<slug>] T<n>: <task title>.
-Labels: the ready label, plus the e2e label when the task needs it, plus type:<type>.
+Labels: the ready label, plus the risk label (low or high), plus the e2e label when the task needs it, plus type:<type>.
 Never write the at-sign handle of the review bot into the body.
 -->
 
@@ -9,6 +9,12 @@ Never write the at-sign handle of the review bot into the body.
 Part of the spec [<spec title>](<link to the spec file on the base branch>) (task T<n>). Spec PR: #<pr>.
 
 <!-- Two or three sentences: what this task delivers and why, in the spec's words. -->
+
+## Risk
+
+<!-- `low` or `high` (from the spec's task risk), then the one-line reason. High = a human merges the PR. -->
+
+Risk: <low | high> - <reason>
 
 ## Acceptance criteria
 
@@ -22,12 +28,19 @@ Part of the spec [<spec title>](<link to the spec file on the base branch>) (tas
 
 - 
 
+## Hotspots
+
+<!-- Files likely to be touched by other tasks too (routes, registries, schema, shared config), or "None". -->
+
+- 
+
 ## Test cases
 
 <!--
 The rows of the spec's Test matrix for this task, copied as they are. Every "must" row needs a test before
 the PR opens; name the test or add a comment so the row id can be traced. http and e2e rows are also checked
-against the running app. If the spec has no Test matrix, write the test plan here as a list instead.
+against the running app. A test is named test_t<task>_<n>_<description> (e.g. test_t1_2_...) or carries a
+comment `# T1.2`. If the spec has no Test matrix, write the test plan here as a list instead.
 -->
 
 | Id | Criterion | Case | Given / When / Then | Level | Priority |
