@@ -1,0 +1,57 @@
+name: Devflow Merge Gate
+
+# The only thing that merges devflow PRs. Claude never merges; this workflow does, and only for PRs
+# labelled `devflow` + `risk:low` whose required checks are green and whose review threads are resolved.
+# Controlled by `mergeGate` in .claude/devflow.json (enabled, dryRun, requiredChecks, method).
+#
+# MUST live on the repository DEFAULT branch: `workflow_run` and `status` triggers only run from there.
+# Secret DEVFLOW_GATE_TOKEN = fine-grained PAT, scoped to this repository only, with Contents: read/write
+# and Pull requests: read/write. A PAT is needed because pushes and merges made with GITHUB_TOKEN do not
+# trigger other workflows (CI would never re-run after update-branch or a merge).
+# /devflow:init fills the workflow_run list below.
+# Installed by the devflow plugin.
+
+on:
+  workflow_run:
+    # List every workflow that produces a mergeGate.requiredChecks entry, including the review workflow.
+    # The `devflow/review` commit status is created with GITHUB_TOKEN and therefore does NOT fire `status`
+    # events; the review workflow's completion (workflow_run) is what wakes the gate.
+    workflows: ["CI", "Claude Code Review"]
+    types: [completed]
+  status: # statuses created by apps or PATs
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Only evaluate this PR number (optional)"
+        required: false
+
+concurrency:
+  group: devflow-merge-gate
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v4
+
+      - name: Require DEVFLOW_GATE_TOKEN
+        env:
+          GATE_TOKEN: ${{ secrets.DEVFLOW_GATE_TOKEN }}
+        run: |
+          if [ -z "$GATE_TOKEN" ]; then
+            echo "::error::Secret DEVFLOW_GATE_TOKEN is not set. Create a fine-grained PAT (this repo only, Contents RW + Pull requests RW) and add it as a repository secret."
+            exit 1
+          fi
+
+      - name: Run the merge gate
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.DEVFLOW_GATE_TOKEN }}
+          script: |
+            const gate = require('./.github/scripts/devflow-merge-gate.cjs');
+            await gate({github, context, core});
