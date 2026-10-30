@@ -22,6 +22,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      issues: read
       statuses: write
       id-token: write
     steps:
@@ -122,39 +123,54 @@ jobs:
             editing your previous one:
             `gh pr comment ${{ github.event.pull_request.number }} --edit-last --create-if-none --body "..."`
 
-            Finally write ${{ github.workspace }}/.devflow-verdict.json with exactly
-            {"verdict":"pass"|"changes","critical":<int>,"warning":<int>,"summary":"<one line>"};
-            verdict is "changes" when critical + warning > 0.
+            The summary comment must END with exactly one marker line, as its last line:
+            `<!-- devflow-verdict {"sha":"${{ github.event.pull_request.head.sha }}","verdict":"pass"|"changes","critical":<int>,"warning":<int>} -->`
+            verdict is "changes" when critical + warning > 0, otherwise "pass". The merge gate reads this
+            line, so update it on every run, also when you edit the previous summary.
           claude_args: |
             --model opus
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh issue view:*),Bash(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments:*),Write(${{ github.workspace }}/.devflow-verdict.json)"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh issue view:*),Bash(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments:*)"
 
       - name: Publish devflow/review status
         if: always() && steps.carry.outputs.skip != 'true'
         uses: actions/github-script@v7
-        env:
-          VERDICT_FILE: ${{ github.workspace }}/.devflow-verdict.json
         with:
           script: |
-            const fs = require('fs');
+            const pr = context.payload.pull_request;
+            const headSha = pr.head.sha;
+            const OPEN = '<!-- devflow-verdict ';
             let state = 'failure';
-            let description = 'No verdict produced';
+            let description = `No verdict for ${headSha.slice(0, 7)}`;
             try {
-              const v = JSON.parse(fs.readFileSync(process.env.VERDICT_FILE, 'utf8'));
-              const critical = Number(v.critical) || 0;
-              const warning = Number(v.warning) || 0;
-              if (v.verdict === 'pass') {
-                state = 'success';
-                description = 'Review passed' + (v.summary ? `: ${v.summary}` : '');
-              } else if (v.verdict === 'changes') {
-                description = `${critical} critical, ${warning} warning`;
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                ...context.repo, issue_number: pr.number, per_page: 100,
+              });
+              const marked = comments.filter((c) => (c.body || '').includes(OPEN));
+              // Only the review bot's own comment counts; a person cannot set the verdict by pasting a marker.
+              const pool = marked.filter((c) => c.user?.type === 'Bot');
+              pool.sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+              const body = pool[0]?.body || '';
+              const start = body.lastIndexOf(OPEN);
+              const end = start < 0 ? -1 : body.indexOf(' -->', start);
+              if (end > start) {
+                const v = JSON.parse(body.slice(start + OPEN.length, end));
+                const critical = Number(v.critical) || 0;
+                const warning = Number(v.warning) || 0;
+                if (v.sha === headSha) {
+                  if (v.verdict === 'pass') {
+                    state = 'success';
+                    description = 'Review passed';
+                  } else if (v.verdict === 'changes') {
+                    description = `${critical} critical, ${warning} warning`;
+                  }
+                }
               }
             } catch (e) {
               core.warning(`Could not read verdict: ${e.message}`);
             }
             await github.rest.repos.createCommitStatus({
               ...context.repo,
-              sha: context.payload.pull_request.head.sha,
+              sha: headSha,
               state,
               context: 'devflow/review',
               description: description.slice(0, 140),
