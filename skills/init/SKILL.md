@@ -1,6 +1,6 @@
 ---
 name: init
-description: Set up devflow in the current project once: detect remotes, branches, scripts and CLAUDE.md, write .claude/devflow.json and its schema, and optionally install the GitHub Actions. Idempotent.
+description: Set up devflow in the current project once: detect remotes, branches, scripts and CLAUDE.md, write .claude/devflow.json and its schema, configure risk and the merge gate, and optionally install the GitHub Actions. Idempotent.
 disable-model-invocation: true
 ---
 
@@ -25,8 +25,14 @@ Collect, with read-only commands:
 1. Read `${CLAUDE_SKILL_DIR}/templates/devflow.json` (annotated example) and `${CLAUDE_SKILL_DIR}/templates/devflow.schema.json`.
 2. Fill a config from what you detected. For each value say where it came from (file and key). Required: `github`, `baseBranch`, `checks`. Put into `checks` the project's real commands (tests, lint, type check, build), each runnable non-interactively and exiting non-zero on failure.
 3. Use AskUserQuestion for anything ambiguous: which remote, base branch, which checks, dev server command and URL, verify modes (`http`, `browser`, both, or none), browser tool (`playwright` or `chrome`). Offer a recommended option each time.
-4. Write plain JSON (no comments) to `.claude/devflow.json` and copy the schema to `.claude/devflow.schema.json` (the config's `$schema` is `./devflow.schema.json`). If a config already exists, show the diff first and apply only after a yes.
-5. Validate the written file against the schema (all required keys present, types right, no unknown keys).
+4. Risk and merge gate (ask with AskUserQuestion, recommended option each time):
+   - `risk.highWhen`: show the defaults from the schema and let the user edit them. `risk.highPaths`: ask for globs (`**`, `*`, `?`) of files whose change always needs a human merge (auth, migrations, payment code, CI config); default is none.
+   - `mergeGate.enabled`: first explain it. A GitHub Action merges PRs labelled `labels.riskLow` when every `mergeGate.requiredChecks` entry is green; Claude itself never merges; risk:high PRs always wait for a human. Default `enabled` false, `dryRun` true (it only logs what it would merge until the user turns `dryRun` off).
+   - `mergeGate.requiredChecks`: propose the job and check names found in `.github/workflows/*` plus `devflow/review`; the user picks. They must be names of check runs or commit-status contexts.
+   - `testing.e2eFramework`: set true only when the repo has an automated e2e/browser test setup that can hold committed e2e tests (a Playwright or Cypress config, a `tests/e2e` folder, and so on); otherwise false. Say which signal you used.
+   - Mention `spec.testMatrix` (default on) and `spec.qaModel` (`opus` or `sonnet`, default `opus`) and ask whether to change them.
+5. Write plain JSON (no comments) to `.claude/devflow.json` and copy the schema to `.claude/devflow.schema.json` (the config's `$schema` is `./devflow.schema.json`). If a config already exists, show the diff first and apply only after a yes.
+6. Validate the written file against the schema (all required keys present, types right, no unknown keys).
 
 ## 3. Check CLAUDE.md
 
@@ -34,12 +40,21 @@ The workflows rely on CLAUDE.md for: architecture and layer rules, conventions (
 
 ## 4. GitHub Actions and permissions
 
-Ask separately for each (a separate yes each):
+Ask separately for each (a separate yes each; copy only if the target is absent, otherwise show a diff):
 
-- Copy `${CLAUDE_SKILL_DIR}/templates/claude-code-review.yml` to `.github/workflows/claude-code-review.yml` (only if absent).
-- Copy `${CLAUDE_SKILL_DIR}/templates/claude.yml` to `.github/workflows/claude.yml` (only if absent).
+- Copy `${CLAUDE_SKILL_DIR}/templates/github/workflows/claude-code-review.yml` to `.github/workflows/claude-code-review.yml`.
+- Copy `${CLAUDE_SKILL_DIR}/templates/github/workflows/devflow-merge-gate.yml` to `.github/workflows/devflow-merge-gate.yml` and `${CLAUDE_SKILL_DIR}/templates/github/scripts/devflow-merge-gate.cjs` to `.github/scripts/devflow-merge-gate.cjs` (one yes for the pair). In the copied workflow, fill the `workflow_run` `workflows:` list with the names of the project's CI workflows (the `name:` of each file in `.github/workflows/` that runs the checks; list what you chose).
+- Copy `${CLAUDE_SKILL_DIR}/templates/github/workflows/claude.yml` to `.github/workflows/claude.yml`.
 
-If either was added, tell the user to add the `CLAUDE_CODE_OAUTH_TOKEN` repository secret. Then print the `permissions` snippet from `${CLAUDE_PLUGIN_ROOT}/README.md` for `.claude/settings.json` and offer to merge it; merge only after a yes.
+Tell the user the required setup for what was added:
+
+- Repository secret `CLAUDE_CODE_OAUTH_TOKEN` (review and mention workflows).
+- Merge gate: repository secret `DEVFLOW_GATE_TOKEN`, a fine-grained personal access token limited to this repository with Contents read/write and Pull requests read/write. The Actions `GITHUB_TOKEN` cannot be used: pushes and merges made with it do not trigger CI.
+- Repository settings: enable "Allow merge commits" (stacked PRs need merge commits).
+- The gate workflow must be on the repository's default branch: `workflow_run` and status triggers run from there. Merge the PR that adds it before expecting it to act.
+- The gate stays inert until `mergeGate.enabled` is true and logs only while `mergeGate.dryRun` is true.
+
+Then print the `permissions` snippet from `${CLAUDE_PLUGIN_ROOT}/README.md` for `.claude/settings.json` and offer to merge it; merge only after a yes.
 
 ## 5. Remind
 
