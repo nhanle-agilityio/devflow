@@ -2,7 +2,7 @@
 
 A Claude Code plugin with two project-agnostic workflows:
 
-1. `/devflow:spec <idea>`: idea, analysis, grill-me interview, spec PR, Gate 1 (a human merges), then one GitHub issue per task labelled ready.
+1. `/devflow:spec <idea>`: idea, analysis, grill-me interview, spec, QA test matrix, spec PR, Gate 1 (a human merges), then one GitHub issue per task labelled ready.
 2. `/devflow:next-task [limit | #issue ...]`: pick up to N ready issues, implement each test first, run checks, verify against the running app, review, and open a PR. `/devflow:address-reviews` then resolves review comments on those PRs.
 
 Nothing in the plugin knows about a specific stack. Project mechanics live in `.claude/devflow.json`; project rules (architecture, conventions, a "Never" list) live in the project's `CLAUDE.md`. See [DESIGN.md](DESIGN.md) for the full design.
@@ -24,7 +24,7 @@ Required config keys: `github`, `baseBranch`, `checks`. Everything else has defa
 
 ## Usage
 
-- `/devflow:spec add CSV export to the reports page`: runs in a cloud session or locally. Stops at Gate 1 until you merge the spec PR, then creates the issues.
+- `/devflow:spec add CSV export to the reports page`: runs in a cloud session or locally. Before the spec PR, a QA agent that sees only the written spec drafts a test matrix and asks about criteria it cannot test (`spec.testMatrix`, default on; `spec.qaModel`, default `opus`). Stops at Gate 1 until you merge the spec PR, then creates the issues with their test-case rows; `next-task` requires a test for every `must` row.
 - `/devflow:next-task`: up to `nextTask.defaultLimit` ready issues, sequentially in your checkout. `/devflow:next-task 2` or `/devflow:next-task #12 #15` for a specific number or issues. Your working tree must be clean; your branch is restored after each issue. The command also lists `/devflow:next-task-engine`: that is the workflow script it runs internally (Claude Code registers every plugin workflow as a command). Do not run it directly; without the arguments the skill builds it stops with a message.
 - `/devflow:address-reviews [#pr ...]`: fixes, answers or declines each unresolved review thread, pushes new commits, replies, and asks for one more automated review (limited by `nextTask.maxReviewRounds`).
 
