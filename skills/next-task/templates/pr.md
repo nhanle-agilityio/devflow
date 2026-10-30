@@ -13,7 +13,7 @@ Title: <type>(<scope>): <summary>. Never write the at-sign handle of the review 
 
 ## Tests
 
-<!-- Test name: what it proves. State which tests were committed first and failed for the right reason. -->
+<!-- Test name: what it proves. State which tests were committed first and failed for the right reason. When the issue has a Test cases table, start each line with the row id it covers (e.g. "T1.2 test_name: ..."), and list any "must" row without a test. -->
 
 - 
 
