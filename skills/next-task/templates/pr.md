@@ -17,7 +17,7 @@ Title: <type>(<scope>): <summary>. Never write the at-sign handle of the review 
 
 Risk: 
 
-<!-- Only when the PR is stacked on another open PR: "Stacked on #<pr> (<branch>); it retargets to <base> when that PR merges." Otherwise delete this comment. -->
+<!-- Only when the PR is stacked on other open PRs, one line listing every parent. One parent: "Stacked on #<pr> (<branch>); it retargets to <base> when that PR merges." Several parents: "Stacked on #<pr> (<branch>) and #<pr> (<branch>); merged into this branch at <short sha>. The merge gate waits until every dependency is closed." Otherwise delete this comment. -->
 
 ## Tests
 

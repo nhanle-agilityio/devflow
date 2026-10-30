@@ -81,19 +81,22 @@ const SELECT_SCHEMA = {
           labels: { type: 'array', items: { type: 'string' } },
           body: { type: 'string' },
           dependsOn: { type: 'array', items: { type: 'integer' } },
-          stackOn: {
-            type: ['object', 'null'],
-            description: 'The one open dependency (with an open PR) this issue is stacked on, or null',
-            properties: {
-              issue: { type: 'integer' },
-              prNumber: { type: 'integer' },
-              branch: { type: 'string', description: 'Head branch of that PR' },
-              inRun: { type: 'boolean', description: 'True when the dependency is selected in this run and has no PR yet' },
+          parents: {
+            type: 'array',
+            description: 'Every open dependency this issue is stacked on (empty when all dependencies are closed)',
+            items: {
+              type: 'object',
+              properties: {
+                issue: { type: 'integer' },
+                prNumber: { type: 'integer', description: 'Open PR of that dependency, 0 when inRun' },
+                branch: { type: 'string', description: 'Head branch of that PR, empty when inRun' },
+                inRun: { type: 'boolean', description: 'True when the dependency is selected in this run and has no PR yet' },
+              },
+              required: ['issue', 'prNumber', 'branch', 'inRun'],
             },
-            required: ['issue', 'prNumber', 'branch', 'inRun'],
           },
         },
-        required: ['number', 'title', 'labels', 'body', 'dependsOn', 'stackOn'],
+        required: ['number', 'title', 'labels', 'body', 'dependsOn', 'parents'],
       },
     },
     skipped: {
@@ -125,8 +128,20 @@ const IMPLEMENT_SCHEMA = {
     outOfScope: { type: 'array', items: { type: 'string' } },
     touchesUi: { type: 'boolean', description: 'True when the diff against the base branch changes user-facing UI' },
     blockedReason: { type: 'string' },
+    specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
   },
-  required: ['status', 'summary', 'commits', 'filesChanged', 'assumptions', 'outOfScope', 'touchesUi'],
+  required: ['status', 'summary', 'commits', 'filesChanged', 'assumptions', 'outOfScope', 'touchesUi', 'specRead'],
+}
+
+const INTEGRATE_SCHEMA = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    integrationSha: { type: 'string', description: 'git rev-parse HEAD after all parent branches are merged' },
+    merged: { type: 'array', items: { type: 'string' }, description: 'The remote/branch names merged, in order' },
+    problem: { type: 'string' },
+  },
+  required: ['ok', 'integrationSha', 'merged'],
 }
 
 const CHECK_SCHEMA = {
@@ -212,13 +227,44 @@ const RESTORE_SCHEMA = {
 // Prompt builders. One small function per stage.
 // ---------------------------------------------------------------------------------------------
 
-// Where the issue's branch starts and where its PR goes: the base branch, or the parent PR's branch when stacked.
-function parentRefFor(issue) {
-  return issue.stackOn ? `${remote}/${issue.stackOn.branch}` : baseRef
+// Integration commit per issue number (multi-stack only), set by the Integrate stage.
+const integration = {}
+
+function parentsOf(issue) {
+  return Array.isArray(issue.parents) ? issue.parents : []
 }
 
+// Where the issue's own changes start: the base branch; the parent PR's branch when stacked on exactly one;
+// the integration commit (all parents merged) when stacked on several. Before Integrate ran, a multi-stack starts at the base.
+function parentRefFor(issue) {
+  const parents = parentsOf(issue)
+  if (parents.length === 1) return `${remote}/${parents[0].branch}`
+  if (parents.length > 1 && integration[issue.number]) return integration[issue.number]
+  return baseRef
+}
+
+// A single parent: the PR targets that branch. Several parents (merged into the branch): the PR targets the base branch.
 function prBaseFor(issue) {
-  return issue.stackOn ? issue.stackOn.branch : base
+  const parents = parentsOf(issue)
+  return parents.length === 1 ? parents[0].branch : base
+}
+
+// "#40 (branch)", "#40 (a) and #41 (b)", "#40 (a), #41 (b) and #42 (c)".
+function parentList(issue) {
+  const items = parentsOf(issue).map((p) => `#${p.prNumber} (${p.branch})`)
+  return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+}
+
+// The spec path in the issue body: the first "<specDir>/<name>.md" (GitHub blob link or plain path), or ''.
+function specPathFor(issue) {
+  const dir = String(cfg.specDir || 'docs/specs').replace(/\/+$/, '')
+  const re = new RegExp(dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/[^\\s)#]*\\.md')
+  const m = re.exec(String((issue && issue.body) || ''))
+  return m ? m[0] : ''
+}
+
+function readSpec(impl, path) {
+  return String((impl && impl.specRead) || '').indexOf(path) !== -1
 }
 
 // True when the issue body has a Test cases table row whose Level cell is "http" or "e2e".
@@ -308,10 +354,12 @@ ${explicit}
 
 Rules:
 - Skip an issue that already has an open pull request referencing it (search open PRs for "#<number>", check "Closes"/"Fixes" lines and branch names).
-- The issue body may contain lines "Depends on #<n>". If every such issue is closed, the issue is eligible as normal: stackOn = null.
-- If EXACTLY ONE dependency is still open AND that dependency has an open pull request (find open PRs whose body contains "Closes #<dep>"), the issue is eligible as stacked: stackOn = {issue: <dep>, prNumber: <that PR's number>, branch: <that PR's head branch>, inRun: false}.
-- If EXACTLY ONE dependency is still open, has no open PR, and is itself in your selection (it will be worked on earlier in this run), the issue is still eligible: stackOn = {issue: <dep>, prNumber: 0, branch: "", inRun: true}. The workflow fills in the PR once the parent ships.
-- Any other case with an open dependency (two or more open, or one open that has no PR and is not in your selection) goes in "skipped" with the reason (name the open dependency).
+- The issue body may contain lines "Depends on #<n>". If every such issue is closed, the issue is eligible as normal: parents = [].
+- Every dependency that is still open becomes one entry in "parents". It must be one of:
+  - it has an open pull request (find open PRs whose body contains "Closes #<dep>"): {issue: <dep>, prNumber: <that PR's number>, branch: <that PR's head branch>, inRun: false};
+  - or it has no open PR but is itself in your selection (it will be worked on earlier in this run): {issue: <dep>, prNumber: 0, branch: "", inRun: true}. The workflow fills in the PR once the parent ships.
+- If any open dependency has neither an open PR nor a place in your selection, the issue goes in "skipped" with the reason (name that dependency).
+- Always return "parents" for every selected issue (an empty array when there is none).
 - Order: parents before children, then oldest first (lowest number).
 - Return at most ${limit * 3} eligible issues in "issues" (the workflow applies the limit of ${limit}, because a child whose parent does not ship is not worked on and does not count). Everything beyond that goes in "skipped" with reason "over limit".
 - For each selected issue return its full body verbatim, its label names, and the dependency numbers from its "Depends on" lines.
@@ -319,8 +367,10 @@ This is read-only: do not change anything on GitHub or in the checkout.`
 }
 
 function claimPrompt(issue) {
+  // A multi-stack starts at the base branch; the Integrate stage merges the parents afterwards.
+  const parents = parentsOf(issue)
   const parentRef = parentRefFor(issue)
-  const fetchBranch = issue.stackOn ? issue.stackOn.branch : base
+  const fetchBranch = parents.length === 1 ? parents[0].branch : base
   return `Claim GitHub issue #${issue.number} in ${gh.owner}/${gh.repo} and create its branch. ${MCP_NOTE}
 
 devflow config:
@@ -337,9 +387,44 @@ Issue title: ${issue.title}
 Issue labels: ${issue.labels.join(', ')}`
 }
 
+function integratePrompt(issue, branch) {
+  const parents = parentsOf(issue)
+  const list = parents.map((p, i) => `${i + 1}. ${remote}/${p.branch} (PR #${p.prNumber}, issue #${p.issue})`).join('\n')
+  const checks = cfg.checks.map((c, i) => `${i + 1}. [${c.name}] ${c.run}`).join('\n')
+  return `Integrate the branches of the open dependencies of issue #${issue.number} into branch ${branch} (already checked out, created from ${baseRef}). ${MCP_NOTE}
+
+devflow config:
+${cfgJson}
+
+${issueBlock(issue)}
+
+Parent branches, in order:
+${list}
+
+Steps:
+1. \`git fetch ${remote}\` (at least each parent branch above).
+2. For each parent in the order above run \`git merge --no-edit ${remote}/<branch>\`. Keep the default merge commit message. Never rebase, never force, never rewrite commits.
+3. If a merge conflicts, resolve it using the linked issues and the spec so that the behaviour of BOTH parents survives; stage files by name and complete the merge with the default message. Do not change anything that is not needed to resolve the conflict.
+4. After all merges, run every configured check; fix only what the integration itself broke:
+${checks}
+5. Return integrationSha = the output of \`git rev-parse HEAD\` after all merges, and merged = the ${remote}/<branch> names merged, in order.
+If you cannot resolve a conflict or the checks cannot be made to pass without a decision, run \`git merge --abort\` if a merge is in progress, leave nothing half-done, and return ok=false with the conflicting files and the question in problem. Do not push and do not touch GitHub labels.`
+}
+
 function implementPrompt(issue, branch) {
+  const parents = parentsOf(issue)
   const parentRef = parentRefFor(issue)
-  return `Implement GitHub issue #${issue.number} on branch ${branch} (already checked out, created from ${parentRef}${issue.stackOn ? `, the branch of PR #${issue.stackOn.prNumber} this issue is stacked on` : ''}). ${MCP_NOTE}
+  const origin =
+    parents.length === 1
+      ? `created from ${parentRef}, the branch of PR #${parents[0].prNumber} this issue is stacked on`
+      : parents.length > 1
+        ? `created from ${baseRef} with the branches of ${parentList(issue)} merged in, integration commit ${parentRef}`
+        : `created from ${parentRef}`
+  const specPath = specPathFor(issue)
+  const step1 = specPath
+    ? `Before anything else run \`git show ${baseRef}:${specPath}\` and read the whole spec. Then read the issue's acceptance criteria. The spec and issue are the source of truth for expected behaviour, not the current code.`
+    : `The issue links no spec, so the issue text is the contract. Read its acceptance criteria. The issue is the source of truth for expected behaviour, not the current code.`
+  return `Implement GitHub issue #${issue.number} on branch ${branch} (already checked out, ${origin}). ${MCP_NOTE}
 
 devflow config:
 ${cfgJson}
@@ -347,7 +432,7 @@ ${cfgJson}
 ${issueBlock(issue)}
 
 Instructions:
-1. Read the issue's acceptance criteria and the spec it links (read the spec file from the repo or from ${baseRef}). The spec and issue are the source of truth for expected behaviour, not the current code.
+1. ${step1}
 2. Follow the project's CLAUDE.md for architecture, conventions and its "Never" list.
 3. For behaviour changes and bug fixes: first write and commit a failing test (\`test(${scopeFor(issue)}): ...\`), run it and confirm it fails for the right reason, then commit the implementation (\`feat|fix|chore|refactor(${scopeFor(issue)}): ...\`, pick the type that fits). For work without behaviour change (docs, config) one commit is fine. Use Conventional Commits in English.
    If the issue has a "Test cases" table (rows of the spec's test matrix), write a test for every row with priority "must" and make each traceable to its row id (in the test name, e.g. test_t1_2_..., or a short comment such as "# T1.2"). "should" rows are optional. If the issue has only a test plan, follow it.
@@ -356,7 +441,7 @@ Instructions:
 5. Stay inside the issue's scope. Anything else you notice goes into "outOfScope", unchanged in the code.
 6. If a requirement is ambiguous in a way that changes behaviour or a contract and the spec does not answer it, do NOT guess: return status "blocked" with blockedReason stating the question. For minor ambiguity, decide, and record the decision in "assumptions".
 7. Do not push, open a PR, or touch GitHub labels.
-Return: status, a short summary, the commits you made ("<sha> <message>"), files changed, assumptions, outOfScope, and touchesUi (true when the diff against ${parentRef} changes user-facing UI).`
+Return: status, a short summary, the commits you made ("<sha> <message>"), files changed, assumptions, outOfScope, touchesUi (true when the diff against ${parentRef} changes user-facing UI), and specRead (${specPath ? `the spec path ${specPath}, exactly as you read it` : '"none"'}).`
 }
 
 function checkPrompt() {
@@ -384,7 +469,7 @@ Instructions:
 - Stay inside the issue's scope. Record unrelated problems in "outOfScope" without changing them.
 - Commit with Conventional Commits in English, scope "${scopeFor(issue)}", staging files by name. Never rewrite existing commits. Do not push.
 - If you cannot fix it without a decision the spec does not make, return status "blocked" with blockedReason.
-Return the same structure as the implement stage; "commits" lists only the commits you made now.`
+Return the same structure as the implement stage; "commits" lists only the commits you made now. In "specRead" put the spec path if you read the spec (for example with \`git show ${baseRef}:<path>\`), otherwise "none".`
 }
 
 function verifyPrompt(issue, branch, impl) {
@@ -417,6 +502,17 @@ If you cannot run verification at all (server never started, tool unavailable), 
 
 function reviewPrompt(issue, branch, state, round) {
   const parentRef = parentRefFor(issue)
+  const parents = parentsOf(issue)
+  const specPath = specPathFor(issue)
+  const stackNote =
+    parents.length === 1
+      ? ` This PR is stacked on PR #${parents[0].prNumber}; the parent's changes are excluded from this diff, review only what is new.`
+      : parents.length > 1
+        ? ` The branches of ${parentList(issue)} were merged into this branch at ${parentRef}; their changes are excluded from this diff, review only what is new.`
+        : ''
+  const specNote = specPath
+    ? `Read the spec with \`git show ${baseRef}:${specPath}\` and the project's CLAUDE.md.`
+    : `The issue links no spec; read the project's CLAUDE.md.`
   return `Review the change for issue #${issue.number} on branch ${branch}. You are read-only: do not edit, commit, push, or change GitHub. Review round ${round + 1}.
 
 devflow config:
@@ -424,7 +520,7 @@ ${cfgJson}
 
 ${issueBlock(issue)}
 
-Run \`git diff ${parentRef}...HEAD\` and \`git log ${parentRef}..HEAD --oneline\`.${issue.stackOn ? ` This PR is stacked on PR #${issue.stackOn.prNumber}; the parent's changes are excluded from this diff, review only what is new.` : ''} Read the spec the issue links and the project's CLAUDE.md.
+Run \`git diff ${parentRef}...HEAD\` and \`git log ${parentRef}..HEAD --oneline\`.${stackNote} ${specNote}
 Review, in this order:
 1. Correctness against the issue's acceptance criteria and the spec (bugs, missed edge cases, wrong contracts).
 2. Tests: does each behaviour change have a test that would fail without it? Were tests weakened? If the issue has a "Test cases" table, every row with priority "must" needs a test traceable to its row id; a missing one is a warning that names the row. ${e2eRule(true)}
@@ -438,10 +534,17 @@ Assumptions recorded so far: ${JSON.stringify(state.assumptions)}`
 
 function shipPrompt(issue, branch, state, risk) {
   const prBase = prBaseFor(issue)
-  const stack = issue.stackOn
+  const parents = parentsOf(issue)
+  const stacked = parents.length > 0
+  const stackLine =
+    parents.length === 1
+      ? `Stacked on #${parents[0].prNumber} (${parents[0].branch}); it retargets to ${base} when that PR merges.`
+      : parents.length > 1
+        ? `Stacked on ${parentList(issue)}; merged into this branch at ${(integration[issue.number] || '').slice(0, 7)}. The merge gate waits until every dependency is closed.`
+        : ''
   const prRisk = risk.level === 'low' ? labels.riskLow : labels.riskHigh
   const riskLine = `Risk: ${risk.level === 'unknown' ? 'high (the issue has no risk label; treated as high)' : risk.level}${risk.escalation ? ' - escalated from the issue label: ' + risk.escalation : risk.reason ? ' - ' + risk.reason : ''}`
-  const prLabels = [labels.devflow, prRisk].concat(stack ? [labels.stacked] : [])
+  const prLabels = [labels.devflow, prRisk].concat(stacked ? [labels.stacked] : [])
   const template = args.prTemplatePath
     ? `Read the PR body template at ${args.prTemplatePath} and fill every section from the data below (keep its headings).`
     : 'Write the PR body with sections: What, How, Tests, Checks, Verification, Review notes, Assumptions, Out of scope.'
@@ -464,10 +567,10 @@ Data:
 - Assumptions: ${JSON.stringify(state.assumptions)}
 - Out of scope: ${JSON.stringify(state.outOfScope)}
 - ${riskLine}
-${stack ? `- Stacked on PR #${stack.prNumber} (branch ${stack.branch}).\n` : ''}
+${stacked ? `- Stacked on ${parentList(issue)}.\n` : ''}
 Steps:
 1. \`git push -u ${remote} ${branch}\`. Never push to ${base} or any protected branch; never force-push.
-2. Open a PR with head ${branch} and base ${prBase} in ${gh.owner}/${gh.repo}. Title: Conventional Commits style summary with scope "${scopeFor(issue)}", English, under 72 characters. Body as described, with a "Risk" section holding exactly this line: "${riskLine}"${stack ? `, and the line "Stacked on #${stack.prNumber} (${stack.branch}); it retargets to ${base} when that PR merges."` : ''}, ending with the line "Closes #${issue.number}". The body must not contain any at-sign mention of a bot or user, and no AI attribution.
+2. Open a PR with head ${branch} and base ${prBase} in ${gh.owner}/${gh.repo}. Title: Conventional Commits style summary with scope "${scopeFor(issue)}", English, under 72 characters. Body as described, with a "Risk" section holding exactly this line: "${riskLine}"${stacked ? `, and the line "${stackLine}"` : ''}, ending with the line "Closes #${issue.number}". The body must not contain any at-sign mention of a bot or user, and no AI attribution.
 3. Label the new PR (a PR is an issue: use issue_write with the PR number; read its labels first, keep existing ones): ${prLabels.map((l) => '"' + l + '"').join(', ')}.
 4. On issue #${issue.number} add the label "${labels.review}" and remove "${labels.inProgress}" (keep other labels).${risk.escalation ? ` Also add "${labels.riskHigh}" to the issue and remove "${labels.riskLow}" (the change was escalated to high).` : ''}
 5. \`git switch ${startBranch}\`.
@@ -534,7 +637,7 @@ async function runFix(issue, branch, state, why, details) {
   if (!fix) return { ok: false, reason: `The fix agent died (${why}).` }
   if (fix.status === 'blocked') return { ok: false, reason: fix.blockedReason || `The fix agent reported blocked (${why}).` }
   merge(state, fix)
-  return { ok: true }
+  return { ok: true, result: fix }
 }
 
 // The implement summary stays the PR's "what"; fix summaries are kept separately.
@@ -590,6 +693,21 @@ async function runIssue(issue) {
   }
   branch = claim.branch
 
+  // Integrate: several open parents are merged into the branch before any work starts.
+  if (parentsOf(issue).length > 1) {
+    const integ = await agent(integratePrompt(issue, branch), {
+      label: `integrate #${issue.number}`,
+      phase: 'Implement',
+      schema: INTEGRATE_SCHEMA,
+      model: 'sonnet',
+    })
+    if (!integ || !integ.ok || !integ.integrationSha) {
+      return block('Integrate', (integ && integ.problem) || 'The integrate agent failed or did not report an integration commit.')
+    }
+    integration[issue.number] = integ.integrationSha
+    log(`#${issue.number}: merged ${integ.merged.join(', ')} at ${integ.integrationSha.slice(0, 7)}.`)
+  }
+
   // Implement
   const impl = await agent(implementPrompt(issue, branch), {
     label: `implement #${issue.number}`,
@@ -600,6 +718,21 @@ async function runIssue(issue) {
   if (!impl) return block('Implement', 'The implement agent died.')
   merge(state, impl)
   if (impl.status === 'blocked') return block('Implement', impl.blockedReason || 'The implement agent reported blocked without a reason.')
+
+  // The spec must have been read: one corrective fix, then block.
+  const specPath = specPathFor(issue)
+  if (specPath && !readSpec(impl, specPath)) {
+    log(`#${issue.number}: Implement did not report reading ${specPath}; running one corrective fix.`)
+    const fix = await runFix(
+      issue,
+      branch,
+      state,
+      'the implementation was written without reading the spec',
+      `Read ${specPath} with \`git show ${baseRef}:${specPath}\`, compare every requirement with the change on this branch, and fix any difference. Return specRead = ${specPath}.`,
+    )
+    if (!fix.ok) return block('Implement', fix.reason)
+    if (!readSpec(fix.result, specPath)) return block('Implement', `Implement did not read the spec ${specPath}`)
+  }
 
   // Check
   const checked = await checkLoop(issue, branch, state)
@@ -670,7 +803,7 @@ async function runIssue(issue) {
     risk.escalation = escalation
     log(`#${issue.number}: risk escalated to high: ${escalation}`)
   }
-  if (issue.stackOn) log(`#${issue.number}: stacked on PR #${issue.stackOn.prNumber} (${issue.stackOn.branch}); PR base is ${prBaseFor(issue)}.`)
+  if (parentsOf(issue).length) log(`#${issue.number}: stacked on ${parentList(issue)}; PR base is ${prBaseFor(issue)}.`)
 
   // Ship
   phase('Ship')
@@ -687,7 +820,7 @@ async function runIssue(issue) {
     url: ship.url,
     prNumber: ship.prNumber,
     risk: risk.level === 'unknown' ? 'high' : risk.level,
-    stackedOn: issue.stackOn ? issue.stackOn.prNumber : null,
+    stackedOn: parentsOf(issue).map((p) => p.prNumber),
     branch,
   }
 }
@@ -725,17 +858,29 @@ for (const issue of queue) {
     report.push({ issue: issue.number, status: 'skipped', reason: `over limit (${limit})` })
     continue
   }
-  if (issue.stackOn && issue.stackOn.inRun) {
-    const parent = shipped[issue.stackOn.issue]
-    if (!parent) {
-      const why = `parent #${issue.stackOn.issue} did not ship (${status[issue.stackOn.issue] || 'not worked on'})`
-      log(`Skipped #${issue.number}: ${why}`)
-      report.push({ issue: issue.number, status: 'skipped', reason: why })
+  // Resolve parents selected in this run from the PRs they shipped.
+  const resolved = []
+  let unshipped = null
+  for (const p of parentsOf(issue)) {
+    if (!p.inRun) {
+      resolved.push(p)
       continue
     }
-    issue.stackOn = { issue: issue.stackOn.issue, prNumber: parent.prNumber, branch: parent.branch, inRun: false }
-    log(`#${issue.number}: parent #${issue.stackOn.issue} shipped as PR #${parent.prNumber}; stacking on ${parent.branch}.`)
+    const parent = shipped[p.issue]
+    if (!parent) {
+      unshipped = p
+      break
+    }
+    resolved.push({ issue: p.issue, prNumber: parent.prNumber, branch: parent.branch, inRun: false })
+    log(`#${issue.number}: parent #${p.issue} shipped as PR #${parent.prNumber} (${parent.branch}).`)
   }
+  if (unshipped) {
+    const why = `parent #${unshipped.issue} did not ship (${status[unshipped.issue] || 'not worked on'})`
+    log(`Skipped #${issue.number}: ${why}`)
+    report.push({ issue: issue.number, status: 'skipped', reason: why })
+    continue
+  }
+  issue.parents = resolved
   worked++
   let result
   try {
@@ -751,5 +896,5 @@ for (const issue of queue) {
 }
 
 phase('Report')
-log(report.map((r) => `#${r.issue}: ${r.status}${r.url ? ' ' + r.url : ''}${r.risk ? ' risk:' + r.risk : ''}${r.stackedOn ? ' stacked on #' + r.stackedOn : ''}${r.reason ? ' (' + r.reason + ')' : ''}`).join('\n'))
+log(report.map((r) => `#${r.issue}: ${r.status}${r.url ? ' ' + r.url : ''}${r.risk ? ' risk:' + r.risk : ''}${r.stackedOn && r.stackedOn.length ? ' stacked on ' + r.stackedOn.map((n) => '#' + n).join(', ') : ''}${r.reason ? ' (' + r.reason + ')' : ''}`).join('\n'))
 return report
