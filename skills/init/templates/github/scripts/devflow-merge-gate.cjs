@@ -168,6 +168,27 @@ async function evaluate(ctx, config, listed, state) {
   }
   if (state.merged) return { action: 'deferred', reason: 'deferred: one merge per run' };
 
+  // A PR merges only when every issue its linked issues depend on is closed.
+  state.issues = state.issues || new Map();
+  const readIssue = async (number) => {
+    if (!state.issues.has(number)) {
+      const { data } = await github.rest.issues.get({ owner, repo, issue_number: number });
+      state.issues.set(number, data);
+    }
+    return state.issues.get(number);
+  };
+  for (const n of linkedIssues(listed.body)) {
+    const re = /depends on #(\d+)/gi;
+    const body = (await readIssue(n)).body || '';
+    let m;
+    while ((m = re.exec(body))) {
+      const dep = Number(m[1]);
+      if ((await readIssue(dep)).state === 'open') {
+        return { action: 'skipped', reason: `waits for dependency #${dep} (open)` };
+      }
+    }
+  }
+
   const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: listed.number });
   if (pr.mergeable === null || pr.mergeable === undefined) {
     return { action: 'skipped', reason: 'mergeability not computed yet' };
