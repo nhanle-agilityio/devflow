@@ -6,6 +6,7 @@
   "additionalProperties": false,
   "properties": {
     "$schema": { "type": "string" },
+    "devflowVersion": { "type": "string", "description": "The plugin version the installed templates came from. Written by /devflow:init, updated by /devflow:init --upgrade." },
     "github": {
       "type": "object",
       "required": ["owner", "repo"],
@@ -132,7 +133,8 @@
             "readyTimeoutSec": { "type": "integer", "minimum": 1, "default": 60 }
           }
         },
-        "browserTool": { "enum": ["playwright", "chrome"], "default": "playwright" }
+        "browserTool": { "enum": ["playwright", "chrome"], "default": "playwright" },
+        "lock": { "type": "boolean", "default": true, "description": "Only one session at a time runs Verify on this machine (a lock under the git common dir), so parallel lanes do not fight over the dev server port." }
       }
     },
     "spec": {
@@ -185,7 +187,44 @@
           "type": "string",
           "minLength": 1,
           "description": "Passed as --plugin-dir to background sessions when the plugin is loaded from a local directory. Omit when it is installed from a marketplace."
+        },
+        "ignoreHotspots": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["README.md", "CHANGELOG.md"],
+          "description": "Hotspots matching these exact paths (or globs with * and **) do not join lanes: conflicts there are small and resolved by the merge gate's branch update or /devflow:sync."
         }
+      }
+    },
+    "notify": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Push notifications (Claude Code PushNotification tool) from runs.",
+      "properties": {
+        "push": { "type": "boolean", "default": true, "description": "Send a push notification when a run ends with a blocked issue, a risk:high PR waiting for a human, or at the end of a lane." },
+        "onDone": { "type": "boolean", "default": true, "description": "Notify at the end of a lane or run." },
+        "onBlocked": { "type": "boolean", "default": true, "description": "Notify when an issue is blocked." },
+        "onHighRisk": { "type": "boolean", "default": true, "description": "Notify when a risk:high PR waits for a human." }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read by /devflow:release.",
+      "properties": {
+        "tagPrefix": { "type": "string", "default": "v", "description": "Release tag = tagPrefix + version." },
+        "draft": { "type": "boolean", "default": true, "description": "Create the GitHub release as a draft; a human publishes it." },
+        "deploy": { "type": "string", "default": "", "description": "Optional shell command run after the release, only after the user says yes. Empty: none." },
+        "notesFrom": { "enum": ["prs"], "default": "prs", "description": "Where the release notes come from: the merged PRs since the last tag." }
+      }
+    },
+    "accept": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read by /devflow:accept.",
+      "properties": {
+        "model": { "enum": ["sonnet", "opus"], "default": "sonnet", "description": "Model for the acceptance check." },
+        "labels": { "type": "array", "items": { "type": "string" }, "default": ["type:gap"], "description": "Extra labels on the gap issues it files." }
       }
     }
   }
