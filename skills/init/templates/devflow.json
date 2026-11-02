@@ -56,5 +56,10 @@
   },
   // QA step of /devflow:spec: draft a test matrix from the acceptance criteria. qaModel is "opus" or "sonnet".
   "spec": { "testMatrix": true, "qaModel": "opus" },
-  "nextTask": { "defaultLimit": 3, "maxFixRounds": 2, "maxReviewRounds": 2 }
+  "nextTask": { "defaultLimit": 3, "maxFixRounds": 2, "maxReviewRounds": 2 },
+  // Parallel sessions: each ticket runs in its own git worktree under dir. setup commands run once in a fresh worktree.
+  "worktree": { "dir": ".claude/worktrees", "setup": ["npm ci"] },
+  // /devflow:dispatch: at most maxLanes background sessions at once. pluginDir (optional) is passed as --plugin-dir
+  // to those sessions when the plugin is loaded from a local directory.
+  "dispatch": { "maxLanes": 3 }
 }

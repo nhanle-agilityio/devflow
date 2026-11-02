@@ -1,10 +1,10 @@
 export const meta = {
   name: 'next-task-engine',
   description: 'Pick up ready GitHub issues one at a time: implement test-first, run checks, verify, review, and open a PR for each.',
-  whenToUse: 'Internal engine of /devflow:next-task; do not run it directly. Started by /devflow:next-task after preflight. Needs args: config (parsed .claude/devflow.json), limit, issues, startBranch, prTemplatePath.',
+  whenToUse: 'Internal engine of /devflow:next-task; do not run it directly. Started by /devflow:next-task after preflight. Needs args: config (parsed .claude/devflow.json), limit, issues, startBranch, prTemplatePath, isolated, chain, claimId.',
   phases: [
     { title: 'Select', detail: 'list ready issues, dependencies first' },
-    { title: 'Implement', detail: 'claim, branch, test first, then the change' },
+    { title: 'Implement', detail: 'claim, branch, plan on the issue, test first, then the change' },
     { title: 'Check', detail: 'run the configured checks, fix failures' },
     { title: 'Verify', detail: 'walk acceptance criteria against the dev server' },
     { title: 'Review', detail: 'read-only review of the diff, fix findings' },
@@ -19,7 +19,8 @@ export const meta = {
 
 // Run through /devflow:next-task only: it does the preflight and builds args. Calling this workflow
 // directly (e.g. /devflow:next-task-engine) arrives without args, so stop with a clear message.
-const missing = ['config', 'startBranch'].filter((k) => !args || !args[k])
+const missing = ['config'].filter((k) => !args || !args[k])
+if (args && typeof args.startBranch !== 'string') missing.push('startBranch')
 if (!missing.length && (!args.config.github || !args.config.baseBranch || !Array.isArray(args.config.checks))) {
   missing.push('config.github / config.baseBranch / config.checks')
 }
@@ -54,6 +55,9 @@ const nt = Object.assign({ defaultLimit: 3, maxFixRounds: 2, maxReviewRounds: 2 
 const verifyCfg = Object.assign({ modes: [], browserTool: 'playwright' }, cfg.verify)
 const branchPattern = cfg.branchPattern || '{type}/{issue}-{slug}'
 const startBranch = args.startBranch
+const isolated = args.isolated === true // own worktree: there is no start branch to return to
+const chain = args.chain === true // explicit issues are a lane: in order, each stacked on the previous one
+const claimId = String(args.claimId || 'run')
 const limit = args.limit || nt.defaultLimit
 const explicitIssues = Array.isArray(args.issues) ? args.issues : []
 const cfgJson = JSON.stringify(cfg, null, 2)
@@ -113,8 +117,43 @@ const SELECT_SCHEMA = {
 
 const CLAIM_SCHEMA = {
   type: 'object',
+  properties: {
+    taken: { type: 'boolean', description: 'True when the issue already has an assignee or the in-progress / blocked label' },
+    takenBy: { type: 'string' },
+    claims: {
+      type: 'array',
+      description: 'Every devflow-claim comment on the issue after ours was posted',
+      items: {
+        type: 'object',
+        properties: { commentId: { type: 'integer' }, claimId: { type: 'string' }, createdAt: { type: 'string' } },
+        required: ['commentId', 'claimId', 'createdAt'],
+      },
+    },
+  },
+  required: ['taken', 'claims'],
+}
+
+const BRANCH_SCHEMA = {
+  type: 'object',
   properties: { ok: { type: 'boolean' }, branch: { type: 'string' }, problem: { type: 'string' } },
   required: ['ok', 'branch'],
+}
+
+const RELEASE_SCHEMA = {
+  type: 'object',
+  properties: { ok: { type: 'boolean' }, note: { type: 'string' } },
+  required: ['ok'],
+}
+
+const PLAN_SCHEMA = {
+  type: 'object',
+  properties: {
+    status: { enum: ['ready', 'blocked'] },
+    plan: { type: 'string', description: 'The plan in markdown, as posted on the issue' },
+    questions: { type: 'array', items: { type: 'string' }, description: 'Open questions the spec and issue do not answer' },
+    specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
+  },
+  required: ['status', 'plan', 'questions', 'specRead'],
 }
 
 const IMPLEMENT_SCHEMA = {
@@ -263,6 +302,15 @@ function specPathFor(issue) {
   return m ? m[0] : ''
 }
 
+// The claim that wins the race: the earliest createdAt (ISO strings sort), ties by the smallest comment id. null when empty.
+function pickClaimWinner(claims) {
+  let winner = null
+  for (const c of Array.isArray(claims) ? claims : []) {
+    if (!winner || c.createdAt < winner.createdAt || (c.createdAt === winner.createdAt && c.commentId < winner.commentId)) winner = c
+  }
+  return winner
+}
+
 function readSpec(impl, path) {
   return String((impl && impl.specRead) || '').indexOf(path) !== -1
 }
@@ -343,7 +391,7 @@ function issueBlock(issue) {
 
 function selectPrompt() {
   const explicit = explicitIssues.length
-    ? `Explicit issues requested by the user: ${explicitIssues.map((n) => '#' + n).join(', ')}. Use exactly these (still skip, with a reason, any that is closed or already has an open PR referencing it). Do not apply the label filter to them.`
+    ? `Explicit issues requested by the user: ${explicitIssues.map((n) => '#' + n).join(', ')}. Use exactly these (still skip, with a reason, any that is closed or already has an open PR referencing it). Do not apply the label filter to them.${chain ? ` These issues are a lane to run in exactly this order: return them in the order given and do not reorder them. Do not skip an issue only because an earlier issue of the same list is still open without a PR: treat it as a dependency that is in the selection (parents entry with inRun true, as below).` : ''}`
     : `No explicit issues. Select open issues labelled "${labels.ready}" that are NOT labelled "${labels.inProgress}" or "${labels.blocked}".`
   return `You are selecting GitHub issues for ${gh.owner}/${gh.repo}. ${MCP_NOTE}
 
@@ -360,31 +408,72 @@ Rules:
   - or it has no open PR but is itself in your selection (it will be worked on earlier in this run): {issue: <dep>, prNumber: 0, branch: "", inRun: true}. The workflow fills in the PR once the parent ships.
 - If any open dependency has neither an open PR nor a place in your selection, the issue goes in "skipped" with the reason (name that dependency).
 - Always return "parents" for every selected issue (an empty array when there is none).
-- Order: parents before children, then oldest first (lowest number).
+- Order: ${chain && explicitIssues.length ? 'the order of the explicit issues' : 'parents before children, then oldest first (lowest number)'}.
 - Return at most ${limit * 3} eligible issues in "issues" (the workflow applies the limit of ${limit}, because a child whose parent does not ship is not worked on and does not count). Everything beyond that goes in "skipped" with reason "over limit".
 - For each selected issue return its full body verbatim, its label names, and the dependency numbers from its "Depends on" lines.
 This is read-only: do not change anything on GitHub or in the checkout.`
 }
 
 function claimPrompt(issue) {
-  // A multi-stack starts at the base branch; the Integrate stage merges the parents afterwards.
-  const parents = parentsOf(issue)
-  const parentRef = parentRefFor(issue)
-  const fetchBranch = parents.length === 1 ? parents[0].branch : base
-  return `Claim GitHub issue #${issue.number} in ${gh.owner}/${gh.repo} and create its branch. ${MCP_NOTE}
+  return `Claim GitHub issue #${issue.number} in ${gh.owner}/${gh.repo}. ${MCP_NOTE}
 
 devflow config:
 ${cfgJson}
 
 Steps, in order:
-1. Add the label "${labels.inProgress}" to issue #${issue.number} and remove "${labels.ready}" (keep all other labels).
-2. Work out the branch name from branchPattern "${branchPattern}": {issue} = ${issue.number}; {type} = the value of the issue's "type:<type>" label if present, otherwise infer one of feat|fix|chore|docs|refactor|test from the title; {slug} = at most 5 words of the title, kebab-case, ASCII only, without the "[<slug>] T<n>:" prefix.
-3. Run \`git status --porcelain\`; it must be empty. If not, return ok=false with the problem.
-4. Run \`git fetch ${remote} ${fetchBranch}\` then \`git switch -c <branch> ${parentRef}\`. If the branch name already exists, return ok=false with the problem (do not reuse or delete it).
-Return the branch name you created.
+1. Read issue #${issue.number}. If it already has an assignee, or the label "${labels.inProgress}" or "${labels.blocked}", return taken=true, takenBy = the assignee login or the label name, claims = []. Change and post nothing.
+2. Otherwise add the authenticated user as assignee, add the label "${labels.inProgress}" and remove "${labels.ready}" (keep all other labels).
+3. Post a comment on the issue whose body is exactly these two lines:
+<!-- devflow-claim id=${claimId} -->
+Claimed by devflow (${claimId}).
+4. Read ALL comments of the issue again. Return in "claims" every comment whose body contains "<!-- devflow-claim id=": its comment id, the claim id parsed from that marker, and its created_at timestamp. Return taken=false.`
+}
+
+function releasePrompt(issue) {
+  return `Release a lost claim on GitHub issue #${issue.number} in ${gh.owner}/${gh.repo}. ${MCP_NOTE}
+
+Another devflow run claimed the issue first. Delete only the comment(s) on the issue whose body contains "<!-- devflow-claim id=${claimId} -->". Do not touch any other comment, the labels or the assignee: they belong to the winner. Return ok=true when none of your claim comments remain.`
+}
+
+function branchPrompt(issue) {
+  // A multi-stack starts at the base branch; the Integrate stage merges the parents afterwards.
+  const parents = parentsOf(issue)
+  const parentRef = parentRefFor(issue)
+  const fetchBranch = parents.length === 1 ? parents[0].branch : base
+  return `Create the branch for GitHub issue #${issue.number} in ${gh.owner}/${gh.repo}. ${MCP_NOTE}
+
+devflow config:
+${cfgJson}
+
+Steps, in order:
+1. Work out the branch name from branchPattern "${branchPattern}": {issue} = ${issue.number}; {type} = the value of the issue's "type:<type>" label if present, otherwise infer one of feat|fix|chore|docs|refactor|test from the title; {slug} = at most 5 words of the title, kebab-case, ASCII only, without the "[<slug>] T<n>:" prefix.
+2. Run \`git status --porcelain\`; it must be empty. If not, return ok=false with the problem.
+3. Run \`git fetch ${remote} ${fetchBranch}\` then \`git switch -c <branch> ${parentRef}\` (this also works from a detached HEAD). If the branch name already exists, return ok=false with the problem (do not reuse or delete it).
+Return the branch name you created. Do not touch GitHub.
 
 Issue title: ${issue.title}
 Issue labels: ${issue.labels.join(', ')}`
+}
+
+function planPrompt(issue, branch) {
+  const specPath = specPathFor(issue)
+  const step1 = specPath
+    ? `Before anything else run \`git show ${baseRef}:${specPath}\` and read the whole spec. Then read the issue's acceptance criteria. The spec and issue are the source of truth for expected behaviour, not the current code.`
+    : `The issue links no spec, so the issue text is the contract. Read its acceptance criteria.`
+  return `Plan the work for GitHub issue #${issue.number} on branch ${branch} (already checked out). You only plan: do not edit code, do not commit, do not push. ${MCP_NOTE}
+
+devflow config:
+${cfgJson}
+
+${issueBlock(issue)}
+
+Instructions:
+1. ${step1}
+2. Read the project's CLAUDE.md and the code the change touches.
+3. Write the plan in markdown with sections: Files to change; Tests (one entry per "Test cases" row id, or per test-plan item; ${e2eRule(false)}); Risks; Order of commits (failing test first, then the implementation); Open questions (only if there are any).
+4. Post the plan on issue #${issue.number} as a comment whose first line is \`<!-- devflow-plan -->\`. If the issue already has a comment starting with that marker, edit it instead of adding another.
+5. If something the spec and the issue do not answer would change behaviour or a contract, return status "blocked" with those questions (still post the plan, with an "Open questions" section). Otherwise return status "ready" and questions = [].
+Return status, the plan text exactly as posted, questions, and specRead (${specPath ? `the spec path ${specPath}, exactly as you read it` : '"none"'}).`
 }
 
 function integratePrompt(issue, branch) {
@@ -411,7 +500,7 @@ ${checks}
 If you cannot resolve a conflict or the checks cannot be made to pass without a decision, run \`git merge --abort\` if a merge is in progress, leave nothing half-done, and return ok=false with the conflicting files and the question in problem. Do not push and do not touch GitHub labels.`
 }
 
-function implementPrompt(issue, branch) {
+function implementPrompt(issue, branch, planText) {
   const parents = parentsOf(issue)
   const parentRef = parentRefFor(issue)
   const origin =
@@ -430,6 +519,9 @@ devflow config:
 ${cfgJson}
 
 ${issueBlock(issue)}
+
+Plan (already posted on the issue). Follow this plan; if you must deviate, say why in "assumptions":
+${planText}
 
 Instructions:
 1. ${step1}
@@ -573,7 +665,7 @@ Steps:
 2. Open a PR with head ${branch} and base ${prBase} in ${gh.owner}/${gh.repo}. Title: Conventional Commits style summary with scope "${scopeFor(issue)}", English, under 72 characters. Body as described, with a "Risk" section holding exactly this line: "${riskLine}"${stacked ? `, and the line "${stackLine}"` : ''}, ending with the line "Closes #${issue.number}". The body must not contain any at-sign mention of a bot or user, and no AI attribution.
 3. Label the new PR (a PR is an issue: use issue_write with the PR number; read its labels first, keep existing ones): ${prLabels.map((l) => '"' + l + '"').join(', ')}.
 4. On issue #${issue.number} add the label "${labels.review}" and remove "${labels.inProgress}" (keep other labels).${risk.escalation ? ` Also add "${labels.riskHigh}" to the issue and remove "${labels.riskLow}" (the change was escalated to high).` : ''}
-5. \`git switch ${startBranch}\`.
+5. ${isolated ? 'Stay on the branch (this checkout is a dedicated worktree; do not switch branches).' : `\`git switch ${startBranch}\`.`}
 Return the PR number and URL. If any step fails, return ok=false with the problem.`
 }
 
@@ -591,7 +683,7 @@ Steps, in order:
 2. ${branch ? `If \`git log ${parentRefFor(issue)}..${branch} --oneline\` shows commits, push the branch so work is not lost: \`git push -u ${remote} ${branch}\` (never force, never push to ${base}).` : 'No branch to push.'}
 3. Comment on issue #${issue.number}: the stage ("${stage}"), the reason, and the concrete question or decision a human must provide to unblock it${branch ? `, and the branch name ${branch}` : ''}. No at-sign mentions of bots.
 4. On the issue add the label "${labels.blocked}" and remove "${labels.inProgress}" (keep other labels).
-5. \`git switch ${startBranch}\` (if the working tree is dirty, use \`git stash push -u -m devflow-blocked-${issue.number}\` first and say so in note).
+5. ${isolated ? 'Stay on the branch; this checkout is a dedicated worktree, so do not switch branches or stash.' : `\`git switch ${startBranch}\` (if the working tree is dirty, use \`git stash push -u -m devflow-blocked-${issue.number}\` first and say so in note).`}
 Return whether the branch was pushed.`
 }
 
@@ -680,7 +772,7 @@ async function runIssue(issue) {
     return { issue: issue.number, status: 'blocked', reason: `${stage}: ${reason.split('\n')[0]}` }
   }
 
-  // Claim
+  // Claim: a lock on the issue, decided here from the claim comments the agent read back.
   phase('Implement')
   const claim = await agent(claimPrompt(issue), {
     label: `claim #${issue.number}`,
@@ -688,10 +780,39 @@ async function runIssue(issue) {
     schema: CLAIM_SCHEMA,
     model: 'haiku',
   })
-  if (!claim || !claim.ok || !claim.branch) {
-    return block('Claim', (claim && claim.problem) || 'The claim agent failed or could not create the branch.')
+  if (!claim) return block('Claim', 'The claim agent failed.')
+  if (claim.taken) {
+    const by = claim.takenBy || 'assignee or label'
+    log(`Skipped #${issue.number}: already claimed (${by}).`)
+    return { issue: issue.number, status: 'skipped', reason: `already claimed (${by})` }
   }
-  branch = claim.branch
+  const claims = Array.isArray(claim.claims) ? claim.claims : []
+  if (!claims.some((c) => c.claimId === claimId)) {
+    return block('Claim', `Our claim comment (${claimId}) was not found on the issue after posting it.`)
+  }
+  const winner = pickClaimWinner(claims)
+  if (winner.claimId !== claimId) {
+    await agent(releasePrompt(issue), {
+      label: `release #${issue.number}`,
+      phase: 'Implement',
+      schema: RELEASE_SCHEMA,
+      model: 'haiku',
+    })
+    log(`Skipped #${issue.number}: claimed by ${winner.claimId}.`)
+    return { issue: issue.number, status: 'skipped', reason: `claimed by ${winner.claimId}` }
+  }
+
+  // Branch
+  const made = await agent(branchPrompt(issue), {
+    label: `branch #${issue.number}`,
+    phase: 'Implement',
+    schema: BRANCH_SCHEMA,
+    model: 'haiku',
+  })
+  if (!made || !made.ok || !made.branch) {
+    return block('Branch', (made && made.problem) || 'The branch agent failed or could not create the branch.')
+  }
+  branch = made.branch
 
   // Integrate: several open parents are merged into the branch before any work starts.
   if (parentsOf(issue).length > 1) {
@@ -708,8 +829,22 @@ async function runIssue(issue) {
     log(`#${issue.number}: merged ${integ.merged.join(', ')} at ${integ.integrationSha.slice(0, 7)}.`)
   }
 
+  // Plan: posted on the issue; nobody approves it. Open questions block the issue before any code is written.
+  const specPathForPlan = specPathFor(issue)
+  const plan = await agent(planPrompt(issue, branch), {
+    label: `plan #${issue.number}`,
+    phase: 'Implement',
+    schema: PLAN_SCHEMA,
+    model: 'sonnet',
+  })
+  if (!plan) return block('Plan', 'The plan agent died.')
+  if (plan.status === 'blocked') {
+    return block('Plan', (plan.questions || []).join('; ') || 'The plan agent reported blocked without questions.')
+  }
+  if (specPathForPlan && !readSpec(plan, specPathForPlan)) return block('Plan', `Plan did not read the spec ${specPathForPlan}`)
+
   // Implement
-  const impl = await agent(implementPrompt(issue, branch), {
+  const impl = await agent(implementPrompt(issue, branch, plan.plan), {
     label: `implement #${issue.number}`,
     phase: 'Implement',
     schema: IMPLEMENT_SCHEMA,
@@ -845,17 +980,27 @@ for (const s of selected.skipped) {
   report.push({ issue: s.number, status: 'skipped', reason: s.reason })
 }
 const queue = selected.issues
-log(queue.length ? `Candidates: ${queue.map((i) => '#' + i.number).join(', ')}; working on at most ${limit}, sequentially.` : 'No eligible issues.')
+log(queue.length ? `Candidates: ${queue.map((i) => '#' + i.number).join(', ')}; working on at most ${limit}, sequentially${chain ? ' as a lane (each stacked on the previous one)' : ''}.` : 'No eligible issues.')
 
 // Parents that shipped in this run: issue number -> {prNumber, branch}. Children stack on them.
 const shipped = {}
 const status = {}
 let worked = 0
+let previous = null // chain: the last issue worked on, {number, status}
+let laneBroken = ''
 
 for (const issue of queue) {
   if (worked >= limit) {
     log(`Skipped #${issue.number}: over limit (${limit})`)
     report.push({ issue: issue.number, status: 'skipped', reason: `over limit (${limit})` })
+    continue
+  }
+  if (chain && !laneBroken && previous && previous.status !== 'pr') {
+    laneBroken = `previous issue in the lane (#${previous.number}) did not ship (${previous.status})`
+  }
+  if (laneBroken) {
+    log(`Skipped #${issue.number}: ${laneBroken}`)
+    report.push({ issue: issue.number, status: 'skipped', reason: laneBroken })
     continue
   }
   // Resolve parents selected in this run from the PRs they shipped.
@@ -874,6 +1019,12 @@ for (const issue of queue) {
     resolved.push({ issue: p.issue, prNumber: parent.prNumber, branch: parent.branch, inRun: false })
     log(`#${issue.number}: parent #${p.issue} shipped as PR #${parent.prNumber} (${parent.branch}).`)
   }
+  // Chain: stack on the previous issue of the lane, which shipped (checked above).
+  if (chain && previous && !resolved.some((p) => p.issue === previous.number)) {
+    const prev = shipped[previous.number]
+    resolved.push({ issue: previous.number, prNumber: prev.prNumber, branch: prev.branch, inRun: false })
+    log(`#${issue.number}: lane, stacked on #${previous.number} (PR #${prev.prNumber}).`)
+  }
   if (unshipped) {
     const why = `parent #${unshipped.issue} did not ship (${status[unshipped.issue] || 'not worked on'})`
     log(`Skipped #${issue.number}: ${why}`)
@@ -889,10 +1040,11 @@ for (const issue of queue) {
     result = { issue: issue.number, status: 'blocked', reason: `Workflow error: ${e && e.message ? e.message : e}` }
   }
   status[issue.number] = result.status
+  previous = { number: issue.number, status: result.status }
   if (result.status === 'pr') shipped[issue.number] = { prNumber: result.prNumber, branch: result.branch }
   report.push(result)
-  // Every issue starts from a clean checkout of the original branch.
-  await agent(restorePrompt(), { label: `restore ${startBranch}`, phase: 'Report', schema: RESTORE_SCHEMA, model: 'haiku' })
+  // Every issue starts from a clean checkout of the original branch (an isolated run has no start branch).
+  if (!isolated) await agent(restorePrompt(), { label: `restore ${startBranch}`, phase: 'Report', schema: RESTORE_SCHEMA, model: 'haiku' })
 }
 
 phase('Report')

@@ -30,6 +30,8 @@ Collect, with read-only commands:
    - `mergeGate.enabled`: first explain it. A GitHub Action merges PRs labelled `labels.riskLow` when every `mergeGate.requiredChecks` entry is green; Claude itself never merges; risk:high PRs always wait for a human. Default `enabled` false, `dryRun` true (it only logs what it would merge until the user turns `dryRun` off).
    - `mergeGate.requiredChecks`: propose the job and check names found in `.github/workflows/*` plus `devflow/review`; the user picks. They must be names of check runs or commit-status contexts.
    - `testing.e2eFramework`: set true only when the repo has an automated e2e/browser test setup that can hold committed e2e tests (a Playwright or Cypress config, a `tests/e2e` folder, and so on); otherwise false. Say which signal you used.
+   - `worktree.setup`: commands that make a fresh git worktree ready to work in (dependencies, virtualenv, build). Propose them from the detected tooling (`make setup`, `npm ci`, a venv plus `pip install -r requirements.txt`, `bundle install`, and so on) and say where each came from; empty is fine. Keep `worktree.dir` at `.claude/worktrees` unless the user wants another place.
+   - `dispatch.maxLanes`: how many background sessions `/devflow:dispatch` may run at once (default 3). Leave `dispatch.pluginDir` unset unless the plugin is loaded from a local directory.
    - Mention `spec.testMatrix` (default on) and `spec.qaModel` (`opus` or `sonnet`, default `opus`) and ask whether to change them.
 5. Write plain JSON (no comments) to `.claude/devflow.json` and copy the schema to `.claude/devflow.schema.json` (the config's `$schema` is `./devflow.schema.json`). If a config already exists, show the diff first and apply only after a yes.
 6. Validate the written file against the schema (all required keys present, types right, no unknown keys).
@@ -54,7 +56,11 @@ Tell the user the required setup for what was added:
 - The gate workflow must be on the repository's default branch: `workflow_run` and status triggers run from there. Merge the PR that adds it before expecting it to act.
 - The gate stays inert until `mergeGate.enabled` is true and logs only while `mergeGate.dryRun` is true.
 
-Then print the `permissions` snippet from `${CLAUDE_PLUGIN_ROOT}/README.md` for `.claude/settings.json` and offer to merge it; merge only after a yes.
+Worktrees: the worktree directory (`worktree.dir`, default `.claude/worktrees/`) must not be committed. Show the diff that adds it to `.gitignore` and apply it only after a yes.
+
+Background sessions: the sessions `/devflow:dispatch` starts cannot answer permission prompts, so anything not allowed is refused and the run stalls. The project therefore needs allow rules in `.claude/settings.json`. Offer, as one proposal: the `permissions` snippet from `${CLAUDE_PLUGIN_ROOT}/README.md`, plus a `Bash(<command>:*)` allow rule for each `checks[].run` command and each `worktree.setup` command, plus the git commands the workflows use (`git worktree`, `git switch`, `git fetch`, `git push` to feature branches). Show the merged result as a diff; merge only after a yes. Never add a rule that allows merging a PR or pushing to a protected branch.
+
+Then print the `permissions` snippet from `${CLAUDE_PLUGIN_ROOT}/README.md` for `.claude/settings.json` and offer to merge it; merge only after a yes (skip this if the proposal above already covered it).
 
 ## 5. Remind
 

@@ -1,10 +1,11 @@
 # devflow — design
 
-A Claude Code plugin with three project-agnostic workflows (v2 wave 1):
+A Claude Code plugin with four project-agnostic workflows (v2 wave 2):
 
 1. **`/devflow:spec`** — idea → analyse → grill-me → spec PR (risk per task) → Gate 1 (human merges; this approves the risk levels) → GitHub issues labelled ready and `risk:low|high`.
-2. **`/devflow:next-task`** — run locally on demand: pick up to N ready issues → implement (test first) → checks → verify → review → open PR labelled with its risk, stacked on a parent PR when needed.
-3. **`/devflow:sync`** — keep those PRs mergeable: retarget, update behind branches, resolve conflicts, address review threads.
+2. **`/devflow:next-task`** — pick up to N ready issues → claim → branch → plan on the issue → implement (test first) → checks → verify → review → open PR labelled with its risk, stacked on a parent PR when needed. Runs in the user's checkout, or in its own worktree with `--isolated`; `--chain` runs a lane.
+3. **`/devflow:dispatch`** — split the ready issues into non-colliding lanes and start one background session per lane.
+4. **`/devflow:sync`** — keep those PRs mergeable: retarget, update behind branches, resolve conflicts, address review threads.
 
 Merging is done by a human, or for `risk:low` PRs by the merge gate GitHub Action (`devflow-merge-gate.yml`). Claude never merges.
 
@@ -16,7 +17,7 @@ Nothing in the plugin knows about a specific stack. Project mechanics live in `.
 - **Claude never merges.** The plugin opens PRs and pushes its own feature branches, never merges, never pushes to the base branch, never force-pushes (except `--force-with-lease` on its own branch). Who merges is decided by risk: a human for `risk:high` and unlabelled PRs; the merge gate Action (outside Claude, own token) for `risk:low` PRs once its checks are green.
 - **Risk is judged early and enforced late.** The spec judges each task against `risk.highWhen` / `risk.highPaths` (unsure → high) and the human approves the levels at Gate 1. The engine only ever escalates to high, deterministically, when changed files match `risk.highPaths`. A missing label counts as high.
 - **No reliance on GitHub paid features.** Target repos may be private on GitHub Free: no branch protection, no required checks, no native auto-merge. The merge gate is a plain Action that does the checking itself.
-- **Model tiers.** Opus plans and reviews; Sonnet implements and ships (it writes the PR body reviewers read); Haiku runs mechanical steps (selecting, claiming, running checks, blocked clean-up).
+- **Model tiers.** Opus plans and reviews; Sonnet writes the per-issue plan, implements and ships (it writes the PR body reviewers read); Haiku runs mechanical steps (selecting, claiming, branching, running checks, blocked clean-up).
 - **GitHub via the GitHub MCP server** (issues, labels, PRs, comments). `gh` is optional, never required. Adding a missing label to an issue creates it.
 - **Stack-agnostic verification.** `http` (API calls against the dev server), `browser` (Playwright MCP, or Claude in Chrome if that is what the user has) and `none`. A project enables any subset.
 - **All committed content is English.** No `Co-Authored-By` or AI attribution in commits or PRs, unless the project's CLAUDE.md says otherwise.
@@ -27,7 +28,7 @@ Nothing in the plugin knows about a specific stack. Project mechanics live in `.
 ```
 .claude-plugin/plugin.json          name "devflow", description, author, repository, license MIT (no version: follow commits)
 .claude-plugin/marketplace.json     marketplace "nhanle-devflow", plugins: [{name: devflow, source: "./"}]
-README.md                           what it is, install, per-project setup, merge gate setup checklist, usage, safety, permissions snippet
+README.md                           what it is, install, per-project setup, merge gate setup checklist, usage, parallel work, safety, permissions snippet
 DESIGN.md                           this file
 LICENSE                             MIT
 skills/init/SKILL.md                /devflow:init
@@ -42,12 +43,15 @@ skills/spec/templates/spec.md       spec + task list template
 skills/spec/templates/issue.md      issue body template
 skills/next-task/SKILL.md           /devflow:next-task  (thin entry: preflight, then calls the workflow)
 skills/next-task/templates/pr.md    PR body template
+skills/dispatch/SKILL.md            /devflow:dispatch (thin entry: collect issues, run bin/devflow-lanes, start background sessions)
 skills/sync/SKILL.md                /devflow:sync (replaces /devflow:address-reviews)
+bin/devflow-lanes                   node, stdlib only: lane planner (JSON on stdin and stdout); called as ${CLAUDE_PLUGIN_ROOT}/bin/devflow-lanes
 workflows/next-task-engine.js       meta.name "next-task-engine" → /devflow:next-task-engine (internal; users run /devflow:next-task)
 hooks/hooks.json                    PreToolUse guard (matcher Bash|mcp__.*merge_pull_request)
 hooks/guard.py                      python3 (3.9+, stdlib only)
 hooks/test_guard.py                 unittest for guard.py
 tests/merge-gate.test.cjs           node:test for the merge gate script (fake Octokit)
+tests/lanes.test.cjs                node:test for the lane planner (planLanes)
 ```
 
 Skills reference bundled files with `${CLAUDE_SKILL_DIR}/templates/...` or `${CLAUDE_PLUGIN_ROOT}/...` written literally in the SKILL.md body (they are substituted in the body, not set as env vars in Bash).
@@ -88,7 +92,9 @@ Skills reference bundled files with `${CLAUDE_SKILL_DIR}/templates/...` or `${CL
     "browserTool": "playwright"                  // playwright | chrome
   },
   "spec": { "testMatrix": true, "qaModel": "opus" }, // QA step of /devflow:spec; qaModel = opus | sonnet
-  "nextTask": { "defaultLimit": 3, "maxFixRounds": 2, "maxReviewRounds": 2 }
+  "nextTask": { "defaultLimit": 3, "maxFixRounds": 2, "maxReviewRounds": 2 },
+  "worktree": { "dir": ".claude/worktrees", "setup": [] },  // isolated runs: dir holds the worktrees (keep it in .gitignore); setup commands run once in a fresh worktree
+  "dispatch": { "maxLanes": 3 }                  // /devflow:dispatch; optional pluginDir is passed as --plugin-dir to background sessions
 }
 ```
 
@@ -101,8 +107,8 @@ Missing optional keys take the defaults shown. `github`, `baseBranch` and `check
 1. Read the repo: git remotes (find the GitHub one), default/current branches, `package.json` scripts, `Makefile`, `pyproject.toml`, lockfiles, framework config, `CLAUDE.md`, existing `.github/workflows`.
 2. Propose a filled `.claude/devflow.json` (explain each detected value and where it came from). Ask the user to confirm or edit with AskUserQuestion for anything ambiguous (which remote, base branch, dev server command, verify modes). Write it plus `devflow.schema.json`.
 3. Check the CLAUDE.md has what the workflows rely on (conventions, test approach, "Never" list). List gaps; offer to draft additions, never edit CLAUDE.md without a yes.
-4. Risk and merge gate (AskUserQuestion, recommended option each time): `risk.highWhen` (show defaults), `risk.highPaths` (globs for auth, migrations, payments, CI config), `mergeGate.enabled` (default false, `dryRun` true), `mergeGate.requiredChecks` (job names found in `.github/workflows/*` plus `devflow/review`), `testing.e2eFramework` (true only when an automated e2e setup exists; say which signal), `spec.testMatrix` / `spec.qaModel`.
-5. Offer (each a separate yes) to copy `claude-code-review.yml`, the pair `devflow-merge-gate.yml` + `devflow-merge-gate.cjs` (filling the `workflow_run` workflow list with the project's CI workflow names), and `claude.yml` into `.github/` when absent (otherwise show a diff). Tell the user the setup each needs (secrets `CLAUDE_CODE_OAUTH_TOKEN`, `DEVFLOW_GATE_TOKEN`; allow merge commits; gate on the default branch; see the README checklist). Print the `permissions` snippet from the README for `.claude/settings.json`.
+4. Risk and merge gate (AskUserQuestion, recommended option each time): `risk.highWhen` (show defaults), `risk.highPaths` (globs for auth, migrations, payments, CI config), `mergeGate.enabled` (default false, `dryRun` true), `mergeGate.requiredChecks` (job names found in `.github/workflows/*` plus `devflow/review`), `testing.e2eFramework` (true only when an automated e2e setup exists; say which signal), `spec.testMatrix` / `spec.qaModel`, `worktree.setup` (proposed from the detected tooling; `worktree.dir` stays `.claude/worktrees` unless the user wants another place), `dispatch.maxLanes`.
+5. Offer (each a separate yes) to copy `claude-code-review.yml`, the pair `devflow-merge-gate.yml` + `devflow-merge-gate.cjs` (filling the `workflow_run` workflow list with the project's CI workflow names), and `claude.yml` into `.github/` when absent (otherwise show a diff). Tell the user the setup each needs (secrets `CLAUDE_CODE_OAUTH_TOKEN`, `DEVFLOW_GATE_TOKEN`; allow merge commits; gate on the default branch; see the README checklist). Add the worktree dir to `.gitignore` (diff, then a yes). Background sessions cannot answer permission prompts, so propose one merged allow-list for `.claude/settings.json`: the README snippet plus a `Bash(<cmd>:*)` rule per `checks[].run` and `worktree.setup` command and the git commands the workflows use (`git worktree`, `switch`, `fetch`, feature-branch `push`); never a rule that allows merging or pushing to a protected branch. Print the `permissions` snippet from the README.
 6. Remind the user that the plugin hook blocks merges and pushes to protected branches.
 
 ## `/devflow:spec <idea or path to a brief>`
@@ -111,33 +117,41 @@ Missing optional keys take the defaults shown. `github`, `baseBranch` and `check
 
 1. **Analyse.** Read `.claude/devflow.json`, `CLAUDE.md`, and the code the idea touches. Produce a short analysis: current behaviour, affected areas (backend/frontend/infra/data), risks, unknowns. Do not write files yet.
 2. **Grill.** Invoke the `grill-me` skill on the idea plus the analysis. Keep going until every unknown is decided or explicitly deferred. If `grill-me` is not available, run the same interview inline: one question at a time, each with a recommended answer.
-3. **Spec + tasks.** Create branch `spec/<slug>` from `<remote>/<baseBranch>`. Write `<specDir>/<YYYY-MM-DD>-<slug>.md` from `templates/spec.md`: problem, goals/non-goals, decisions (with the grill answers), design (API contracts, data model, UI screens and states, mocks if any — mocks go in `<specDir>/<slug>/`), risks, and the **task list**. Each task: stable id `T1..Tn`, title, type, `area`, depends-on, acceptance criteria written as checkable behaviour (API: request → response; UI: user action → visible result), files/areas in scope, test plan, `needs-e2e` yes/no, size S/M (split anything bigger), **risk** `low|high` with a one-line reason (judged against `risk.highWhen` and `risk.highPaths`; unsure → high), and **hotspot files** other tasks are likely to touch (recorded only, nothing uses them yet).
+3. **Spec + tasks.** Create branch `spec/<slug>` from `<remote>/<baseBranch>`. Write `<specDir>/<YYYY-MM-DD>-<slug>.md` from `templates/spec.md`: problem, goals/non-goals, decisions (with the grill answers), design (API contracts, data model, UI screens and states, mocks if any — mocks go in `<specDir>/<slug>/`), risks, and the **task list**. Each task: stable id `T1..Tn`, title, type, `area`, depends-on, acceptance criteria written as checkable behaviour (API: request → response; UI: user action → visible result), files/areas in scope, test plan, `needs-e2e` yes/no, size S/M (split anything bigger), **risk** `low|high` with a one-line reason (judged against `risk.highWhen` and `risk.highPaths`; unsure → high), and **hotspot files** other tasks are likely to touch (`/devflow:dispatch` uses them to plan lanes).
 4. **Test matrix (QA).** Skipped when `spec.testMatrix` is false. A QA agent (Agent tool, model `spec.qaModel`, default opus) gets only the spec file and `CLAUDE.md`, not the grill conversation, so it tests what the spec says rather than what was meant. It returns test-case rows (id `T<n>.<k>`, criterion, case happy/error/edge/boundary, Given/When/Then, level unit/integration/http/e2e, priority must/should; every criterion has a must row), the criteria it cannot test as written, and cases the spec leaves undecided. Those go back to the user one at a time with a recommended answer; the spec is updated and QA runs again, at most 2 rounds, leftovers under Risks. The rows go into the spec's Test matrix and each task's test plan points at them. Opus is the default because the value of the step is in spotting what the spec does not say, and the matrix is copied into every issue, so a miss repeats; it runs once per spec, so the cost is small.
 5. **Spec PR.** Commit `docs(spec): <title>`, push the branch, open a PR to `baseBranch` titled `spec: <title>`, body = summary + task table (incl. risk and reason) + test matrix size and QA questions resolved/open. No need to ask before pushing the spec branch or opening the PR.
 6. **Gate 1.** Ask exactly one question (AskUserQuestion): "Spec PR <url> merged? Merging also approves the risk levels in its table." — options: merged / changes requested / abandon. Changes requested → read the PR review comments, update the spec on the same branch, push, ask again. Abandon → close nothing, stop. Merged → verify through MCP that the PR is merged; if not, say so and ask again.
 7. **Issues.** Search existing issues for each task title first (no duplicates; re-running after a partial failure must be safe). Create one issue per task from `templates/issue.md`: title `[<slug>] T<n>: <task title>`, body with spec link (on baseBranch), acceptance criteria as a checklist, scope, test cases (the task's Test matrix rows, or the test plan when there is no matrix), `Depends on #<n>` lines (resolve task ids to issue numbers — create in dependency order), a Risk line and Hotspots section, labels `labels.ready` plus `labels.riskLow` or `labels.riskHigh` plus `labels.e2e` when needed plus `type:<type>`. Then comment on the spec PR with the issue list. Final message: table task → issue.
 
-## `/devflow:next-task [limit | #issue ...]`
+## `/devflow:next-task [limit | #issue ...] [--isolated] [--chain]`
 
 `disable-model-invocation: true`. Entry point only; the work is the workflow.
 
 Preflight (inline, fail fast with a clear message):
 - `.claude/devflow.json` exists and parses; else tell the user to run `/devflow:init`.
-- Working tree clean; current branch noted (restored at the end).
+- Working tree clean. Not isolated: current branch noted (restored after every issue; detached HEAD is refused). Isolated: a detached HEAD is fine, no start branch.
 - `git fetch <remote> <baseBranch>` succeeds.
 - GitHub MCP reachable (get the authenticated user).
 
-Then call the Workflow tool with name `devflow:next-task-engine` and `args = { config: <parsed devflow.json>, limit: <n or config default>, issues: [<explicit issue numbers>] , startBranch: <current branch>, prTemplatePath }`. `prTemplatePath` points at `templates/pr.md`. When it returns, print the summary table: issue → PR (risk, and the PR it is stacked on) / blocked (reason) / skipped, and say who merges: the merge gate for `risk:low` when enabled, a human otherwise.
+Flags: `--isolated` (own worktree) and `--chain` (the explicit issues are a lane: in the given order, each stacked on the previous one; needs explicit issues).
+
+**Isolated setup** (before the workflow). Inside a linked worktree already (`git rev-parse --git-dir` ≠ `--git-common-dir`): use it. Otherwise `name` = `issue-<n>` or `lane-<n1>-<n2>...`; `git fetch <remote> <baseBranch>`; `git worktree add --detach <worktree.dir>/<name> <remote>/<baseBranch>` (an existing worktree at that path is reused only when clean); the EnterWorktree tool with that path (if unavailable: stop, tell the user to start with `claude -w`). Then run each `worktree.setup` command in order; a failure stops the run. The worktree is created by devflow, not left to background auto-isolation (see Verified behaviour).
+
+**`claimId`**: `<timestamp>-<name>-<pid><random>` (`main` as name when not isolated); the pid and random suffix separate two sessions started in the same second on the same issue.
+
+Then call the Workflow tool with name `devflow:next-task-engine` and `args = { config: <parsed devflow.json>, limit: <n or config default>, issues: [<explicit issue numbers>], startBranch: <current branch, "" when isolated>, prTemplatePath, isolated, chain, claimId }`. `prTemplatePath` points at `templates/pr.md`. When it returns: isolated and the worktree is clean with every created branch pushed → ExitWorktree and `git worktree remove <path>`; otherwise ExitWorktree and keep it, telling the user the path and why. Print the summary table: issue → PR (risk, and the PRs it is stacked on) / blocked (reason) / skipped (reason, including `already claimed` / `claimed by <id>`), and say who merges: the merge gate for `risk:low` when enabled, a human otherwise.
 
 ## Workflow `next-task-engine.js`
 
-Plain JS, no `Date.now()`/`Math.random()`, no filesystem. Tasks run **sequentially** in the main checkout (they share one working tree and often touch the same files). Every agent gets the config in its prompt. Every agent returns structured output (schemas below); a stage that fails marks the issue blocked and moves on to the next issue.
+Plain JS, no `Date.now()`/`Math.random()`, no filesystem (the `claimId` therefore comes in as an argument). Within one run, tasks run **sequentially** in one working tree (the main checkout, or the worktree when `isolated`); parallelism is across sessions (see Parallel work). Every agent gets the config in its prompt. Every agent returns structured output (schemas below); a stage that fails marks the issue blocked and moves on to the next issue.
 
-Phases: `Select`, then per issue `Implement`, `Check`, `Verify`, `Review`, `Ship`, then `Report`.
+Phases: `Select`, then per issue `Implement` (Claim, Branch, Integrate, Plan, Implement), `Check`, `Verify`, `Review`, `Ship`, then `Report`.
 
-1. **Select** (haiku, schema `{issues:[{number,title,labels,body,dependsOn:[int],parents:[{issue,prNumber,branch,inRun}]}], skipped:[{number,reason}]}`): explicit issues if given, otherwise open issues with `labels.ready`, not labelled inProgress/blocked, no open PR referencing them. Dependencies: all `Depends on` issues closed → normal (`parents: []`); every open dependency has an open PR (`inRun: false`) or is selected earlier in this run without a PR yet (`inRun: true`, the engine fills in the PR once the parent ships) → **stacked** on all of them; an open dependency with neither, or an in-run parent that did not ship, skips the issue naming it. Order: parents first, then oldest. The agent returns up to 3×`limit` candidates; the engine works on `limit` of them (a skipped child does not count). `log()` what was skipped and why (no silent caps).
+1. **Select** (haiku, schema `{issues:[{number,title,labels,body,dependsOn:[int],parents:[{issue,prNumber,branch,inRun}]}], skipped:[{number,reason}]}`): explicit issues if given, otherwise open issues with `labels.ready`, not labelled inProgress/blocked, no open PR referencing them. Dependencies: all `Depends on` issues closed → normal (`parents: []`); every open dependency has an open PR (`inRun: false`) or is selected earlier in this run without a PR yet (`inRun: true`, the engine fills in the PR once the parent ships) → **stacked** on all of them; an open dependency with neither, or an in-run parent that did not ship, skips the issue naming it. Order: parents first, then oldest; with `chain` and explicit issues, exactly the given order (an earlier issue of the same list that has no PR yet counts as an in-run parent, not a skip reason). The agent returns up to 3×`limit` candidates; the engine works on `limit` of them (a skipped child does not count). `log()` what was skipped and why (no silent caps).
 2. Per issue, in order:
-   - **Claim** (haiku): add `labels.inProgress`, remove `labels.ready`; `git switch -c <branch> <parentRef>` (branch from `branchPattern`), where `parentRef` is `<remote>/<baseBranch>`, or `<remote>/<parent PR branch>` when stacked. Return `{branch}`.
+   - **Claim** (haiku, schema `{taken, takenBy?, claims:[{commentId, claimId, createdAt}]}`): a two-call lock. Call 1 (claim): if the issue has an assignee or `labels.inProgress` / `labels.blocked`, return `taken` and change nothing (the issue is skipped as `already claimed`). Otherwise assign the authenticated user, add `labels.inProgress`, remove `labels.ready`, post `<!-- devflow-claim id=<claimId> -->` + `Claimed by devflow (<claimId>).`, re-read all comments and return every claim comment. The engine decides in code: our claim must be present (else blocked), and `pickClaimWinner` takes the earliest `createdAt`, ties by smallest comment id. Call 2 (release, haiku), only for a loser: delete just our own claim comment; labels and assignee belong to the winner; the issue is skipped as `claimed by <id>`. No two sessions can both pass, as long as GitHub's `created_at` order is the same for both readers.
+   - **Branch** (haiku, schema `{ok, branch, problem?}`): `git status --porcelain` empty; `git fetch <remote> <fetchBranch>`; `git switch -c <branch> <parentRef>` (branch from `branchPattern`; works from a detached HEAD), where `parentRef` is `<remote>/<baseBranch>`, or `<remote>/<parent PR branch>` when stacked. An existing branch name is a failure (blocked at stage Branch). Touches no GitHub state.
+   - **Plan** (sonnet, after Branch and Integrate, schema `{status: ready|blocked, plan, questions:[], specRead}`): reads the spec (`git show <baseRef>:<path>`; `specRead` required when the issue links one), the acceptance criteria, CLAUDE.md and the touched code. Writes no code. Posts the plan as an issue comment whose first line is `<!-- devflow-plan -->` (edited in place if one exists): Files to change; Tests (a row per Test cases id); Risks; Order of commits; Open questions. Nobody approves it. `blocked` (questions the spec and issue do not answer) → the issue is blocked at stage Plan before any code. Otherwise the plan text is handed to Implement, which follows it and records deviations under `assumptions`.
    - **Implement** (sonnet, schema `{status: done|blocked, summary, commits:[sha+msg], filesChanged, assumptions:[], outOfScope:[], blockedReason?}`): read the issue and the linked spec; follow CLAUDE.md. For behaviour changes and bug fixes: commit a failing test first (`test(<scope>): ...`), confirm it fails for the right reason, then the implementation (`feat|fix(<scope>): ...`). When the issue has a Test cases table, write a test for every `must` row, traceable to its row id (`test_t<task>_<n>_...` or a `# T1.2` comment). With `testing.e2eFramework` false, `e2e` rows get no committed test: Verify covers them. Stage files by name. Stay inside the issue scope; record anything else in `outOfScope`. Ambiguity that changes behaviour and is not answered by the spec → `blocked` with the question (no guessing on contracts); minor ambiguity → decide and record in `assumptions`.
    - **Check** (haiku, schema `{passed, failures:[{check, output}]}`): run every `checks[].run` in order, report only failures (trimmed output). If failed: **Fix** (sonnet) with the failures, then Check again; up to `maxFixRounds`. Still failing → blocked.
    - **Verify** (sonnet, schema `{ran, mode, steps:[{action, expected, actual, pass}], notes}`): only if `verify.modes` is non-empty and the issue has `labels.e2e`, the diff touches UI, or the issue's Test cases table has a row with level `http` or `e2e`. Start the dev server in the background, wait until `url` answers (≤ `readyTimeoutSec`), walk every acceptance criterion and every Test cases row with level http or e2e: `http` with curl, `browser` with the configured browser tool (navigate, act, read the page; take screenshots for the agent's own check). Stop the server. Failures → one Fix round (sonnet) → Check → Verify again; still failing → blocked.
@@ -145,10 +159,25 @@ Phases: `Select`, then per issue `Implement`, `Check`, `Verify`, `Review`, `Ship
    - **Risk** (deterministic, in the engine, no agent): level = the issue's risk label (`unknown` if none, treated as high); reason = the issue body's `Risk:` line. If any changed file matches a `risk.highPaths` glob, the level becomes high and the reason names the file. The result also sets `labels.riskHigh` on the issue.
    - **Ship** (sonnet): push the branch (`git push -u <remote> <branch>`), open a PR via MCP with `templates/pr.md` filled from the stage results (what, how, risk line, tests, verification evidence, assumptions, out of scope, `Closes #<n>`). The PR base is `baseBranch`, or the parent PR's branch when stacked (the body then says it retargets when the parent merges). Label the PR `labels.devflow`, `labels.riskLow|riskHigh` and, when stacked, `labels.stacked`; add `labels.review` to the issue and remove `labels.inProgress`. Return `{prNumber, url}`.
    - **On blocked at any stage** (haiku): commit nothing further; if the branch has commits, push it so work is not lost; comment on the issue with the stage, reason and question; label `labels.blocked`, remove `labels.inProgress`; `git switch <startBranch>`.
-   - After each issue: `git switch <startBranch>` so the next one starts clean.
+   - After each issue: `git switch <startBranch>` so the next one starts clean. Isolated: no restore; Ship and Blocked stay on the branch (the worktree is dedicated, no switch, no stash).
+   - **Chain** (`chain` true): before each issue, if the previous issue did not end in a PR (blocked, or skipped, including claimed elsewhere) the rest of the lane is skipped with that reason; otherwise the issue is stacked on the previous issue's PR (added to its parents unless already one), so the lane is a stack: each branch starts from the previous one's branch and each PR targets it.
 3. **Report**: return `[{issue, status: pr|blocked|skipped, url?, prNumber?, risk?, stackedOn?, reason?}]`.
 
 **Stacking.** The engine keeps a map of issues that shipped in this run (issue → PR number and branch) to resolve in-run parents. One parent: the branch starts from the parent's branch and the PR targets it. Several parents: Claim branches from the base, then **Integrate** (sonnet, schema `{ok, integrationSha, merged, problem}`) merges every parent branch with merge commits (no rebase), resolves conflicts between them, runs the checks and returns `integrationSha`; that SHA is the parentRef for Implement, Fix, Review and Blocked, and the PR targets the base with a "Stacked on #a and #b" line. The gate holds every PR whose linked issue still has an open `Depends on`.
+
+**Parallel work.** One ticket per session, each session in its own worktree, started by hand (`/devflow:next-task #n --isolated`) or by `/devflow:dispatch`.
+
+- *Lane planner* `bin/devflow-lanes` (node, no dependencies; pure function `planLanes` exported for tests). Input `{maxLanes, issues:[{number, hotspots:[], dependsOn:[]}]}` on stdin; output `{lanes:[{issues, sharedHotspots}], deferred:[{issues, reason}], warnings}`. Union-find: two issues join when they share a hotspot (exact, case-sensitive, trimmed path; transitive) or one depends on the other and both are in the set (dependencies outside the set are ignored). Inside a lane: topological order, parents first, ties by smallest number; a cycle falls back to number order with a warning. Lanes sorted by their smallest issue number; lanes beyond `maxLanes` (default 3) go to `deferred` with reason `over maxLanes (N)`. Invalid input: message on stderr, exit 1. Why this shape: tasks that touch the same files share a lane and stack on each other, so parallel lanes never touch the same files and never conflict; stacking inside a lane replaces rebasing and merge conflicts.
+- *`/devflow:dispatch [max lanes]`* (`disable-model-invocation: true`, no commits, never merges). Preflight: config, GitHub MCP, `claude --version`, clean tree. Collect: open `labels.ready` issues, not in-progress or blocked, without an open PR that closes them; read `Depends on`. An issue whose open dependency has no PR and is not in the set is not schedulable and is listed as "waiting for #N". Build `{number, hotspots, dependsOn}` per issue (hotspots from the body's `## Hotspots` bullets, backticks stripped, bare "None" skipped). `maxLanes` = argument, else `dispatch.maxLanes`, else 3. Print the plan (lanes, order, shared hotspots, deferred, waiting), continue without asking again, and start lane n with `claude --bg "/devflow:next-task #a #b --chain --isolated"` (plus `--plugin-dir <dispatch.pluginDir>` when set; `--chain --isolated` even for a one-issue lane). If `claude --bg` fails, stop starting lanes and print the `claude -w lane-<n> "..."` command for the failed and remaining lanes. Report: lane → session id → issues; follow with `claude agents`, `claude logs <id>`, `claude attach <id>`.
+- *Safety nets.* The claim (above) is what makes a double start harmless: a second session on the same issue skips it. A broken lane stops at the first issue that does not ship. Worktrees are created under `worktree.dir`, ignored by git, and removed only when clean and fully pushed.
+
+**Verified behaviour** (spike on the real machine, not assumed):
+
+- `claude --bg --plugin-dir <dir> "/plugin:skill"` expands the plugin skill in the background session.
+- A `claude --bg` session did **not** move into a worktree by itself (its Bash ran in the main checkout). So devflow creates the worktree itself (`--isolated`) and does not rely on background auto-isolation.
+- After EnterWorktree, Workflow agents run in the session's worktree directory.
+- `claude --bg` needs a trusted workspace ("Workspace not trusted" otherwise), and the background session cannot answer permission prompts, so the project needs allow rules (or an auto permission mode); `/devflow:init` offers them.
+- A fresh worktree needs its own setup (`worktree.setup`, e.g. `make setup`, took ~3 s on TaskBoard).
 
 **Spec read.** `specPathFor(issue)` takes the first `<specDir>/…md` path from the issue body. Implement starts with `git show <baseRef>:<path>` and must return `specRead` containing the path; otherwise one Fix round re-checks the change against the spec, and a second miss blocks the issue. Review is pointed at the same path.
 
@@ -201,9 +230,12 @@ Protected branches = `protectedBranches` + `baseBranch` from `.claude/devflow.js
 
 ## Out of scope (later waves)
 
-- One ticket per session/worktree, and parallel task execution. Tasks still run sequentially in the user's checkout; hotspot files are recorded for this later work.
-- Dispatching tasks to other sessions or agents.
+Wave 3:
 - A QA agent running in parallel with implementation (the QA step today runs once, on the spec).
+- Merged BA/QA questions (one list for the user instead of separate rounds).
 - `/devflow:answer` (answering blocked-issue questions).
+- Updating the Flow Map (`docs/devflow-flows.html`) for waves 1 and 2.
+
+Not planned:
 - GitHub Projects (v2) board sync — labels are the state machine.
 - Uploading screenshots to PRs (no API path); evidence is text.

@@ -1,0 +1,136 @@
+#!/usr/bin/env node
+'use strict';
+// devflow-lanes: group ready issues into lanes that can run in parallel without colliding.
+// Input (stdin JSON): {"maxLanes": N, "issues": [{"number": int, "hotspots": [string], "dependsOn": [int]}]}
+// Output (stdout JSON): {"lanes": [{"issues": [int], "sharedHotspots": [string]}], "deferred": [...], "warnings": [...]}
+
+const USAGE = `Usage: devflow-lanes < input.json
+
+Reads {"maxLanes": N, "issues": [{"number": 1, "hotspots": ["a.py"], "dependsOn": [2]}]} from stdin.
+Issues that share a hotspot (exact path, trimmed) or depend on each other (inside the set) share a lane;
+inside a lane, parents come first, ties by issue number. Lanes are sorted by smallest issue number; lanes
+beyond maxLanes (default 3) go to "deferred". Prints {"lanes", "deferred", "warnings"} as JSON.
+Exits 1 on invalid input.`;
+
+function isPosInt(n) {
+  return Number.isInteger(n) && n > 0;
+}
+
+function validate(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('input must be a JSON object');
+  const maxLanes = input.maxLanes === undefined ? 3 : input.maxLanes;
+  if (!isPosInt(maxLanes)) throw new Error('maxLanes must be a positive integer');
+  if (!Array.isArray(input.issues)) throw new Error('issues must be an array');
+  const seen = new Set();
+  const issues = input.issues.map((raw, i) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error(`issues[${i}] must be an object`);
+    if (!isPosInt(raw.number)) throw new Error(`issues[${i}].number must be a positive integer`);
+    if (seen.has(raw.number)) throw new Error(`duplicate issue number ${raw.number}`);
+    seen.add(raw.number);
+    const hotspots = raw.hotspots === undefined ? [] : raw.hotspots;
+    const dependsOn = raw.dependsOn === undefined ? [] : raw.dependsOn;
+    if (!Array.isArray(hotspots) || hotspots.some((h) => typeof h !== 'string'))
+      throw new Error(`issues[${i}].hotspots must be an array of strings`);
+    if (!Array.isArray(dependsOn) || dependsOn.some((d) => !isPosInt(d)))
+      throw new Error(`issues[${i}].dependsOn must be an array of positive integers`);
+    return {
+      number: raw.number,
+      hotspots: [...new Set(hotspots.map((h) => h.trim()).filter(Boolean))],
+      dependsOn: [...new Set(dependsOn)],
+    };
+  });
+  return { maxLanes, issues };
+}
+
+function planLanes(input) {
+  const { maxLanes, issues } = validate(input);
+  const byNum = new Map(issues.map((x) => [x.number, x]));
+  const parent = new Map(issues.map((x) => [x.number, x.number]));
+  const find = (a) => {
+    while (parent.get(a) !== a) {
+      parent.set(a, parent.get(parent.get(a)));
+      a = parent.get(a);
+    }
+    return a;
+  };
+  const union = (a, b) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(Math.max(ra, rb), Math.min(ra, rb));
+  };
+
+  const firstByHotspot = new Map();
+  for (const x of issues) {
+    for (const h of x.hotspots) {
+      if (firstByHotspot.has(h)) union(x.number, firstByHotspot.get(h));
+      else firstByHotspot.set(h, x.number);
+    }
+    for (const d of x.dependsOn) if (byNum.has(d) && d !== x.number) union(x.number, d);
+  }
+
+  const groups = new Map();
+  for (const x of issues) {
+    const r = find(x.number);
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r).push(x);
+  }
+
+  const warnings = [];
+  const all = [...groups.values()].map((members) => {
+    const nums = new Set(members.map((m) => m.number));
+    const deps = new Map(
+      members.map((m) => [m.number, new Set(m.dependsOn.filter((d) => nums.has(d) && d !== m.number))]),
+    );
+    const order = [];
+    const left = new Set(nums);
+    while (left.size) {
+      const ready = [...left].filter((n) => [...deps.get(n)].every((d) => !left.has(d))).sort((a, b) => a - b);
+      if (ready.length) {
+        order.push(ready[0]);
+        left.delete(ready[0]);
+      } else {
+        const rest = [...left].sort((a, b) => a - b);
+        warnings.push(`dependency cycle among ${rest.map((n) => '#' + n).join(', ')}; kept in number order`);
+        order.push(...rest);
+        left.clear();
+      }
+    }
+    const counts = new Map();
+    for (const m of members) for (const h of m.hotspots) counts.set(h, (counts.get(h) || 0) + 1);
+    const sharedHotspots = [...counts].filter(([, c]) => c > 1).map(([h]) => h).sort();
+    return { issues: order, sharedHotspots, min: Math.min(...nums) };
+  });
+  all.sort((a, b) => a.min - b.min);
+
+  const lanes = all.slice(0, maxLanes).map(({ issues: i, sharedHotspots }) => ({ issues: i, sharedHotspots }));
+  const deferred = all
+    .slice(maxLanes)
+    .map(({ issues: i }) => ({ issues: i, reason: `over maxLanes (${maxLanes})` }));
+  return { lanes, deferred, warnings };
+}
+
+if (require.main !== module) {
+  module.exports = { planLanes };
+} else {
+  if (process.argv.slice(2).some((a) => a === '--help' || a === '-h')) {
+    console.log(USAGE);
+    process.exit(0);
+  }
+  let data = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (c) => (data += c));
+  process.stdin.on('end', () => {
+    try {
+      let parsed;
+      try {
+        parsed = JSON.parse(data);
+      } catch (e) {
+        throw new Error(`invalid JSON on stdin: ${e.message}`);
+      }
+      process.stdout.write(JSON.stringify(planLanes(parsed), null, 2) + '\n');
+    } catch (e) {
+      console.error(`devflow-lanes: ${e.message}`);
+      process.exit(1);
+    }
+  });
+}

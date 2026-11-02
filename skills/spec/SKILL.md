@@ -36,7 +36,7 @@ Follow the steps in order. Announce each by number.
 2. Copy `${CLAUDE_SKILL_DIR}/templates/spec.md` and fill it into `<specDir>/<YYYY-MM-DD>-<slug>.md`: problem, goals and non-goals, decisions (with the grill answers), design (API contracts, data model, UI screens and states; mocks go in `<specDir>/<slug>/`), risks, and the task list.
 3. Each task has: stable id `T1..Tn`, title, type, area, depends-on, acceptance criteria as checkable behaviour (API: request then response; UI: user action then visible result), files and areas in scope, test plan, needs-e2e yes/no, size S or M, risk and hotspot files. Split anything bigger than M.
 4. Risk: judge each task against `risk.highWhen` and `risk.highPaths` in the config (the defaults apply when unset; a task whose scope matches a `highPaths` glob is high). Record `risk: low|high` with a one-line reason. When unsure, high.
-5. Hotspot files: list the files likely to be touched by other tasks too (routes, registries, schema, shared config). They are only recorded for now.
+5. Hotspot files: list the files likely to be touched by other tasks too (routes, registries, schema, shared config). `/devflow:dispatch` uses them to put tasks that share a hotspot in the same lane, so list real file paths.
 
 ## 4. Test matrix (QA)
 
