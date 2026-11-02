@@ -77,7 +77,7 @@ claude -w lane-<n> "/devflow:next-task #a #b --chain --isolated"
 Print a table: lane, background session id, issues. Then explain:
 
 - Follow the sessions with `claude agents`, `claude logs <id>`, `claude attach <id>`.
-- Each session claims its issues first; if an issue in a lane was already claimed elsewhere, that issue and the rest of its lane are skipped (later issues are stacked on it), so run `/devflow:dispatch` again later for them. Each posts a plan on every issue, implements test-first, and opens PRs stacked on the previous issue's PR inside its lane.
+- Each session claims its issues first; if an issue in a lane was already claimed elsewhere or gets blocked, the lane continues with the next issue, stacked on the last issue that shipped (or from the base); only issues with a real `Depends on` the failed one are skipped. Each posts a plan on every issue, implements test-first, and opens PRs stacked on the previous issue's PR inside its lane.
 - Who merges: the merge gate merges `risk:low` PRs bottom-up once its checks are green; `risk:high` PRs wait for a human. `/devflow:sync` handles conflicts and retargeting.
 - Background sessions cannot answer permission prompts. If one stalls, check the permissions step of `/devflow:init` (the allow-list snippet) and re-run the lane.
 
