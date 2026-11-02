@@ -1,10 +1,11 @@
 # devflow
 
-A Claude Code plugin with three project-agnostic workflows (v2 wave 1):
+A Claude Code plugin with four project-agnostic workflows (v2 wave 2):
 
 1. `/devflow:spec <idea>`: idea, analysis, grill-me interview, spec with a risk level per task, QA test matrix, spec PR, Gate 1 (a human merges, which also approves the risk levels), then one GitHub issue per task labelled ready and `risk:low|high`.
-2. `/devflow:next-task [limit | #issue ...]`: pick up to N ready issues, implement each test first, run checks, verify against the running app, review, and open a PR labelled with its risk. An issue whose open dependencies all have open PRs is stacked on them.
-3. `/devflow:sync [#pr ...]`: keep those PRs mergeable: retarget stacked PRs, update behind branches, resolve conflicts, address review threads.
+2. `/devflow:next-task [limit | #issue ...] [--isolated] [--chain]`: pick up to N ready issues, claim each, post a plan on it, implement test first, run checks, verify against the running app, review, and open a PR labelled with its risk. An issue whose open dependencies all have open PRs is stacked on them. `--isolated` runs in its own git worktree.
+3. `/devflow:dispatch [max lanes]`: split the ready issues into non-colliding lanes and start one background session per lane.
+4. `/devflow:sync [#pr ...]`: keep those PRs mergeable: retarget stacked PRs, update behind branches, resolve conflicts, address review threads.
 
 Claude never merges. `risk:low` PRs are merged by an optional GitHub Action (the merge gate) once its checks are green; `risk:high` PRs wait for a human.
 
@@ -23,7 +24,7 @@ Requirements: Python 3.9+ (guard hook), the GitHub MCP server connected, and for
 
 In the project, run `/devflow:init`. It detects remotes, branches and scripts, writes `.claude/devflow.json` (with its schema), asks about risk rules, the merge gate and `testing.e2eFramework`, checks that `CLAUDE.md` covers what the workflows rely on, and offers to install three GitHub Actions (each a separate yes): `claude-code-review.yml` (review check), `devflow-merge-gate.yml` with `.github/scripts/devflow-merge-gate.cjs`, and `claude.yml` (mention handler). Add the `CLAUDE_CODE_OAUTH_TOKEN` repository secret for the review and mention workflows; the merge gate needs more, see the checklist below.
 
-Required config keys: `github`, `baseBranch`, `checks`. Everything else has defaults; see `skills/init/templates/devflow.json` and `devflow.schema.json`. v2 wave 1 adds `labels.devflow|riskLow|riskHigh|stacked`, `risk` (`highWhen`, `highPaths`), `mergeGate` (`enabled` false, `dryRun` true, `requiredChecks`, `method`) and `testing.e2eFramework` (false).
+Required config keys: `github`, `baseBranch`, `checks`. Everything else has defaults; see `skills/init/templates/devflow.json` and `devflow.schema.json`. v2 wave 1 adds `labels.devflow|riskLow|riskHigh|stacked`, `risk` (`highWhen`, `highPaths`), `mergeGate` (`enabled` false, `dryRun` true, `requiredChecks`, `method`) and `testing.e2eFramework` (false). v2 wave 2 adds `worktree` (`dir` default `.claude/worktrees`, `setup` commands run once in a fresh worktree, e.g. `make setup`) and `dispatch` (`maxLanes` default 3, optional `pluginDir` passed as `--plugin-dir` to background sessions). `/devflow:init` also proposes `worktree.setup`, a `.gitignore` entry for the worktree dir and the allow rules background sessions need.
 
 ## Setup checklist for the merge gate
 
@@ -42,7 +43,8 @@ The gate merges at most one PR per run. A PR is merged only when: it has the `de
 ## Usage
 
 - `/devflow:spec add CSV export to the reports page`: runs in a cloud session or locally. Each task gets `risk: low|high` with a one-line reason, judged against `risk.highWhen` and `risk.highPaths` (unsure means high), plus the files other tasks are likely to touch (hotspots, recorded only). Before the spec PR, a QA agent that sees only the written spec drafts a test matrix and asks about criteria it cannot test (`spec.testMatrix`, default on; `spec.qaModel`, default `opus`). Stops at Gate 1: merging the spec PR approves the tasks and their risk levels. Then it creates the issues with their risk label and test-case rows; `next-task` requires a test for every `must` row.
-- `/devflow:next-task`: up to `nextTask.defaultLimit` ready issues, sequentially in your checkout. `/devflow:next-task 2` or `/devflow:next-task #12 #15` for a specific number or issues. Your working tree must be clean; your branch is restored after each issue. The command also lists `/devflow:next-task-engine`: that is the workflow script it runs internally (Claude Code registers every plugin workflow as a command). Do not run it directly; without the arguments the skill builds it stops with a message.
+- `/devflow:next-task`: up to `nextTask.defaultLimit` ready issues, sequentially. `/devflow:next-task 2` or `/devflow:next-task #12 #15` for a specific number or issues. Per issue the stages are Claim → Branch → [Integrate] → Plan → Implement → Check → Verify → Review → Ship. Your working tree must be clean. Without `--isolated` it works in your checkout and your branch is restored after each issue; see Parallel work for `--isolated` and `--chain`. The command also lists `/devflow:next-task-engine`: that is the workflow script it runs internally (Claude Code registers every plugin workflow as a command). Do not run it directly; without the arguments the skill builds it stops with a message.
+- `/devflow:dispatch [max lanes]`: see Parallel work.
 - `/devflow:sync [#pr ...]` (replaces `/devflow:address-reviews`): for your open PRs labelled `devflow`, parents before children: retargets a stacked PR to `baseBranch` once its parent merged, updates a behind branch, resolves merge conflicts with a merge commit (never a rebase or force push), then fixes, answers or declines each unresolved review thread with new commits and a reply on every thread. Pushing re-runs the automated review by itself, so it posts no re-review comment. A hidden `<!-- devflow-sync -->` marker comment counts rounds, limited by `nextTask.maxReviewRounds`. After resolving conflicts it removes the blocked label from the PR and its issue.
 
 Issue state is a label state machine: ready, in-progress, review, blocked (names configurable). A blocked issue gets a comment saying which stage failed and what a human must decide; its branch is pushed so no work is lost.
@@ -65,6 +67,23 @@ Implement must read the spec: the engine takes the spec path from the issue body
 
 Verify runs when the issue is labelled `needs-e2e`, the diff touches UI, or its Test cases table has a row with level `http` or `e2e`. With `testing.e2eFramework` false (default), `e2e` must rows are covered by Verify against the running app instead of committed tests; with true they need committed tests like any other row.
 
+### Plans and claims
+
+- **Claim** is a lock on the issue. If it already has an assignee or the in-progress / blocked label, it is skipped. Otherwise the run assigns itself, swaps ready for in-progress and posts a `<!-- devflow-claim id=... -->` comment, then reads all claim comments back: the earliest wins (ties by comment id). A loser deletes only its own comment and skips the issue ("claimed by <id>"). Branch creation is a separate step after a won claim.
+- **Plan** runs after Branch (and Integrate): a sonnet agent reads the spec and the code, and posts a plan on the issue as a comment starting with `<!-- devflow-plan -->` (edited in place on a re-run): files to change, tests per Test cases row, risks, order of commits, open questions. Nobody approves it. If the spec and the issue leave a behaviour question open, the plan is posted with those questions and the issue is blocked before any code is written. Otherwise Implement follows the plan and records deviations under assumptions.
+
+## Parallel work
+
+One ticket per session, each in its own git worktree, so sessions never share a working tree.
+
+- `/devflow:next-task #12 --isolated`: creates a worktree under `worktree.dir` (`git worktree add --detach` from `<remote>/<baseBranch>`), enters it, runs each `worktree.setup` command, then runs the workflow there. There is no start branch to restore and a detached HEAD is fine. Afterwards a worktree with no uncommitted changes and everything pushed is removed; otherwise it is kept and its path is reported. A fresh worktree needs its own setup (about 3 s for `make setup` on TaskBoard).
+- Claims: each run gets a `claimId` (timestamp, name, pid, random). Two sessions on the same issue race on the claim comments; one wins, the other skips. See Plans and claims. Every ticket gets its plan posted on the issue.
+- Lanes: `bin/devflow-lanes` groups issues that share a hotspot file (the `## Hotspots` list in the issue, exact path) or depend on each other (inside the set). A lane runs its issues in order, parents first, each stacked on the previous one's PR: `/devflow:next-task #a #b --chain`. Tasks that touch the same files therefore never run in parallel, so parallel lanes never conflict. Lanes beyond `dispatch.maxLanes` are deferred; a dependency cycle is kept in number order with a warning. If an issue of a lane does not ship (blocked, skipped, claimed elsewhere), the rest of the lane is skipped.
+- `/devflow:dispatch N`: lists the schedulable ready issues (issues waiting for an open dependency that has no PR and is not in the set are left out and listed), plans the lanes (`N` overrides `dispatch.maxLanes`), prints the plan, and starts one background session per lane: `claude --bg "/devflow:next-task #a #b --chain --isolated"`. If `claude --bg` fails, it prints the equivalent `claude -w lane-<n> "..."` commands to run in a terminal. It never merges.
+- Follow the sessions: `claude agents`, `claude logs <id>`, `claude attach <id>`.
+- Background sessions need a trusted workspace and cannot answer permission prompts, so the project needs allow rules (or an auto permission mode); `/devflow:init` offers them (see Permissions snippet).
+- Cleanup: finished worktrees remove themselves (above). A kept one: `git worktree remove <path>` after you have looked at it; `git worktree prune` for stale entries.
+
 ## Safety
 
 - Claude never merges. The plugin pushes only its own feature branches, never merges, never pushes to `baseBranch` or `protectedBranches`, and never force-pushes (except `--force-with-lease` on its own branch). `/devflow:sync` only adds commits and pushes normally.
@@ -73,7 +92,7 @@ Verify runs when the issue is labelled `needs-e2e`, the diff touches UI, or its 
 - All committed content is English. No `Co-Authored-By` or AI attribution is added unless the project's `CLAUDE.md` says otherwise.
 - Issues, PRs, comments and replies never contain the review bot's at-sign handle. Pushing new commits re-triggers the review, so no trigger comment is needed. The only place the handle appears is the mention-handler workflow `claude.yml`, whose trigger it is.
 
-Run the hook tests with `python3 -m unittest discover -s hooks -p 'test_*.py' -v` and the merge gate tests with `node --test tests/*.test.cjs`.
+Run the hook tests with `python3 -m unittest discover -s hooks -p 'test_*.py' -v` and the merge gate and lane planner tests with `node --test tests/*.test.cjs`.
 
 ## Permissions snippet
 
@@ -94,6 +113,7 @@ Merge into the project's `.claude/settings.json` so the workflow does not stop o
       "Bash(git push origin:*)",
       "Bash(git merge:*)",
       "Bash(git branch:*)",
+      "Bash(git worktree:*)",
       "Bash(git stash:*)",
       "Bash(curl:*)",
       "mcp__github__*"
@@ -106,11 +126,11 @@ Merge into the project's `.claude/settings.json` so the workflow does not stop o
 }
 ```
 
-The `mcp__github__*` pattern depends on how your GitHub MCP server is named; use the name shown by `/mcp`. Add each `checks[].run` command (for example `Bash(npm test:*)`). `git merge` is for `/devflow:sync` (merging the base into a PR branch; the guard hook still blocks merging PRs and pushes to protected branches). Use your remote's name instead of `origin` if it differs.
+The `mcp__github__*` pattern depends on how your GitHub MCP server is named; use the name shown by `/mcp`. Add each `checks[].run` command (for example `Bash(npm test:*)`). `git worktree` is for `--isolated` runs; also add each `worktree.setup` command and, for background sessions started by `/devflow:dispatch`, make sure everything above is allowed since they cannot answer prompts. `git merge` is for `/devflow:sync` (merging the base into a PR branch; the guard hook still blocks merging PRs and pushes to protected branches). Use your remote's name instead of `origin` if it differs.
 
 ## Out of scope
 
-Later waves: one ticket per session/worktree, dispatching tasks, a QA agent running in parallel with implementation, and `/devflow:answer`. Not planned: GitHub Projects board sync, uploading screenshots to PRs. Tasks still run sequentially in your checkout.
+Wave 3: a QA agent running in parallel with implementation, merged BA/QA questions, `/devflow:answer`, and updating the Flow Map (`docs/devflow-flows.html`). Not planned: GitHub Projects board sync, uploading screenshots to PRs. Within one session issues still run sequentially; parallelism is across sessions.
 
 ## License
 
