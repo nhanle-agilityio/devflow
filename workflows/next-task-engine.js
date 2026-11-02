@@ -135,7 +135,12 @@ const CLAIM_SCHEMA = {
 
 const BRANCH_SCHEMA = {
   type: 'object',
-  properties: { ok: { type: 'boolean' }, branch: { type: 'string' }, problem: { type: 'string' } },
+  properties: {
+    ok: { type: 'boolean' },
+    branch: { type: 'string' },
+    parentMerged: { type: 'boolean', description: 'true when the parent PR was already merged and the branch starts from the base' },
+    problem: { type: 'string' },
+  },
   required: ['ok', 'branch'],
 }
 
@@ -246,7 +251,13 @@ const REVIEW_SCHEMA = {
 
 const SHIP_SCHEMA = {
   type: 'object',
-  properties: { ok: { type: 'boolean' }, prNumber: { type: 'integer' }, url: { type: 'string' }, problem: { type: 'string' } },
+  properties: {
+    ok: { type: 'boolean' },
+    prNumber: { type: 'integer' },
+    url: { type: 'string' },
+    unstacked: { type: 'boolean', description: 'true when the parent PR was already merged and the PR targets the base' },
+    problem: { type: 'string' },
+  },
   required: ['ok', 'prNumber', 'url'],
 }
 
@@ -448,8 +459,9 @@ ${cfgJson}
 Steps, in order:
 1. Work out the branch name from branchPattern "${branchPattern}": {issue} = ${issue.number}; {type} = the value of the issue's "type:<type>" label if present, otherwise infer one of feat|fix|chore|docs|refactor|test from the title; {slug} = at most 5 words of the title, kebab-case, ASCII only, without the "[<slug>] T<n>:" prefix.
 2. Run \`git status --porcelain\`; it must be empty. If not, return ok=false with the problem.
-3. Run \`git fetch ${remote} ${fetchBranch}\` then \`git switch -c <branch> ${parentRef}\` (this also works from a detached HEAD). If the branch name already exists, return ok=false with the problem (do not reuse or delete it).
-Return the branch name you created. Do not touch GitHub.
+3. Run \`git fetch ${remote} ${fetchBranch}\` then \`git switch -c <branch> ${parentRef}\` (this also works from a detached HEAD). If the branch name already exists, return ok=false with the problem (do not reuse or delete it).${parents.length === 1 ? `
+   If the fetch fails because ${parents[0].branch} no longer exists on ${remote}, read PR #${parents[0].prNumber} with pull_request_read. Merged: its changes are in ${base}, so run \`git fetch ${remote} ${base}\` and \`git switch -c <branch> ${baseRef}\` instead and return parentMerged=true. Closed without merging: return ok=false with the problem.` : ''}
+Return the branch name you created. Do not change anything on GitHub.
 
 Issue title: ${issue.title}
 Issue labels: ${issue.labels.join(', ')}`
@@ -492,7 +504,7 @@ ${list}
 
 Steps:
 1. \`git fetch ${remote}\` (at least each parent branch above).
-2. For each parent in the order above run \`git merge --no-edit ${remote}/<branch>\`. Keep the default merge commit message. Never rebase, never force, never rewrite commits.
+2. For each parent in the order above run \`git merge --no-edit ${remote}/<branch>\`. If a parent branch no longer exists on ${remote}, read its PR with pull_request_read: merged means its changes are already in ${base}, so skip it (leave it out of merged); closed without merging means return ok=false with the problem. Keep the default merge commit message. Never rebase, never force, never rewrite commits.
 3. If a merge conflicts, resolve it using the linked issues and the spec so that the behaviour of BOTH parents survives; stage files by name and complete the merge with the default message. Do not change anything that is not needed to resolve the conflict.
 4. After all merges, run every configured check; fix only what the integration itself broke:
 ${checks}
@@ -661,7 +673,8 @@ Data:
 - ${riskLine}
 ${stacked ? `- Stacked on ${parentList(issue)}.\n` : ''}
 Steps:
-1. \`git push -u ${remote} ${branch}\`. Never push to ${base} or any protected branch; never force-push.
+1. \`git push -u ${remote} ${branch}\`. Never push to ${base} or any protected branch; never force-push.${parents.length === 1 ? `
+1b. Read PR #${parents[0].prNumber} with pull_request_read; it may have been merged (and its branch deleted) while this issue was built. Merged: its changes are in ${base}, so in steps 2 and 3 use base ${base}, leave out the stack line and do not add the "${labels.stacked}" label, and return unstacked=true. Closed without merging: stop and return ok=false with the problem.` : ''}
 2. Open a PR with head ${branch} and base ${prBase} in ${gh.owner}/${gh.repo}. Title: Conventional Commits style summary with scope "${scopeFor(issue)}", English, under 72 characters. Body as described, with a "Risk" section holding exactly this line: "${riskLine}"${stacked ? `, and the line "${stackLine}"` : ''}, ending with the line "Closes #${issue.number}". The body must not contain any at-sign mention of a bot or user, and no AI attribution.
 3. Label the new PR (a PR is an issue: use issue_write with the PR number; read its labels first, keep existing ones): ${prLabels.map((l) => '"' + l + '"').join(', ')}.
 4. On issue #${issue.number} add the label "${labels.review}" and remove "${labels.inProgress}" (keep other labels).${risk.escalation ? ` Also add "${labels.riskHigh}" to the issue and remove "${labels.riskLow}" (the change was escalated to high).` : ''}
@@ -813,6 +826,11 @@ async function runIssue(issue) {
     return block('Branch', (made && made.problem) || 'The branch agent failed or could not create the branch.')
   }
   branch = made.branch
+  // The parent PR merged (and its branch was deleted) before this issue started: its changes are in the base.
+  if (made.parentMerged && parentsOf(issue).length === 1) {
+    log(`#${issue.number}: parent PR #${parentsOf(issue)[0].prNumber} is already merged; starting from ${base}, not stacked.`)
+    issue.parents = []
+  }
 
   // Integrate: several open parents are merged into the branch before any work starts.
   if (parentsOf(issue).length > 1) {
@@ -949,13 +967,14 @@ async function runIssue(issue) {
     model: 'sonnet', // writes the PR body reviewers read; worth more than haiku
   })
   if (!ship || !ship.ok) return block('Ship', (ship && ship.problem) || 'The ship agent died.')
+  if (ship.unstacked) log(`#${issue.number}: parent PR merged while this issue was built; PR #${ship.prNumber} targets ${base}, not stacked.`)
   return {
     issue: issue.number,
     status: 'pr',
     url: ship.url,
     prNumber: ship.prNumber,
     risk: risk.level === 'unknown' ? 'high' : risk.level,
-    stackedOn: parentsOf(issue).map((p) => p.prNumber),
+    stackedOn: ship.unstacked ? [] : parentsOf(issue).map((p) => p.prNumber),
     branch,
   }
 }
