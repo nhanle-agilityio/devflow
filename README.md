@@ -53,7 +53,7 @@ Each issue and PR carries `labels.riskLow` or `labels.riskHigh`. The spec judges
 
 ### Review check
 
-`claude-code-review.yml` reviews each PR with Opus and publishes the commit status `devflow/review` (success or failure) from a hidden `devflow-verdict` marker that the review bot puts at the end of its summary comment (it carries the head SHA; only the bot's comment counts); a missing marker, or one for another SHA, is a failure. It re-runs on every push (`synchronize`), but when the only new commits are clean base merges made by GitHub's update-branch it carries the previous result over instead of reviewing again. The PR also gets one summary comment and inline comments; the review never approves or requests changes.
+`claude-code-review.yml` reviews each PR with Opus and publishes the commit status `devflow/review` (success or failure) from a hidden `devflow-verdict` marker that the review bot puts at the end of its summary comment (it carries the head SHA; only the bot's comment counts); a missing marker, or one for another SHA, is a failure. It re-runs on every push (`synchronize`), but when the only new commits are clean base merges made by GitHub's update-branch it carries the previous verdict over instead of reviewing again. Only a real verdict is carried (a pass, or "N critical, M warning"); a failure without a verdict, or a change to the review workflow itself in those commits, always gets a fresh review. The PR also gets one summary comment and inline comments; the review never approves or requests changes.
 
 ### Stacked PRs
 

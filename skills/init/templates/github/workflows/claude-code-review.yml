@@ -69,21 +69,34 @@ jobs:
               const latest = statuses.find((s) => s.context === 'devflow/review' && s.state !== 'pending');
               if (latest && ['success', 'failure'].includes(latest.state) &&
                   latest.creator?.login === 'github-actions[bot]') {
-                previous = { sha, state: latest.state };
+                previous = { sha, state: latest.state, description: latest.description || '' };
                 break;
               }
               // A status-less commit in between is fine only if it is itself a base merge.
               if (!isBaseMerge(commits[index])) break;
             }
+            // Only a real review verdict is carried over: a pass, or findings ("N critical, M warning").
+            // A failure without a verdict (e.g. "No verdict ...") is an infrastructure problem: review again.
+            const findings = previous && /\d+ critical, \d+ warning/.exec(previous.description);
+            const verdict = previous && (previous.state === 'success' || findings);
+            // A change to this workflow in the merged commits also needs a fresh review.
+            let workflowChanged = false;
+            if (verdict) {
+              const cmp = await github.rest.repos.compareCommitsWithBasehead({
+                ...context.repo, basehead: `${previous.sha}...${headSha}`,
+              });
+              workflowChanged = (cmp.data.files || []).some((f) => f.filename === '.github/workflows/claude-code-review.yml');
+            }
             let skip = false;
-            if (previous && commits.slice(index + 1).every(isBaseMerge)) {
+            if (verdict && !workflowChanged && commits.slice(index + 1).every(isBaseMerge)) {
               skip = true;
+              const what = previous.state === 'success' ? 'review passed' : findings[0];
               await github.rest.repos.createCommitStatus({
                 ...context.repo,
                 sha: headSha,
                 state: previous.state,
                 context: 'devflow/review',
-                description: `Carried over from ${previous.sha.slice(0, 7)}: only base merges since`,
+                description: `Carried over from ${previous.sha.slice(0, 7)} (${what}): only base merges since`,
                 target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
               });
             }
