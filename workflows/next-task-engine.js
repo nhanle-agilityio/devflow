@@ -1,7 +1,7 @@
 export const meta = {
   name: 'next-task-engine',
   description: 'Pick up ready GitHub issues one at a time: implement test-first, run checks, verify, review, and open a PR for each.',
-  whenToUse: 'Internal engine of /devflow:next-task; do not run it directly. Started by /devflow:next-task after preflight. Needs args: config (parsed .claude/devflow.json), limit, issues, startBranch, prTemplatePath, isolated, chain, claimId.',
+  whenToUse: 'Internal engine of /devflow:next-task; do not run it directly. Started by /devflow:next-task after preflight. Needs args: config (parsed .claude/devflow.json), limit, issues, startBranch, prTemplatePath, isolated, chain, claimId, ghCli.',
   phases: [
     { title: 'Select', detail: 'list ready issues, dependencies first' },
     { title: 'Implement', detail: 'claim, branch, plan on the issue, QA tests and the change in parallel, test commit first' },
@@ -52,21 +52,31 @@ const labels = Object.assign(
 const riskCfg = Object.assign({ highPaths: [] }, cfg.risk)
 const testingCfg = Object.assign({ e2eFramework: false }, cfg.testing)
 const nt = Object.assign({ defaultLimit: 3, maxFixRounds: 2, maxReviewRounds: 2, parallelQa: true }, cfg.nextTask)
-const verifyCfg = Object.assign({ modes: [], browserTool: 'playwright' }, cfg.verify)
+const verifyCfg = Object.assign({ modes: [], browserTool: 'playwright', lock: true }, cfg.verify)
 const branchPattern = cfg.branchPattern || '{type}/{issue}-{slug}'
 const startBranch = args.startBranch
 const isolated = args.isolated === true // own worktree: there is no start branch to return to
 const chain = args.chain === true // explicit issues are a lane: in order, each stacked on the previous one
 const claimId = String(args.claimId || 'run')
+const ghCli = args.ghCli !== false // false: the gh CLI is not installed, so the GitHub MCP server is the only way to GitHub
 const limit = args.limit || nt.defaultLimit
 const explicitIssues = Array.isArray(args.issues) ? args.issues : []
 const cfgJson = JSON.stringify(cfg, null, 2)
+
+// The marker a stage reports when GitHub cannot be reached; the run stops instead of blocking issue after issue.
+const MCP_DOWN = 'GitHub MCP unavailable'
+const mcpDown = (text) => String(text || '').indexOf(MCP_DOWN) !== -1
 
 const MCP_NOTE =
   'Use the GitHub MCP server for every GitHub operation (issues, labels, PRs, comments); load its tools with ToolSearch first ' +
   '(e.g. query "github issue", "github pull request"). Do not use the gh CLI unless the MCP server is unavailable. ' +
   'Issue labels are replaced as a whole by issue_write: read the issue first, then write the full new label list. ' +
-  'Adding a label that does not exist yet creates it.'
+  'Adding a label that does not exist yet creates it.' +
+  (ghCli
+    ? ''
+    : ' The gh CLI is not installed. If the GitHub MCP server is unavailable (its tools are missing or every call fails), do not look for other ways: stop and report the problem starting with exactly "' +
+      MCP_DOWN +
+      '".')
 
 // ---------------------------------------------------------------------------------------------
 // Schemas
@@ -120,6 +130,7 @@ const CLAIM_SCHEMA = {
   properties: {
     taken: { type: 'boolean', description: 'True when the issue already has an assignee or the in-progress / blocked label' },
     takenBy: { type: 'string' },
+    problem: { type: 'string' },
     claims: {
       type: 'array',
       description: 'Every devflow-claim comment on the issue after ours was posted',
@@ -139,6 +150,8 @@ const BRANCH_SCHEMA = {
     ok: { type: 'boolean' },
     branch: { type: 'string' },
     parentMerged: { type: 'boolean', description: 'true when the parent PR was already merged and the branch starts from the base' },
+    resumed: { type: 'boolean', description: 'true when the branch already had commits of this issue and the run continues on it' },
+    commits: { type: 'array', items: { type: 'string' }, description: 'When resumed: the commits already on the branch, "<sha> <message>"' },
     problem: { type: 'string' },
   },
   required: ['ok', 'branch'],
@@ -179,6 +192,15 @@ const IMPLEMENT_SCHEMA = {
     touchesUi: { type: 'boolean', description: 'True when the diff against the base branch changes user-facing UI' },
     blockedReason: { type: 'string' },
     specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
+    manualChecks: {
+      type: 'array',
+      description: 'Test cases rows that cannot be automated (manual or review checklist), checked by hand',
+      items: {
+        type: 'object',
+        properties: { rowId: { type: 'string' }, result: { enum: ['pass', 'fail', 'not-run'] }, evidence: { type: 'string' } },
+        required: ['rowId', 'result', 'evidence'],
+      },
+    },
   },
   required: ['status', 'summary', 'commits', 'filesChanged', 'assumptions', 'outOfScope', 'touchesUi', 'specRead'],
 }
@@ -368,6 +390,10 @@ function readSpec(impl, path) {
 const TEST_NAMING =
   'If the issue, the spec or the plan states a naming pattern for these tests (for example test_t1_<n>_<description>), name every test exactly by that pattern: no extra prefix, suffix or feature word. Otherwise name it test_t<task>_<n>_<description> (row T1.2 -> test_t1_2_...) or, where names cannot carry the id, add a short comment such as "# T1.2".'
 
+// Test cases rows no test can cover (a manual or review checklist) are still checked, by hand, and reported row by row.
+const MANUAL_RULE =
+  'For every "Test cases" row that cannot be an automated test (a manual or review checklist, for example a Makefile target or a README line), check it by hand now (in a scratch directory when it writes files, removed afterwards) and report it in manualChecks: rowId, result pass|fail|not-run, and the evidence (command and the relevant output). A "must" row may be not-run only when it truly cannot run here; say why in evidence.'
+
 // Answers from /devflow:answer live in the issue's "## Decisions" section and win over the spec.
 const DECISIONS_NOTE =
   'If the issue body has a "## Decisions" section, those decisions were made by a human after the spec was written: where they differ from the spec, the decisions win.'
@@ -518,7 +544,10 @@ ${cfgJson}
 Steps, in order:
 1. Work out the branch name from branchPattern "${branchPattern}": {issue} = ${issue.number}; {type} = the value of the issue's "type:<type>" label if present, otherwise infer one of feat|fix|chore|docs|refactor|test from the title; {slug} = at most 5 words of the title, kebab-case, ASCII only, without the "[<slug>] T<n>:" prefix.
 2. Run \`git status --porcelain\`; it must be empty. If not, return ok=false with the problem.
-3. Run \`git fetch ${remote} ${fetchBranch}\` then \`git switch -c <branch> ${parentRef}\` (this also works from a detached HEAD). If the branch name already exists: when \`git log ${parentRef}..<branch> --oneline\` is empty and \`git ls-remote --heads ${remote} <branch>\` prints nothing (an empty branch left over from a run blocked at Plan), recreate it with \`git switch -C <branch> ${parentRef}\`; otherwise return ok=false with the problem (do not reuse or delete it).${parents.length === 1 ? `
+3. Run \`git fetch ${remote} ${fetchBranch}\` then \`git switch -c <branch> ${parentRef}\` (this also works from a detached HEAD). Before creating it, check whether the branch already exists locally (\`git rev-parse --verify -q <branch>\`) or on ${remote} (\`git ls-remote --heads ${remote} <branch>\`).
+   - Exists with no commits of its own (\`git log ${parentRef}..<branch> --oneline\` empty) and not on ${remote}: an empty leftover from a run blocked at Plan; recreate it with \`git switch -C <branch> ${parentRef}\`.
+   - Exists with commits of its own whose messages use scope "${scopeFor(issue)}": an earlier run of this issue that was blocked after Plan. Continue on it: \`git switch <branch>\` (when it is only on ${remote}: \`git fetch ${remote} <branch>\` and \`git switch -c <branch> --track ${remote}/<branch>\`; when both exist and differ, use the ${remote} one only if the local one has no commits of its own beyond it, otherwise return ok=false), then \`git merge --no-edit ${parentRef}\`. If that merge conflicts, run \`git merge --abort\` and return ok=false with the conflicting files. Return resumed=true and commits = the lines of \`git log --oneline ${parentRef}..HEAD\` (merge commits excluded).
+   - Anything else (commits from another issue, or a dirty state): return ok=false with the problem; do not reuse or delete it.${parents.length === 1 ? `
    If the fetch fails because ${parents[0].branch} no longer exists on ${remote}, read PR #${parents[0].prNumber} with pull_request_read. Merged: its changes are in ${base}, so run \`git fetch ${remote} ${base}\` and \`git switch -c <branch> ${baseRef}\` instead and return parentMerged=true. Closed without merging: return ok=false with the problem.` : ''}
 Return the branch name you created. Do not change anything on GitHub.
 
@@ -603,10 +632,19 @@ Instructions:
    If the issue has a "Test cases" table (rows of the spec's test matrix), write a test for every row with priority "must" and make each traceable to its row id. ${TEST_NAMING} "should" rows are optional. If the issue has only a test plan, follow it.
    ${e2eRule(false)}
 4. Stage files by name only; never stage everything at once. Make small commits. Add no Co-Authored-By or AI attribution unless CLAUDE.md says otherwise.
+   ${MANUAL_RULE}${resumeNote(issue)}
 5. Stay inside the issue's scope. Anything else you notice goes into "outOfScope", unchanged in the code.
 6. If a requirement is ambiguous in a way that changes behaviour or a contract and the spec does not answer it, do NOT guess: return status "blocked" with blockedReason stating the question. For minor ambiguity, decide, and record the decision in "assumptions".
 7. Do not push, open a PR, or touch GitHub labels.
-Return: status, a short summary, the commits you made ("<sha> <message>"), files changed, assumptions, outOfScope, touchesUi (true when the diff against ${parentRef} changes user-facing UI), and specRead (${specPath ? `the spec path ${specPath}, exactly as you read it` : '"none"'}).`}`
+Return: status, a short summary, the commits you made ("<sha> <message>"), files changed, assumptions, outOfScope, touchesUi (true when the diff against ${parentRef} changes user-facing UI), specRead (${specPath ? `the spec path ${specPath}, exactly as you read it` : '"none"'}), and manualChecks ([] when there are no such rows).`}`
+}
+
+// A branch resumed from an earlier blocked run: the agent continues from those commits.
+const resumed = {}
+function resumeNote(issue) {
+  const r = resumed[issue.number]
+  if (!r) return ''
+  return `\n   This branch already has work from an earlier run of this issue that was blocked: ${JSON.stringify(r)}. Read it (\`git log -p ${parentRefFor(issue)}..HEAD\`), keep what still matches the spec, the issue and its Decisions, and change only what does not. A test that is already committed counts as the failing-test-first commit if it failed before its implementation; add a new failing test first for any new behaviour.`
 }
 
 // Dev half of a parallel Implement: the change only, no commits, hands off the QA files.
@@ -625,10 +663,10 @@ Instructions:
 3. Write the implementation in the files the plan gives to dev: ${JSON.stringify(own.devFiles)}. If you need another file, use it and say so in "assumptions", but never create, edit or delete any of the QA files above. Extra tests of your own are fine in files that are not QA files.
 4. Do NOT commit, stage or stash anything: the workflow commits the QA tests first and your change after them. Do not run git commands that change the working tree or the index.
 5. You may run the project's checks to see your own work, but do not edit anything to make a QA test pass; the QA tests may still be incomplete while you work.
-6. Stay inside the issue's scope. Anything else you notice goes into "outOfScope", unchanged in the code.
+6. Stay inside the issue's scope. Anything else you notice goes into "outOfScope", unchanged in the code. ${MANUAL_RULE}
 7. If a requirement is ambiguous in a way that changes behaviour or a contract and the spec and Decisions do not answer it, do NOT guess: return status "blocked" with blockedReason stating the question. For minor ambiguity, decide, and record the decision in "assumptions".
 8. Do not push, open a PR, or touch GitHub labels.
-Return: status, a short summary, commits = [], every file you changed, assumptions, outOfScope, touchesUi (true when your change, compared with ${parentRef}, changes user-facing UI), and specRead (${specPath ? `the spec path ${specPath}, exactly as you read it` : '"none"'}).`
+Return: status, a short summary, commits = [], every file you changed, assumptions, outOfScope, touchesUi (true when your change, compared with ${parentRef}, changes user-facing UI), specRead (${specPath ? `the spec path ${specPath}, exactly as you read it` : '"none"'}), and manualChecks ([] when there are no such rows).`
 }
 
 function qaPrompt(issue, branch, planText, own) {
@@ -725,10 +763,11 @@ Allowed modes: ${modes}.
 ${dev ? `Dev server: run \`${dev.run}\` in the background, then poll ${dev.url} until it answers (give up after ${dev.readyTimeoutSec || 60} seconds).` : 'No dev server is configured: set ran=false and explain in notes.'}
 
 Steps:
-1. Start the dev server in the background and wait until the URL answers.
+${verifyCfg.lock !== false ? `0. Take the verify lock first, so parallel sessions on this machine never run the dev server at the same time: \`mkdir "$(git rev-parse --git-common-dir)/devflow-verify.lock"\`. If it already exists, wait 10 seconds and try again, up to 10 minutes; a lock directory older than 30 minutes is stale: remove it and take it. If you still cannot take it, return ran=false with notes "verify lock busy".
+` : ''}1. Start the dev server in the background and wait until the URL answers.
 2. Walk EVERY acceptance criterion of the issue, and every "Test cases" row with level "http" or "e2e" if the issue has that table. mode "http": call the API with curl and compare status and body to the criterion. mode "browser": use ${browser} to navigate, act as the user, and read the page (accessibility tree or text) to check the visible result; take screenshots only for your own check. Use whichever allowed mode fits each criterion and report the mode(s) used.
 3. Record each step as action / expected / actual / pass.
-4. ALWAYS stop the dev server you started, also when a step fails, and make sure no process is left listening on its port.
+4. ALWAYS stop the dev server you started, also when a step fails, and make sure no process is left listening on its port.${verifyCfg.lock !== false ? ' Then ALWAYS remove the lock directory you took (rmdir), also when something failed.' : ''}
 5. Do not edit or commit any file, and do not push.
 If you cannot run verification at all (server never started, tool unavailable), return ran=false with the reason in notes; a failure of the code under test is ran=true with pass=false steps.`
 }
@@ -762,7 +801,8 @@ Review, in this order:
 Severity: critical = wrong behaviour / data loss / security / rule violation; warning = likely bug, missing test, scope creep; suggestion = optional improvement. Only report real problems with a file and line. verdict "pass" means no critical or warning findings.
 
 Implementation summary: ${state.summary}
-Assumptions recorded so far: ${JSON.stringify(state.assumptions)}`
+Assumptions recorded so far: ${JSON.stringify(state.assumptions)}
+Manual checks (rows checked by hand): ${JSON.stringify(state.manualChecks)}. A "must" Test cases row that is neither covered by a test nor in this list with result pass is a warning that names the row; a manual check with result fail is a warning too.`
 }
 
 function shipPrompt(issue, branch, state, risk) {
@@ -796,6 +836,7 @@ Data:
 - Files changed: ${JSON.stringify(state.filesChanged)}
 - Check result: all configured checks passed (${cfg.checks.map((c) => c.name).join(', ')})
 - Verification: ${state.verification ? JSON.stringify(state.verification) : 'Not run (not required for this issue)'}
+- Manual checks (put them in the Tests section as a table: row, result, evidence): ${JSON.stringify(state.manualChecks)}
 - Review notes (suggestions that were NOT applied): ${JSON.stringify(state.suggestions)}
 - Assumptions: ${JSON.stringify(state.assumptions)}
 - Out of scope: ${JSON.stringify(state.outOfScope)}
@@ -896,6 +937,10 @@ function merge(state, result) {
   state.assumptions = state.assumptions.concat(result.assumptions)
   state.outOfScope = state.outOfScope.concat(result.outOfScope)
   state.touchesUi = state.touchesUi || result.touchesUi
+  // A later check of the same row (after a fix) replaces the earlier one.
+  for (const m of Array.isArray(result.manualChecks) ? result.manualChecks : []) {
+    state.manualChecks = state.manualChecks.filter((x) => x.rowId !== m.rowId).concat([m])
+  }
 }
 
 function failedSteps(v) {
@@ -914,10 +959,20 @@ async function runIssue(issue) {
     touchesUi: false,
     verification: null,
     qaFiles: [],
+    manualChecks: [],
   }
   let branch = ''
+  // Facts the final report states as they happened (the skill prints them, nothing is inferred later).
+  const notes = []
+  const done = (r) => Object.assign(r, { notes })
 
   async function block(stage, reason, questions) {
+    // GitHub cannot be reached: no cleanup comment or label is possible; the run stops (see Main).
+    if (mcpDown(reason)) {
+      log(`#${issue.number} stopped at ${stage}: ${reason.split('\n')[0]}`)
+      notes.push(`stopped at ${stage}: GitHub could not be reached; the issue keeps its in-progress label and claim, clean them up with /devflow:doctor`)
+      return done({ issue: issue.number, status: 'blocked', reason: `${stage}: ${reason.split('\n')[0]}`, mcpDown: true })
+    }
     // A reason that is itself a tagged question (e.g. from a fix round) goes into the questions comment too.
     if (!questions && /^\[(BA|QA|Dev)\] /.test(reason)) questions = [reason]
     log(`#${issue.number} blocked at ${stage}: ${reason.split('\n')[0]}`)
@@ -927,7 +982,7 @@ async function runIssue(issue) {
       schema: BLOCKED_SCHEMA,
       model: 'haiku',
     })
-    return { issue: issue.number, status: 'blocked', reason: `${stage}: ${reason.split('\n')[0]}` }
+    return done({ issue: issue.number, status: 'blocked', reason: `${stage}: ${reason.split('\n')[0]}` })
   }
 
   // Claim: a lock on the issue, decided here from the claim comments the agent read back.
@@ -939,10 +994,11 @@ async function runIssue(issue) {
     model: 'haiku',
   })
   if (!claim) return block('Claim', 'The claim agent failed.')
+  if (claim.problem && mcpDown(claim.problem)) return block('Claim', claim.problem)
   if (claim.taken) {
     const by = claim.takenBy || 'assignee or label'
     log(`Skipped #${issue.number}: already claimed (${by}).`)
-    return { issue: issue.number, status: 'skipped', reason: `already claimed (${by})` }
+    return done({ issue: issue.number, status: 'skipped', reason: `already claimed (${by})` })
   }
   const claims = Array.isArray(claim.claims) ? claim.claims : []
   if (!claims.some((c) => c.claimId === claimId)) {
@@ -957,7 +1013,7 @@ async function runIssue(issue) {
       model: 'haiku',
     })
     log(`Skipped #${issue.number}: claimed by ${winner.claimId}.`)
-    return { issue: issue.number, status: 'skipped', reason: `claimed by ${winner.claimId}` }
+    return done({ issue: issue.number, status: 'skipped', reason: `claimed by ${winner.claimId}` })
   }
 
   // Branch
@@ -974,7 +1030,13 @@ async function runIssue(issue) {
   // The parent PR merged (and its branch was deleted) before this issue started: its changes are in the base.
   if (made.parentMerged && parentsOf(issue).length === 1) {
     log(`#${issue.number}: parent PR #${parentsOf(issue)[0].prNumber} is already merged; starting from ${base}, not stacked.`)
+    notes.push(`parent PR #${parentsOf(issue)[0].prNumber} was already merged before this issue started; branched from ${base}, not stacked`)
     issue.parents = []
+  }
+  if (made.resumed) {
+    resumed[issue.number] = Array.isArray(made.commits) ? made.commits : []
+    log(`#${issue.number}: resuming ${branch} with ${resumed[issue.number].length} earlier commit(s).`)
+    notes.push(`resumed branch ${branch} from an earlier blocked run (${resumed[issue.number].length} commit(s) kept)`)
   }
 
   // Integrate: several open parents are merged into the branch before any work starts.
@@ -1013,7 +1075,8 @@ async function runIssue(issue) {
 
   // Implement: QA tests and the change in parallel when the plan gives QA its own files, else one agent, test first.
   let impl
-  if (nt.parallelQa === true && own.qaFiles.length) {
+  // A resumed branch continues with one agent: the QA tests may already be committed there.
+  if (nt.parallelQa === true && own.qaFiles.length && !made.resumed) {
     state.qaFiles = own.qaFiles
     log(`#${issue.number}: QA writes ${own.qaFiles.join(', ')} while dev writes the change.`)
     const [qa, dev] = await parallel([
@@ -1043,6 +1106,9 @@ async function runIssue(issue) {
     if (!committed.failedFirst) {
       log(`#${issue.number}: the QA tests did not fail without the change (${committed.failureNote || 'no note'}).`)
       dev.assumptions = (dev.assumptions || []).concat([`QA tests did not fail before the implementation: ${committed.failureNote || 'no note'}`])
+      notes.push('the QA tests did not fail before the implementation (see the PR assumptions)')
+    } else {
+      notes.push('QA and dev ran in parallel; the test commit came first and failed without the change')
     }
     impl = Object.assign({}, dev, {
       commits: committed.commits,
@@ -1159,8 +1225,13 @@ async function runIssue(issue) {
     model: 'sonnet', // writes the PR body reviewers read; worth more than haiku
   })
   if (!ship || !ship.ok) return block('Ship', (ship && ship.problem) || 'The ship agent died.')
-  if (ship.unstacked) log(`#${issue.number}: parent PR merged while this issue was built; PR #${ship.prNumber} targets ${base}, not stacked.`)
-  return {
+  if (ship.unstacked) {
+    log(`#${issue.number}: parent PR merged while this issue was built; PR #${ship.prNumber} targets ${base}, not stacked.`)
+    notes.push(`parent PR #${parentsOf(issue)[0].prNumber} was merged while this issue was built; the PR targets ${base}, not stacked`)
+  }
+  const missingManual = state.manualChecks.filter((m) => m.result !== 'pass').map((m) => `${m.rowId} ${m.result}`)
+  if (missingManual.length) notes.push(`manual checks not passing: ${missingManual.join(', ')}`)
+  return done({
     issue: issue.number,
     status: 'pr',
     url: ship.url,
@@ -1168,7 +1239,7 @@ async function runIssue(issue) {
     risk: risk.level === 'unknown' ? 'high' : risk.level,
     stackedOn: ship.unstacked ? [] : parentsOf(issue).map((p) => p.prNumber),
     branch,
-  }
+  })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1200,7 +1271,12 @@ let worked = 0
 let previous = null // chain: the last issue worked on, {number, status}
 let lastShipped = null // chain: the last issue of the lane that shipped; the next one stacks on it
 
+let stopped = '' // set when GitHub cannot be reached: every remaining issue is skipped
 for (const issue of queue) {
+  if (stopped) {
+    report.push({ issue: issue.number, status: 'skipped', reason: stopped, notes: [] })
+    continue
+  }
   if (worked >= limit) {
     log(`Skipped #${issue.number}: over limit (${limit})`)
     report.push({ issue: issue.number, status: 'skipped', reason: `over limit (${limit})` })
@@ -1208,7 +1284,9 @@ for (const issue of queue) {
   }
   // Chain: an issue that did not ship does not stop the lane. The next one stacks on the last issue that
   // shipped, or starts from the base; only a real "Depends on" the failed issue skips it (resolved below).
+  const laneNotes = []
   if (chain && previous && previous.status !== 'pr') {
+    laneNotes.push(`the lane continued although #${previous.number} did not ship (${previous.status}); ${lastShipped ? `stacked on #${lastShipped}` : `started from ${base}`}`)
     log(`#${issue.number}: lane continues although #${previous.number} did not ship (${previous.status}); ${lastShipped ? `stacking on #${lastShipped}` : `starting from ${base}`}.`)
   }
   // Resolve parents selected in this run from the PRs they shipped.
@@ -1245,8 +1323,10 @@ for (const issue of queue) {
   try {
     result = await runIssue(issue)
   } catch (e) {
-    result = { issue: issue.number, status: 'blocked', reason: `Workflow error: ${e && e.message ? e.message : e}` }
+    result = { issue: issue.number, status: 'blocked', reason: `Workflow error: ${e && e.message ? e.message : e}`, notes: [] }
   }
+  result.notes = laneNotes.concat(result.notes || [])
+  if (result.mcpDown) stopped = `${MCP_DOWN}: the run stopped at #${issue.number}`
   status[issue.number] = result.status
   previous = { number: issue.number, status: result.status }
   if (result.status === 'pr') {
@@ -1259,5 +1339,5 @@ for (const issue of queue) {
 }
 
 phase('Report')
-log(report.map((r) => `#${r.issue}: ${r.status}${r.url ? ' ' + r.url : ''}${r.risk ? ' risk:' + r.risk : ''}${r.stackedOn && r.stackedOn.length ? ' stacked on ' + r.stackedOn.map((n) => '#' + n).join(', ') : ''}${r.reason ? ' (' + r.reason + ')' : ''}`).join('\n'))
+log(report.map((r) => `#${r.issue}: ${r.status}${r.url ? ' ' + r.url : ''}${r.risk ? ' risk:' + r.risk : ''}${r.stackedOn && r.stackedOn.length ? ' stacked on ' + r.stackedOn.map((n) => '#' + n).join(', ') : ''}${r.reason ? ' (' + r.reason + ')' : ''}${r.notes && r.notes.length ? ' [' + r.notes.join('; ') + ']' : ''}`).join('\n'))
 return report
