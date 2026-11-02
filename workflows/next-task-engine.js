@@ -4,7 +4,7 @@ export const meta = {
   whenToUse: 'Internal engine of /devflow:next-task; do not run it directly. Started by /devflow:next-task after preflight. Needs args: config (parsed .claude/devflow.json), limit, issues, startBranch, prTemplatePath, isolated, chain, claimId.',
   phases: [
     { title: 'Select', detail: 'list ready issues, dependencies first' },
-    { title: 'Implement', detail: 'claim, branch, plan on the issue, test first, then the change' },
+    { title: 'Implement', detail: 'claim, branch, plan on the issue, QA tests and the change in parallel, test commit first' },
     { title: 'Check', detail: 'run the configured checks, fix failures' },
     { title: 'Verify', detail: 'walk acceptance criteria against the dev server' },
     { title: 'Review', detail: 'read-only review of the diff, fix findings' },
@@ -51,7 +51,7 @@ const labels = Object.assign(
 )
 const riskCfg = Object.assign({ highPaths: [] }, cfg.risk)
 const testingCfg = Object.assign({ e2eFramework: false }, cfg.testing)
-const nt = Object.assign({ defaultLimit: 3, maxFixRounds: 2, maxReviewRounds: 2 }, cfg.nextTask)
+const nt = Object.assign({ defaultLimit: 3, maxFixRounds: 2, maxReviewRounds: 2, parallelQa: true }, cfg.nextTask)
 const verifyCfg = Object.assign({ modes: [], browserTool: 'playwright' }, cfg.verify)
 const branchPattern = cfg.branchPattern || '{type}/{issue}-{slug}'
 const startBranch = args.startBranch
@@ -155,10 +155,16 @@ const PLAN_SCHEMA = {
   properties: {
     status: { enum: ['ready', 'blocked'] },
     plan: { type: 'string', description: 'The plan in markdown, as posted on the issue' },
-    questions: { type: 'array', items: { type: 'string' }, description: 'Open questions the spec and issue do not answer' },
+    questions: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Open questions the spec and issue do not answer, each starting with "[BA] " or "[QA] "',
+    },
+    qaFiles: { type: 'array', items: { type: 'string' }, description: 'Test files that hold the tests for the Test cases rows (owned by the QA agent)' },
+    devFiles: { type: 'array', items: { type: 'string' }, description: 'Files the implementation changes (owned by the dev agent)' },
     specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
   },
-  required: ['status', 'plan', 'questions', 'specRead'],
+  required: ['status', 'plan', 'questions', 'qaFiles', 'devFiles', 'specRead'],
 }
 
 const IMPLEMENT_SCHEMA = {
@@ -175,6 +181,38 @@ const IMPLEMENT_SCHEMA = {
     specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
   },
   required: ['status', 'summary', 'commits', 'filesChanged', 'assumptions', 'outOfScope', 'touchesUi', 'specRead'],
+}
+
+const QA_SCHEMA = {
+  type: 'object',
+  properties: {
+    status: { enum: ['done', 'blocked'] },
+    tests: {
+      type: 'array',
+      description: 'One entry per test written',
+      items: {
+        type: 'object',
+        properties: { rowId: { type: 'string' }, test: { type: 'string' } },
+        required: ['rowId', 'test'],
+      },
+    },
+    filesChanged: { type: 'array', items: { type: 'string' } },
+    questions: { type: 'array', items: { type: 'string' }, description: 'Questions that block a test, each starting with "[QA] "' },
+    specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
+  },
+  required: ['status', 'tests', 'filesChanged', 'questions', 'specRead'],
+}
+
+const COMMIT_SCHEMA = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    commits: { type: 'array', items: { type: 'string' }, description: 'One "<sha> <message>" per commit, in order' },
+    failedFirst: { type: 'boolean', description: 'True when the QA tests failed with the implementation stashed' },
+    failureNote: { type: 'string', description: 'How the QA tests failed (or why they did not), a few lines' },
+    problem: { type: 'string' },
+  },
+  required: ['ok', 'commits', 'failedFirst'],
 }
 
 const INTEGRATE_SCHEMA = {
@@ -326,6 +364,23 @@ function readSpec(impl, path) {
   return String((impl && impl.specRead) || '').indexOf(path) !== -1
 }
 
+// Answers from /devflow:answer live in the issue's "## Decisions" section and win over the spec.
+const DECISIONS_NOTE =
+  'If the issue body has a "## Decisions" section, those decisions were made by a human after the spec was written: where they differ from the spec, the decisions win.'
+
+// Files in both lists. Paths are compared as written, without a leading "./".
+function overlap(a, b) {
+  const norm = (f) => String(f).trim().replace(/^\.\//, '')
+  const set = new Set((a || []).map(norm))
+  return Array.from(new Set((b || []).map(norm).filter((f) => set.has(f))))
+}
+
+function outside(files, allowed) {
+  const norm = (f) => String(f).trim().replace(/^\.\//, '')
+  const set = new Set((allowed || []).map(norm))
+  return (files || []).map(norm).filter((f) => !set.has(f))
+}
+
 // True when the issue body has a Test cases table row whose Level cell is "http" or "e2e".
 function hasHttpOrE2eRow(body) {
   return String(body || '')
@@ -459,7 +514,7 @@ ${cfgJson}
 Steps, in order:
 1. Work out the branch name from branchPattern "${branchPattern}": {issue} = ${issue.number}; {type} = the value of the issue's "type:<type>" label if present, otherwise infer one of feat|fix|chore|docs|refactor|test from the title; {slug} = at most 5 words of the title, kebab-case, ASCII only, without the "[<slug>] T<n>:" prefix.
 2. Run \`git status --porcelain\`; it must be empty. If not, return ok=false with the problem.
-3. Run \`git fetch ${remote} ${fetchBranch}\` then \`git switch -c <branch> ${parentRef}\` (this also works from a detached HEAD). If the branch name already exists, return ok=false with the problem (do not reuse or delete it).${parents.length === 1 ? `
+3. Run \`git fetch ${remote} ${fetchBranch}\` then \`git switch -c <branch> ${parentRef}\` (this also works from a detached HEAD). If the branch name already exists: when \`git log ${parentRef}..<branch> --oneline\` is empty and \`git ls-remote --heads ${remote} <branch>\` prints nothing (an empty branch left over from a run blocked at Plan), recreate it with \`git switch -C <branch> ${parentRef}\`; otherwise return ok=false with the problem (do not reuse or delete it).${parents.length === 1 ? `
    If the fetch fails because ${parents[0].branch} no longer exists on ${remote}, read PR #${parents[0].prNumber} with pull_request_read. Merged: its changes are in ${base}, so run \`git fetch ${remote} ${base}\` and \`git switch -c <branch> ${baseRef}\` instead and return parentMerged=true. Closed without merging: return ok=false with the problem.` : ''}
 Return the branch name you created. Do not change anything on GitHub.
 
@@ -469,6 +524,7 @@ Issue labels: ${issue.labels.join(', ')}`
 
 function planPrompt(issue, branch) {
   const specPath = specPathFor(issue)
+  const qaMode = nt.parallelQa === true
   const step1 = specPath
     ? `Before anything else run \`git show ${baseRef}:${specPath}\` and read the whole spec. Then read the issue's acceptance criteria. The spec and issue are the source of truth for expected behaviour, not the current code.`
     : `The issue links no spec, so the issue text is the contract. Read its acceptance criteria.`
@@ -480,12 +536,13 @@ ${cfgJson}
 ${issueBlock(issue)}
 
 Instructions:
-1. ${step1}
+1. ${step1} ${DECISIONS_NOTE}
 2. Read the project's CLAUDE.md and the code the change touches.
-3. Write the plan in markdown with sections: Files to change; Tests (one entry per "Test cases" row id, or per test-plan item; ${e2eRule(false)}); Risks; Order of commits (failing test first, then the implementation); Open questions (only if there are any).
-4. Post the plan on issue #${issue.number} as a comment whose first line is \`<!-- devflow-plan -->\`. If the issue already has a comment starting with that marker, edit it instead of adding another.
-5. If something the spec and the issue do not answer would change behaviour or a contract, return status "blocked" with those questions (still post the plan, with an "Open questions" section). Otherwise return status "ready" and questions = [].
-Return status, the plan text exactly as posted, questions, and specRead (${specPath ? `the spec path ${specPath}, exactly as you read it` : '"none"'}).`
+3. Work out file ownership.${qaMode ? ` The tests and the change are written in parallel by two agents: a QA agent writes the tests for the "Test cases" rows from the spec and the issue only, a dev agent writes the change. qaFiles = the test files that hold the Test cases tests (QA only); devFiles = every other file the change touches (dev only; dev may add extra tests, but only in files not in qaFiles). No file may be in both lists. When the issue has no Test cases rows that need an automated test (for example a docs-only checklist), qaFiles = [].` : ' qaFiles = []; devFiles = every file the change touches, tests included.'}
+4. Write the plan in markdown with sections: Files to change (mark each file QA or Dev); Tests (one entry per "Test cases" row id, or per test-plan item; ${e2eRule(false)}); Risks; Order of commits (failing test first, then the implementation); Open questions (only if there are any).
+5. Post the plan on issue #${issue.number} as a comment whose first line is \`<!-- devflow-plan -->\`. If the issue already has a comment starting with that marker, edit it instead of adding another.
+6. Look for open questions in two roles. BA: something the spec, the issue and its Decisions do not answer that would change behaviour or a contract. QA: a "Test cases" row that cannot be tested as written (no clear expected result, contradicts the acceptance criteria or another row). Start each question with "[BA] " or "[QA] ". If there is any, return status "blocked" with all of them (still post the plan, with an "Open questions" section). Otherwise return status "ready" and questions = [].
+Return status, the plan text exactly as posted, questions, qaFiles, devFiles, and specRead (${specPath ? `the spec path ${specPath}, exactly as you read it` : '"none"'}).`
 }
 
 function integratePrompt(issue, branch) {
@@ -512,7 +569,7 @@ ${checks}
 If you cannot resolve a conflict or the checks cannot be made to pass without a decision, run \`git merge --abort\` if a merge is in progress, leave nothing half-done, and return ok=false with the conflicting files and the question in problem. Do not push and do not touch GitHub labels.`
 }
 
-function implementPrompt(issue, branch, planText) {
+function implementPrompt(issue, branch, planText, own) {
   const parents = parentsOf(issue)
   const parentRef = parentRefFor(issue)
   const origin =
@@ -534,9 +591,9 @@ ${issueBlock(issue)}
 
 Plan (already posted on the issue). Follow this plan; if you must deviate, say why in "assumptions":
 ${planText}
-
+${own ? devModeBlock(issue, own) : `
 Instructions:
-1. ${step1}
+1. ${step1} ${DECISIONS_NOTE}
 2. Follow the project's CLAUDE.md for architecture, conventions and its "Never" list.
 3. For behaviour changes and bug fixes: first write and commit a failing test (\`test(${scopeFor(issue)}): ...\`), run it and confirm it fails for the right reason, then commit the implementation (\`feat|fix|chore|refactor(${scopeFor(issue)}): ...\`, pick the type that fits). For work without behaviour change (docs, config) one commit is fine. Use Conventional Commits in English.
    If the issue has a "Test cases" table (rows of the spec's test matrix), write a test for every row with priority "must" and make each traceable to its row id (in the test name, e.g. test_t1_2_..., or a short comment such as "# T1.2"). "should" rows are optional. If the issue has only a test plan, follow it.
@@ -545,7 +602,71 @@ Instructions:
 5. Stay inside the issue's scope. Anything else you notice goes into "outOfScope", unchanged in the code.
 6. If a requirement is ambiguous in a way that changes behaviour or a contract and the spec does not answer it, do NOT guess: return status "blocked" with blockedReason stating the question. For minor ambiguity, decide, and record the decision in "assumptions".
 7. Do not push, open a PR, or touch GitHub labels.
-Return: status, a short summary, the commits you made ("<sha> <message>"), files changed, assumptions, outOfScope, touchesUi (true when the diff against ${parentRef} changes user-facing UI), and specRead (${specPath ? `the spec path ${specPath}, exactly as you read it` : '"none"'}).`
+Return: status, a short summary, the commits you made ("<sha> <message>"), files changed, assumptions, outOfScope, touchesUi (true when the diff against ${parentRef} changes user-facing UI), and specRead (${specPath ? `the spec path ${specPath}, exactly as you read it` : '"none"'}).`}`
+}
+
+// Dev half of a parallel Implement: the change only, no commits, hands off the QA files.
+function devModeBlock(issue, own) {
+  const parentRef = parentRefFor(issue)
+  const specPath = specPathFor(issue)
+  const step1 = specPath
+    ? `Before anything else run \`git show ${baseRef}:${specPath}\` and read the whole spec. Then read the issue's acceptance criteria. The spec and issue are the source of truth for expected behaviour, not the current code.`
+    : `The issue links no spec, so the issue text is the contract. Read its acceptance criteria.`
+  return `
+You are the dev half of a parallel pair. A QA agent is writing the tests for the "Test cases" rows at the same time, in the same checkout, in these files: ${JSON.stringify(own.qaFiles)}.
+
+Instructions:
+1. ${step1} ${DECISIONS_NOTE}
+2. Follow the project's CLAUDE.md for architecture, conventions and its "Never" list.
+3. Write the implementation in the files the plan gives to dev: ${JSON.stringify(own.devFiles)}. If you need another file, use it and say so in "assumptions", but never create, edit or delete any of the QA files above. Extra tests of your own are fine in files that are not QA files.
+4. Do NOT commit, stage or stash anything: the workflow commits the QA tests first and your change after them. Do not run git commands that change the working tree or the index.
+5. You may run the project's checks to see your own work, but do not edit anything to make a QA test pass; the QA tests may still be incomplete while you work.
+6. Stay inside the issue's scope. Anything else you notice goes into "outOfScope", unchanged in the code.
+7. If a requirement is ambiguous in a way that changes behaviour or a contract and the spec and Decisions do not answer it, do NOT guess: return status "blocked" with blockedReason stating the question. For minor ambiguity, decide, and record the decision in "assumptions".
+8. Do not push, open a PR, or touch GitHub labels.
+Return: status, a short summary, commits = [], every file you changed, assumptions, outOfScope, touchesUi (true when your change, compared with ${parentRef}, changes user-facing UI), and specRead (${specPath ? `the spec path ${specPath}, exactly as you read it` : '"none"'}).`
+}
+
+function qaPrompt(issue, branch, planText, own) {
+  const specPath = specPathFor(issue)
+  const step1 = specPath
+    ? `Before anything else run \`git show ${baseRef}:${specPath}\` and read the whole spec. Then read the issue's acceptance criteria and its "Test cases" table.`
+    : `The issue links no spec, so the issue text is the contract. Read its acceptance criteria and its "Test cases" table.`
+  return `You are the QA half of a parallel pair for GitHub issue #${issue.number} on branch ${branch} (already checked out). A dev agent is writing the implementation at the same time, in the same checkout. ${MCP_NOTE}
+
+devflow config:
+${cfgJson}
+
+${issueBlock(issue)}
+
+Plan (already posted on the issue):
+${planText}
+
+Instructions:
+1. ${step1} ${DECISIONS_NOTE}
+2. Read the project's CLAUDE.md for how tests are written (fixtures, test layers, naming).
+3. Write a test for every "Test cases" row with priority "must" (and "should" rows when cheap), from the spec, the issue and its Decisions only: black box, against the public interface. Do not read or depend on the dev agent's uncommitted changes (do not run git diff or open files outside your own and the existing code). Make each test traceable to its row id (in the test name, e.g. test_t1_2_..., or a short comment such as "# T1.2"). ${e2eRule(false)}
+4. Only create or edit these files: ${JSON.stringify(own.qaFiles)}. Never touch any other file.
+5. Do NOT commit, stage or stash anything: the workflow commits your tests first. The tests are expected to fail until the change exists; you may run them to check they are collected and fail for the right reason (a missing behaviour, not a syntax or import error of your own).
+6. If a row cannot be tested as written (no clear expected result, contradicts the acceptance criteria or another row), do not invent the expectation: add a question starting with "[QA] " and return status "blocked". Otherwise questions = [].
+Return status, tests (row id and test name), filesChanged (the files you created or edited), questions, and specRead (${specPath ? `the spec path ${specPath}, exactly as you read it` : '"none"'}).`
+}
+
+function commitPrompt(issue, branch, own, qa, dev) {
+  const testCheck = cfg.checks.find((c) => /test/i.test(c.name)) || cfg.checks[0]
+  return `Commit the work on branch ${branch} for issue #${issue.number}: the QA tests first, then the implementation. Do not edit any file.
+
+QA files: ${JSON.stringify(qa.filesChanged)}
+Dev files: ${JSON.stringify(dev.filesChanged)}
+Tests written (row id -> test): ${JSON.stringify(qa.tests)}
+
+Steps, in order:
+1. \`git status --porcelain\`. Every changed or new file must be in one of the two lists; if not, return ok=false naming the extra files.
+2. Stage the QA files by name and commit them: \`test(${scopeFor(issue)}): <what the tests cover>\` (Conventional Commits, English, no AI attribution).
+3. Prove they fail without the implementation: \`git stash push -u -m devflow-red-${issue.number} -- <every dev file>\`, run \`${testCheck.run}\`, note how the QA tests fail, then \`git stash pop\`. If the stash pop does not restore every dev file cleanly, stop and return ok=false with the problem (the stash keeps the work). failedFirst = true only if at least one QA test failed because the behaviour is missing (not a syntax or collection error); describe it in failureNote.
+4. Stage the dev files by name and commit them with the type that fits (feat|fix|chore|refactor) and scope "${scopeFor(issue)}". Skip this commit only if the dev list is empty.
+5. \`git status --porcelain\` must be empty. Never push, never amend or rewrite a commit, never stage everything at once.
+Return ok, commits ("<sha> <message>", in order), failedFirst, failureNote.`
 }
 
 function checkPrompt() {
@@ -557,7 +678,11 @@ ${list}
 Report passed=true only if all of them exit 0. For each failing check return its name and the relevant trimmed output (the failing assertions / errors, at most about 60 lines; no passing noise). Do not edit any file and do not commit.`
 }
 
-function fixPrompt(issue, branch, why, details) {
+function fixPrompt(issue, branch, why, details, qaFiles) {
+  const qaRule =
+    qaFiles && qaFiles.length
+      ? `\n- These files hold the QA agent's tests for the Test cases rows: ${JSON.stringify(qaFiles)}. Do not edit them. If you are sure a QA test is wrong (it contradicts the spec, the issue or its Decisions), return status "blocked" with blockedReason starting with "[QA] " that names the test and the contradiction.`
+      : ''
   return `Fix problems on branch ${branch} for issue #${issue.number}. Reason: ${why}.
 
 devflow config:
@@ -570,9 +695,9 @@ ${details}
 
 Instructions:
 - Follow the project's CLAUDE.md. Fix the cause, not the symptom; never weaken or delete a test, and never edit acceptance criteria, to make something pass.
-- Stay inside the issue's scope. Record unrelated problems in "outOfScope" without changing them.
+- Stay inside the issue's scope. Record unrelated problems in "outOfScope" without changing them.${qaRule}
 - Commit with Conventional Commits in English, scope "${scopeFor(issue)}", staging files by name. Never rewrite existing commits. Do not push.
-- If you cannot fix it without a decision the spec does not make, return status "blocked" with blockedReason.
+- If you cannot fix it without a decision the spec does not make, return status "blocked" with blockedReason. ${DECISIONS_NOTE}
 Return the same structure as the implement stage; "commits" lists only the commits you made now. In "specRead" put the spec path if you read the spec (for example with \`git show ${baseRef}:<path>\`), otherwise "none".`
 }
 
@@ -682,7 +807,18 @@ Steps:
 Return the PR number and URL. If any step fails, return ok=false with the problem.`
 }
 
-function blockedPrompt(issue, branch, stage, reason) {
+function blockedPrompt(issue, branch, stage, reason, questions) {
+  const qs = questions || []
+  const questionsStep = qs.length
+    ? `3. Post the questions as one comment on issue #${issue.number}; if a comment starting with \`<!-- devflow-questions -->\` already exists, edit it instead. The body is exactly:
+<!-- devflow-questions -->
+**Open questions for #${issue.number}** (blocked at ${stage}${branch ? `, branch \`${branch}\`` : ''})
+
+${qs.map((q, i) => `${i + 1}. ${q}`).join('\n')}
+
+Answer with /devflow:answer #${issue.number}, or reply on this issue with numbered answers.
+(No at-sign mentions of bots.)`
+    : `3. Comment on issue #${issue.number}: the stage ("${stage}"), the reason, and the concrete question or decision a human must provide to unblock it${branch ? `, and the branch name ${branch}` : ''}. No at-sign mentions of bots.`
   return `Issue #${issue.number} is blocked at stage "${stage}". Clean up. ${MCP_NOTE}
 
 devflow config:
@@ -694,8 +830,8 @@ Branch: ${branch || '(none created)'}
 Steps, in order:
 1. Do not make any more code changes or commits. If uncommitted changes exist, leave them; do not discard anything.
 2. ${branch ? `If \`git log ${parentRefFor(issue)}..${branch} --oneline\` shows commits, push the branch so work is not lost: \`git push -u ${remote} ${branch}\` (never force, never push to ${base}).` : 'No branch to push.'}
-3. Comment on issue #${issue.number}: the stage ("${stage}"), the reason, and the concrete question or decision a human must provide to unblock it${branch ? `, and the branch name ${branch}` : ''}. No at-sign mentions of bots.
-4. On the issue add the label "${labels.blocked}" and remove "${labels.inProgress}" (keep other labels).
+${questionsStep}
+4. On the issue add the label "${labels.blocked}" and remove "${labels.inProgress}" (keep other labels). Delete the comment(s) whose body contains "<!-- devflow-claim id=${claimId} -->" (this run's claim; a later run claims again).
 5. ${isolated ? 'Stay on the branch; this checkout is a dedicated worktree, so do not switch branches or stash.' : `\`git switch ${startBranch}\` (if the working tree is dirty, use \`git stash push -u -m devflow-blocked-${issue.number}\` first and say so in note).`}
 Return whether the branch was pushed.`
 }
@@ -733,7 +869,7 @@ async function checkLoop(issue, branch, state) {
 
 async function runFix(issue, branch, state, why, details) {
   phase('Implement')
-  const fix = await agent(fixPrompt(issue, branch, why, details), {
+  const fix = await agent(fixPrompt(issue, branch, why, details, state.qaFiles), {
     label: `fix #${issue.number}`,
     phase: 'Implement',
     schema: IMPLEMENT_SCHEMA,
@@ -742,6 +878,8 @@ async function runFix(issue, branch, state, why, details) {
   if (!fix) return { ok: false, reason: `The fix agent died (${why}).` }
   if (fix.status === 'blocked') return { ok: false, reason: fix.blockedReason || `The fix agent reported blocked (${why}).` }
   merge(state, fix)
+  const touched = overlap(fix.filesChanged, state.qaFiles)
+  if (touched.length) return { ok: false, reason: `The fix changed QA test files ${touched.join(', ')}; QA tests are only changed by a human decision.` }
   return { ok: true, result: fix }
 }
 
@@ -771,12 +909,15 @@ async function runIssue(issue) {
     suggestions: [],
     touchesUi: false,
     verification: null,
+    qaFiles: [],
   }
   let branch = ''
 
-  async function block(stage, reason) {
+  async function block(stage, reason, questions) {
+    // A reason that is itself a tagged question (e.g. from a fix round) goes into the questions comment too.
+    if (!questions && /^\[(BA|QA|Dev)\] /.test(reason)) questions = [reason]
     log(`#${issue.number} blocked at ${stage}: ${reason.split('\n')[0]}`)
-    await agent(blockedPrompt(issue, branch, stage, reason), {
+    await agent(blockedPrompt(issue, branch, stage, reason, questions), {
       label: `blocked #${issue.number}`,
       phase: stage,
       schema: BLOCKED_SCHEMA,
@@ -857,20 +998,67 @@ async function runIssue(issue) {
   })
   if (!plan) return block('Plan', 'The plan agent died.')
   if (plan.status === 'blocked') {
-    return block('Plan', (plan.questions || []).join('; ') || 'The plan agent reported blocked without questions.')
+    const qs = plan.questions || []
+    return block('Plan', qs.join('; ') || 'The plan agent reported blocked without questions.', qs)
   }
   if (specPathForPlan && !readSpec(plan, specPathForPlan)) return block('Plan', `Plan did not read the spec ${specPathForPlan}`)
 
-  // Implement
-  const impl = await agent(implementPrompt(issue, branch, plan.plan), {
-    label: `implement #${issue.number}`,
-    phase: 'Implement',
-    schema: IMPLEMENT_SCHEMA,
-    model: 'sonnet',
-  })
-  if (!impl) return block('Implement', 'The implement agent died.')
-  merge(state, impl)
-  if (impl.status === 'blocked') return block('Implement', impl.blockedReason || 'The implement agent reported blocked without a reason.')
+  const own = { qaFiles: plan.qaFiles || [], devFiles: plan.devFiles || [] }
+  const shared = overlap(own.qaFiles, own.devFiles)
+  if (shared.length) return block('Plan', `Ownership overlap: ${shared.join(', ')} is planned for both the QA and the dev agent.`)
+
+  // Implement: QA tests and the change in parallel when the plan gives QA its own files, else one agent, test first.
+  let impl
+  if (nt.parallelQa === true && own.qaFiles.length) {
+    state.qaFiles = own.qaFiles
+    log(`#${issue.number}: QA writes ${own.qaFiles.join(', ')} while dev writes the change.`)
+    const [qa, dev] = await parallel([
+      () => agent(qaPrompt(issue, branch, plan.plan, own), { label: `qa #${issue.number}`, phase: 'Implement', schema: QA_SCHEMA, model: 'sonnet' }),
+      () => agent(implementPrompt(issue, branch, plan.plan, own), { label: `implement #${issue.number}`, phase: 'Implement', schema: IMPLEMENT_SCHEMA, model: 'sonnet' }),
+    ])
+    if (!qa) return block('Implement', 'The QA agent died.')
+    if (!dev) return block('Implement', 'The implement agent died.')
+    // Every open question, from both roles, goes into one comment and one block.
+    const questions = (qa.questions || []).slice()
+    if (dev.status === 'blocked') questions.push(`[Dev] ${dev.blockedReason || 'The implement agent reported blocked without a reason.'}`)
+    if (qa.status === 'blocked' && !(qa.questions || []).length) questions.push('[QA] The QA agent reported blocked without a question.')
+    if (questions.length) return block('Implement', questions.join('; '), questions)
+    const qaOut = outside(qa.filesChanged, own.qaFiles)
+    if (qaOut.length) return block('Implement', `The QA agent changed files outside its own: ${qaOut.join(', ')}.`)
+    const devIn = overlap(dev.filesChanged, own.qaFiles)
+    if (devIn.length) return block('Implement', `The dev agent changed QA test files: ${devIn.join(', ')}.`)
+    if (specPathForPlan && !readSpec(qa, specPathForPlan)) return block('Implement', `The QA agent did not read the spec ${specPathForPlan}`)
+
+    const committed = await agent(commitPrompt(issue, branch, own, qa, dev), {
+      label: `commit #${issue.number}`,
+      phase: 'Implement',
+      schema: COMMIT_SCHEMA,
+      model: 'haiku',
+    })
+    if (!committed || !committed.ok) return block('Implement', (committed && committed.problem) || 'The commit agent failed.')
+    if (!committed.failedFirst) {
+      log(`#${issue.number}: the QA tests did not fail without the change (${committed.failureNote || 'no note'}).`)
+      dev.assumptions = (dev.assumptions || []).concat([`QA tests did not fail before the implementation: ${committed.failureNote || 'no note'}`])
+    }
+    impl = Object.assign({}, dev, {
+      commits: committed.commits,
+      filesChanged: Array.from(new Set((qa.filesChanged || []).concat(dev.filesChanged || []))),
+    })
+    merge(state, impl)
+  } else {
+    impl = await agent(implementPrompt(issue, branch, plan.plan), {
+      label: `implement #${issue.number}`,
+      phase: 'Implement',
+      schema: IMPLEMENT_SCHEMA,
+      model: 'sonnet',
+    })
+    if (!impl) return block('Implement', 'The implement agent died.')
+    merge(state, impl)
+    if (impl.status === 'blocked') {
+      const reason = impl.blockedReason || 'The implement agent reported blocked without a reason.'
+      return block('Implement', reason, [`[Dev] ${reason}`])
+    }
+  }
 
   // The spec must have been read: one corrective fix, then block.
   const specPath = specPathFor(issue)
