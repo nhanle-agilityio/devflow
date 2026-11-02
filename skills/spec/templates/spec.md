@@ -66,7 +66,7 @@ One block per task. Rules:
 - Every task has a test plan. needs-e2e is "yes" when the task changes a user-visible flow that needs the running app to verify.
 - depends-on lists task ids; the issue creation step turns them into issue numbers.
 - Risk is low or high with a one-line reason, judged against risk.highWhen / risk.highPaths in the config. Unsure means high.
-- Hotspots: files likely to be touched by other tasks too (routes, registries, schema, shared config). Recorded only.
+- Hotspots: files likely to be touched by other tasks too (routes, registries, schema, shared config). `/devflow:dispatch` puts tasks sharing a hotspot in one lane.
 -->
 
 | Id | Title | Type | Area | Depends on | Size | Needs e2e | Risk | Risk reason |
