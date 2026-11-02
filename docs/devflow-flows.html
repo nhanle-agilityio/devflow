@@ -119,8 +119,9 @@ button.ctl.primary { background: var(--fg); color: var(--bg); border-color: var(
 @media (max-width: 760px) { .layers { grid-template-columns: 1fr; } }
 
 /* ---------- spec ---------- */
-.pipe { display: grid; grid-template-columns: 1fr 30px 1fr 30px 1fr 30px 1fr 30px 1fr; align-items: stretch; min-width: 880px; }
-.pipe > .conn { display: flex; align-items: center; }
+.pipe { display: flex; align-items: stretch; min-width: var(--mw, 880px); }
+.pipe > .node { flex: 1 1 0; min-width: 0; }
+.pipe > .conn { display: flex; align-items: center; flex: 0 0 30px; }
 .pipe > .conn .arrow { flex: 1; }
 .split { display: grid; grid-template-columns: 1.15fr 1fr; gap: 18px; }
 @media (max-width: 820px) { .split { grid-template-columns: 1fr; } }
@@ -151,10 +152,10 @@ button.ctl.primary { background: var(--fg); color: var(--bg); border-color: var(
 .pf.ok::before { content: "✓ "; }
 .engine-label { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .engine-label .js { font: 600 11px/1 var(--f-mono); color: var(--script); border: 1px solid var(--line); padding: 5px 8px; border-radius: 6px; }
-.track { display: grid; grid-template-columns: repeat(7, minmax(112px, 1fr)); column-gap: 26px; row-gap: 0; min-width: 920px; position: relative; }
+.track { display: grid; grid-template-columns: repeat(12, minmax(108px, 1fr)); column-gap: 26px; row-gap: 0; min-width: 1640px; position: relative; }
 .track .node { z-index: 1; }
 .track .node:not(:last-child)::before { content: ""; position: absolute; top: 50%; right: -27px; width: 26px; height: 2px; background: linear-gradient(90deg, var(--line), var(--muted)); }
-.loops { display: grid; grid-template-columns: repeat(7, minmax(112px, 1fr)); column-gap: 26px; min-width: 920px; margin-top: 10px; }
+.loops { display: grid; grid-template-columns: repeat(12, minmax(108px, 1fr)); column-gap: 26px; min-width: 1640px; margin-top: 10px; }
 .loop { grid-column: var(--col); border: 1.5px dashed color-mix(in srgb, var(--sonnet) 55%, transparent); border-radius: 0 0 12px 12px; border-top: none; padding: 14px 8px 8px; text-align: center; font: 500 11px/1.35 var(--f-mono); color: var(--muted); transition: all .3s; }
 .loop b { color: var(--sonnet); }
 .loop.on { color: var(--fg); border-color: var(--sonnet); background: color-mix(in srgb, var(--sonnet) 12%, transparent); }
@@ -177,7 +178,31 @@ button.ctl.primary { background: var(--fg); color: var(--bg); border-color: var(
 .log div { animation: pop .25s ease-out; }
 .log .k { color: var(--c, var(--fg)); }
 
-/* ---------- reviews ---------- */
+html[lang="en"] .node.skipped::after { content: "skipped"; }
+.node.script { --c: var(--script); }
+.lbl.rlow { --c: var(--out); } .lbl.rhigh { --c: var(--block); } .lbl.stk { --c: var(--opus); } .lbl.dvf { --c: var(--haiku); }
+.pf.no { color: var(--block); border-color: color-mix(in srgb, var(--block) 60%, transparent); }
+.pf.no::before { content: "✗ "; }
+.pf.cur { color: var(--fg); border-color: var(--fg); }
+.res.ship { border-color: color-mix(in srgb, var(--out) 60%, transparent); }
+.res.blk { border-color: color-mix(in srgb, var(--block) 60%, transparent); }
+.res.skp { opacity: .55; }
+.res.run { border-color: color-mix(in srgb, var(--sonnet) 60%, transparent); }
+.q-item.merged { border-color: var(--out); box-shadow: 0 0 16px color-mix(in srgb, var(--out) 25%, transparent); }
+.q-item.wait { border-color: var(--human); }
+.q-item.bad { border-color: var(--block); }
+.q-item .dep { overflow-wrap: anywhere; }
+.par { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 14px; }
+.par .node { flex: 1 1 200px; }
+.note { font: 400 12.5px/1.5 var(--f-mono); color: var(--muted); max-width: none; }
+.lanes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 820px) { .lanes { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 520px) { .lanes { grid-template-columns: 1fr; } }
+.bin.lane { --c: var(--sonnet); } .bin.def { --c: var(--skip); }
+.lblrow { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+.lblrow .item { display: flex; align-items: center; gap: 8px; font: 400 12.5px/1.4 var(--f-mono); color: var(--muted); }
+
+/* ---------- sync (was reviews) ---------- */
 .rv { display: grid; grid-template-columns: 1fr 1.4fr; gap: 18px; }
 @media (max-width: 820px) { .rv { grid-template-columns: 1fr; } }
 .threads { display: grid; gap: 8px; align-content: start; }
@@ -242,7 +267,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     </div>
   </div>
   <h1>devflow</h1>
-  <p class="lead" data-i18n="lead">Từ <b>ý tưởng</b> đến <b>PR chờ bạn merge</b>, theo hai luồng: <b>/devflow:spec</b> biến ý tưởng thành issue, <b>/devflow:next-task</b> biến issue thành PR. Bạn chỉ quyết định ở những ô màu cam.</p>
+  <p class="lead" data-i18n="lead">Từ <b>ý tưởng</b> đến <b>PR đã merge</b>, qua năm lệnh: <b>/devflow:spec</b>, <b>/devflow:next-task</b>, <b>/devflow:dispatch</b>, <b>/devflow:sync</b>, <b>/devflow:answer</b>. Mỗi task có mức risk; Claude không bao giờ merge. Bạn quyết định ở những ô màu cam.</p>
   <div class="legend" aria-label="Chú thích màu">
     <span class="chip" style="--c:var(--human)"><i></i>Bạn quyết định</span>
     <span class="chip" style="--c:var(--haiku)"><i></i>Claude Haiku · việc cơ học</span>
@@ -250,12 +275,16 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     <span class="chip" style="--c:var(--opus)"><i></i>Claude Opus · review</span>
     <span class="chip" style="--c:var(--out)"><i></i>Kết quả trên GitHub</span>
     <span class="chip" style="--c:var(--block)"><i></i>Blocked / bị chặn</span>
+    <span class="chip" style="--c:var(--skip)"><i></i>Bỏ qua</span>
   </div>
   <nav class="toc" aria-label="Mục lục">
     <a href="#overview">Toàn cảnh</a>
     <a href="#spec">/devflow:spec</a>
     <a href="#next">/devflow:next-task</a>
-    <a href="#reviews">/devflow:address-reviews</a>
+    <a href="#answer">/devflow:answer</a>
+    <a href="#merge">Merge gate</a>
+    <a href="#sync">/devflow:sync</a>
+    <a href="#dispatch">/devflow:dispatch</a>
     <a href="#labels">Vòng đời label</a>
     <a href="#guard">Guard hook</a>
   </nav>
@@ -267,7 +296,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     <div>
       <span class="eyebrow">Toàn cảnh</span>
       <h2>Một ý tưởng đi qua plugin như thế nào</h2>
-      <p class="muted">Chấm sáng là một ý tưởng đang di chuyển. Nó chỉ dừng lại chờ ở hai ô màu cam: merge spec và merge PR.</p>
+      <p class="muted">Chấm sáng là một ý tưởng đang di chuyển. Nó chỉ dừng lại chờ ở các ô màu cam: merge spec (Gate 1) và merge PR (Gate 2: merge gate với risk:low, bạn với risk:high).</p>
     </div>
   </div>
   <div class="canvas">
@@ -275,34 +304,37 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       <div class="lifecycle" id="lifecycle">
         <span class="packet" id="lc-packet" aria-hidden="true"></span>
         <div class="lc"><div class="node human"><span class="t">Ý tưởng</span><span class="s">bạn gõ /devflow:spec</span></div><div class="arrow"></div></div>
-        <div class="lc"><div class="node sonnet"><span class="badge">Claude</span><span class="t">Phân tích + grill</span><span class="s">hỏi đến hết mơ hồ</span></div><div class="arrow"></div></div>
-        <div class="lc"><div class="node human"><span class="badge">Gate 1</span><span class="t">Merge PR spec</span><span class="s">bạn duyệt thiết kế</span></div><div class="arrow"></div></div>
-        <div class="lc"><div class="node out"><span class="t">Issues</span><span class="s">label agent:ready</span></div><div class="arrow"></div></div>
-        <div class="lc"><div class="node sonnet"><span class="badge">Workflow</span><span class="t">next-task</span><span class="s">code · check · review</span></div><div class="arrow"></div></div>
-        <div class="lc"><div class="node out"><span class="t">Pull requests</span><span class="s">Closes #n</span></div><div class="arrow"></div></div>
-        <div class="lc"><div class="node human"><span class="badge">Gate 2</span><span class="t">Merge PR</span><span class="s">luôn là bạn</span></div></div>
+        <div class="lc"><div class="node sonnet"><span class="badge">Claude</span><span class="t">Spec + risk + QA</span><span class="s">grill, risk mỗi task, test matrix</span></div><div class="arrow"></div></div>
+        <div class="lc"><div class="node human"><span class="badge">Gate 1</span><span class="t">Merge PR spec</span><span class="s">duyệt thiết kế và mức risk</span></div><div class="arrow"></div></div>
+        <div class="lc"><div class="node out"><span class="t">Issues</span><span class="s">agent:ready + risk:low|high</span></div><div class="arrow"></div></div>
+        <div class="lc"><div class="node sonnet"><span class="badge">Workflow</span><span class="t">next-task</span><span class="s">claim · plan · QA∥Dev · review</span></div><div class="arrow"></div></div>
+        <div class="lc"><div class="node out"><span class="t">Pull requests</span><span class="s">devflow + risk label</span></div><div class="arrow"></div></div>
+        <div class="lc"><div class="node human"><span class="badge">Gate 2</span><span class="t">Merge PR</span><span class="s">risk:low → gate · risk:high → bạn</span></div></div>
       </div>
     </div>
     <div class="layers">
       <div class="layer">
         <span class="eyebrow">Dự án tự khai báo</span>
         <div class="node"><span class="t">CLAUDE.md</span><span class="s">luật: kiến trúc, convention, "Never"</span></div>
-        <div class="node"><span class="t">.claude/devflow.json</span><span class="s">cơ chế: base branch, checks, verify, labels</span></div>
+        <div class="node"><span class="t">.claude/devflow.json</span><span class="s">cơ chế: base branch, checks, risk, mergeGate, worktree, dispatch</span></div>
       </div>
       <div class="layer">
         <span class="eyebrow">Plugin devflow · dùng cho mọi dự án</span>
         <div class="row">
           <div class="node human"><span class="t">/devflow:init</span><span class="s">dò stack → sinh config (1 lần)</span></div>
-          <div class="node sonnet"><span class="t">/devflow:spec</span><span class="s">ý tưởng → spec → issues</span></div>
+          <div class="node sonnet"><span class="t">/devflow:spec</span><span class="s">ý tưởng → spec có risk → issues</span></div>
           <div class="node sonnet"><span class="t">/devflow:next-task</span><span class="s">issues → PRs (script JS)</span></div>
-          <div class="node sonnet"><span class="t">/devflow:address-reviews</span><span class="s">comment review → commit sửa</span></div>
+          <div class="node sonnet"><span class="t">/devflow:dispatch</span><span class="s">chia lane, một session nền mỗi lane</span></div>
+          <div class="node sonnet"><span class="t">/devflow:sync</span><span class="s">retarget, behind, conflict, review thread</span></div>
+          <div class="node sonnet"><span class="t">/devflow:answer</span><span class="s">trả lời câu hỏi, mở khoá issue</span></div>
         </div>
         <div class="node block"><span class="t">guard.py (hook)</span><span class="s">luôn bật · chặn merge, push vào branch bảo vệ, force push</span></div>
       </div>
       <div class="layer">
         <span class="eyebrow">GitHub (qua MCP)</span>
-        <div class="node out"><span class="t">Issues + labels</span><span class="s">trạng thái của từng task</span></div>
+        <div class="node out"><span class="t">Issues + labels</span><span class="s">trạng thái và risk của từng task</span></div>
         <div class="node out"><span class="t">Pull requests</span><span class="s">review bởi Action + bạn</span></div>
+        <div class="node out"><span class="t">Merge gate (Action)</span><span class="s">merge PR risk:low khi check xanh, chạy ngoài Claude</span></div>
       </div>
     </div>
   </div>
@@ -323,27 +355,31 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
   </div>
   <div class="canvas">
     <div class="scroll-x">
-      <div class="pipe" id="spec-pipe">
+      <div class="pipe" id="spec-pipe" style="--mw:1280px">
         <div class="node sonnet" data-step="0"><span class="badge">1 · Analyse</span><span class="t">Phân tích</span><span class="s">đọc CLAUDE.md, config, code liên quan</span></div>
         <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
         <div class="node sonnet" data-step="1"><span class="badge">2 · Grill</span><span class="t">grill-me</span><span class="s">mỗi câu hỏi kèm đáp án đề xuất</span></div>
         <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
-        <div class="node sonnet" data-step="2"><span class="badge">3 · Spec PR</span><span class="t">Spec + tasks</span><span class="s">spec/&lt;slug&gt; · docs/specs/*.md</span></div>
+        <div class="node sonnet" data-step="2"><span class="badge">3 · Spec</span><span class="t">Spec + tasks</span><span class="s">mỗi task: risk low|high + lý do + hotspots</span></div>
         <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
-        <div class="node human" data-step="3"><span class="badge">4 · Gate 1</span><span class="t">"Merge PR spec?"</span><span class="s">Claude hỏi đúng 1 câu</span></div>
+        <div class="node opus" data-step="3"><span class="badge">4 · QA · opus</span><span class="t">Test matrix</span><span class="s">agent QA chỉ đọc spec → các dòng Test cases</span></div>
         <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
-        <div class="node out" data-step="4"><span class="badge">5 · Issues</span><span class="t">Tạo issue</span><span class="s">theo thứ tự phụ thuộc</span></div>
+        <div class="node sonnet" data-step="4"><span class="badge">5 · Spec PR</span><span class="t">Mở PR spec</span><span class="s">spec/&lt;slug&gt; · docs/specs/*.md</span></div>
+        <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
+        <div class="node human" data-step="5"><span class="badge">6 · Gate 1</span><span class="t">"Merge PR spec?"</span><span class="s">merge = duyệt cả mức risk</span></div>
+        <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
+        <div class="node out" data-step="6"><span class="badge">7 · Issues</span><span class="t">Tạo issue</span><span class="s">label ready + risk, theo thứ tự phụ thuộc</span></div>
       </div>
     </div>
     <div class="split">
       <div class="panel">
         <h3><span class="dotc" id="spec-dot" style="--c:var(--sonnet)"></span><span id="spec-title">Bấm ▶ để xem từng bước</span></h3>
-        <p class="muted" id="spec-desc">Mỗi bước có một đầu ra cụ thể. Bước 4 là chốt chặn: issue chỉ được tạo sau khi bạn đã merge spec.</p>
+        <p class="muted" id="spec-desc">Mỗi bước có một đầu ra cụ thể. Bước 6 là chốt chặn: issue chỉ được tạo sau khi bạn đã merge spec.</p>
         <div class="chat" id="spec-chat" aria-live="polite"></div>
       </div>
       <div class="panel">
         <h3><span class="dotc" style="--c:var(--out)"></span>Issues trên GitHub</h3>
-        <div class="issues" id="spec-issues"><div class="empty">Chưa có issue. Chúng xuất hiện ở bước 5, sau Gate 1.</div></div>
+        <div class="issues" id="spec-issues"><div class="empty">Chưa có issue. Chúng xuất hiện ở bước 7, sau Gate 1.</div></div>
       </div>
     </div>
   </div>
@@ -355,7 +391,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     <div>
       <span class="eyebrow">Luồng 2 · bạn gọi ở local khi muốn</span>
       <h2>Issues → pull requests</h2>
-      <span class="cmd">/devflow:next-task 3</span>
+      <span class="cmd">/devflow:next-task 6</span>
     </div>
     <div class="controls">
       <button class="ctl primary" id="nt-play" type="button">▶ Chạy</button>
@@ -379,20 +415,33 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     </div>
     <div class="scroll-x">
       <div class="track" id="track">
-        <div class="node haiku" data-st="select"><span class="badge">haiku</span><span class="t">Select</span><span class="s">ready, đủ phụ thuộc, ≤ limit</span></div>
-        <div class="node haiku" data-st="claim"><span class="badge">haiku</span><span class="t">Claim</span><span class="s">label in-progress + branch</span></div>
-        <div class="node sonnet" data-st="impl"><span class="badge">sonnet</span><span class="t">Implement</span><span class="s">test fail trước → code</span></div>
+        <div class="node haiku" data-st="select"><span class="badge">haiku</span><span class="t">Select</span><span class="s">ready, parent đã có PR, ≤ limit</span></div>
+        <div class="node haiku" data-st="claim"><span class="badge">haiku</span><span class="t">Claim</span><span class="s">khoá bằng claim comment, sớm nhất thắng</span></div>
+        <div class="node haiku" data-st="branch"><span class="badge">haiku</span><span class="t">Branch</span><span class="s">chồng lên branch của PR cha</span></div>
+        <div class="node sonnet" data-st="integrate"><span class="badge">sonnet</span><span class="t">Integrate</span><span class="s">chỉ khi có nhiều parent: gộp parent</span></div>
+        <div class="node sonnet" data-st="plan"><span class="badge">sonnet</span><span class="t">Plan</span><span class="s">comment devflow-plan, không ai duyệt</span></div>
+        <div class="node sonnet" data-st="impl"><span class="badge">sonnet</span><span class="t">Implement</span><span class="s">QA ∥ Dev song song, hoặc 1 agent</span></div>
+        <div class="node haiku" data-st="commit"><span class="badge">haiku</span><span class="t">Commit</span><span class="s">test trước, xác nhận đỏ, rồi code</span></div>
         <div class="node haiku" data-st="check"><span class="badge">haiku</span><span class="t">Check</span><span class="s">chạy mọi lệnh trong checks</span></div>
         <div class="node sonnet" data-st="verify"><span class="badge">sonnet</span><span class="t">Verify</span><span class="s">curl / trình duyệt theo AC</span></div>
         <div class="node opus" data-st="review"><span class="badge">opus</span><span class="t">Review</span><span class="s">diff vs issue, spec, CLAUDE.md</span></div>
-        <div class="node out" data-st="ship"><span class="badge">sonnet</span><span class="t">Ship</span><span class="s">push + mở PR + label review</span></div>
+        <div class="node script" data-st="risk"><span class="badge">code</span><span class="t">Risk</span><span class="s">tất định, highPaths nâng lên high</span></div>
+        <div class="node out" data-st="ship"><span class="badge">sonnet</span><span class="t">Ship</span><span class="s">đọc lại PR cha · PR gắn devflow + risk</span></div>
       </div>
       <div class="loops">
-        <div class="loop" id="loop-check" style="--col:4"><b>↻ Fix (sonnet)</b><br>fail → sửa → check lại<br><span id="loop-check-n">tối đa 2 vòng</span></div>
-        <div class="loop" id="loop-verify" style="--col:5"><b>chỉ khi cần</b><br>needs-e2e hoặc đụng UI<br>1 vòng sửa</div>
-        <div class="loop" id="loop-review" style="--col:6"><b>↻ Fix (sonnet)</b><br>critical/warning → sửa<br><span id="loop-review-n">tối đa 2 vòng</span></div>
+        <div class="loop" id="loop-check" style="--col:8"><b>↻ Fix (sonnet)</b><br>fail → sửa → check lại<br><span id="loop-check-n">tối đa 2 vòng</span></div>
+        <div class="loop" id="loop-verify" style="--col:9"><b>chỉ khi cần</b><br>needs-e2e, đụng UI hoặc dòng http/e2e<br>1 vòng sửa</div>
+        <div class="loop" id="loop-review" style="--col:10"><b>↻ Fix (sonnet)</b><br>critical/warning → sửa<br><span id="loop-review-n">tối đa 2 vòng</span></div>
       </div>
     </div>
+    <div class="par" id="par">
+      <span class="eyebrow">Implement khi Plan có qaFiles</span>
+      <div class="node sonnet" id="par-qa"><span class="badge">sonnet</span><span class="t">QA agent</span><span class="s">viết test cho mọi dòng must, chỉ đọc spec + issue, chỉ sửa qaFiles</span></div>
+      <span class="mono muted" aria-hidden="true">∥</span>
+      <div class="node sonnet" id="par-dev"><span class="badge">sonnet</span><span class="t">Dev agent</span><span class="s">viết code, không sửa qaFiles, không commit</span></div>
+      <span class="note" id="par-note"></span>
+    </div>
+    <p class="note">Bị chặn ở bất kỳ stage nào: push branch (nếu có commit), comment lên issue, xoá claim comment của lần chạy, label agent:blocked.</p>
     <div class="nt-grid">
       <div class="queue" id="queue" aria-label="Hàng đợi issue"></div>
       <div class="outcomes">
@@ -401,17 +450,102 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
         <div class="bin skp"><h3>Bỏ qua</h3><div id="bin-skp" class="queue"></div></div>
       </div>
     </div>
-    <div class="log" id="nt-log" aria-live="polite"><div>Bấm ▶ để chạy kịch bản mẫu: 5 issue sẵn sàng, limit = 3.</div></div>
+    <div class="log" id="nt-log" aria-live="polite"><div>Bấm ▶ để chạy kịch bản mẫu: 6 issue sẵn sàng, limit = 6.</div></div>
   </div>
 </section>
 
-<!-- ================= REVIEWS ================= -->
-<section id="reviews">
+<!-- ================= ANSWER (merged questions) ================= -->
+<section id="answer">
   <div class="sec-head">
     <div>
-      <span class="eyebrow">Sau khi PR được mở</span>
-      <h2>Comment review → commit sửa → review lại</h2>
-      <span class="cmd">/devflow:address-reviews #41</span>
+      <span class="eyebrow">Khi issue bị chặn vì câu hỏi</span>
+      <h2>Câu hỏi gộp → bạn trả lời → issue sẵn sàng lại</h2>
+      <span class="cmd">/devflow:answer #38 1: all-or-nothing; 2: 400 with errors; 3: 100</span>
+    </div>
+    <div class="controls">
+      <button class="ctl primary" id="an-play" type="button">▶ Chạy</button>
+      <button class="ctl" id="an-reset" type="button">↺</button>
+    </div>
+  </div>
+  <div class="canvas">
+    <div class="scroll-x">
+      <div class="pipe" id="an-pipe" style="--mw:1180px">
+        <div class="node sonnet"><span class="badge">BA · QA · Dev</span><span class="t">Câu hỏi</span><span class="s">từ Plan, agent QA, agent Dev</span></div>
+        <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
+        <div class="node haiku"><span class="badge">1 comment</span><span class="t">Gộp + block</span><span class="s">devflow-questions, block đúng một lần</span></div>
+        <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
+        <div class="node human"><span class="badge">bạn</span><span class="t">/devflow:answer</span><span class="s">mỗi câu cần một đáp án</span></div>
+        <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
+        <div class="node sonnet"><span class="badge">docs</span><span class="t">PR spec nhỏ</span><span class="s">ghi vào spec, Refs #n, risk:low</span></div>
+        <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
+        <div class="node sonnet"><span class="badge">issue</span><span class="t">Mục Decisions</span><span class="s">ghi đè spec khi khác nhau</span></div>
+        <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
+        <div class="node out"><span class="badge">ready</span><span class="t">Sẵn sàng lại</span><span class="s">chạy next-task #n</span></div>
+      </div>
+    </div>
+    <div class="split">
+      <div class="panel">
+        <h3><span class="dotc" id="an-dot" style="--c:var(--sonnet)"></span><span id="an-title">Bấm ▶ để xem từng bước</span></h3>
+        <p class="muted" id="an-desc">Câu hỏi của mọi vai trò nằm trong một comment, nên bạn trả lời một lần thay vì bị hỏi nhiều lần.</p>
+        <div class="chat" id="an-chat" aria-live="polite"></div>
+      </div>
+      <div class="panel">
+        <h3><span class="dotc" style="--c:var(--out)"></span>Issue #38 trên GitHub</h3>
+        <div class="labels" id="an-labels"></div>
+        <div class="queue" id="an-items"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= MERGE GATE ================= -->
+<section id="merge">
+  <div class="sec-head">
+    <div>
+      <span class="eyebrow">Chạy ngoài Claude · Action với token riêng</span>
+      <h2>Merge: risk:low tự merge khi check xanh, risk:high chờ bạn</h2>
+      <p class="muted">Claude không bao giờ merge. Action devflow-merge-gate duyệt các PR gắn devflow, cũ nhất trước, và merge tối đa một PR mỗi lần chạy. Mặc định tắt, chạy thử (dryRun) trước.</p>
+    </div>
+    <div class="controls">
+      <button class="ctl primary" id="mg-play" type="button">▶ Chạy</button>
+      <button class="ctl" id="mg-reset" type="button">↺</button>
+    </div>
+  </div>
+  <div class="canvas">
+    <div class="engine-label">
+      <span class="eyebrow">Luật theo thứ tự, lỗi đầu tiên quyết định</span>
+      <span class="js">.github/scripts/devflow-merge-gate.cjs</span>
+    </div>
+    <div class="preflight" id="mg-rules">
+      <span class="pf">không phải draft, không blocked</span>
+      <span class="pf">có risk:low</span>
+      <span class="pf">base = baseBranch</span>
+      <span class="pf">Depends on đã đóng hết</span>
+      <span class="pf">mergeable</span>
+      <span class="pf">không behind</span>
+      <span class="pf">check bắt buộc xanh</span>
+      <span class="pf">không còn thread chưa trả lời</span>
+    </div>
+    <div class="rv">
+      <div class="panel">
+        <h3><span class="dotc" style="--c:var(--out)"></span>PR gắn devflow</h3>
+        <div class="queue" id="mg-prs"></div>
+      </div>
+      <div class="panel">
+        <h3><span class="dotc" style="--c:var(--human)"></span>Run summary</h3>
+        <div class="log" id="mg-log" aria-live="polite"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= SYNC ================= -->
+<section id="sync">
+  <div class="sec-head">
+    <div>
+      <span class="eyebrow">Sau khi PR được mở · giữ PR luôn merge được</span>
+      <h2>Retarget, cập nhật, conflict, review thread</h2>
+      <span class="cmd">/devflow:sync #41</span>
     </div>
     <div class="controls">
       <button class="ctl primary" id="rv-play" type="button">▶ Chạy</button>
@@ -419,6 +553,12 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     </div>
   </div>
   <div class="canvas">
+    <div class="preflight" id="sy-steps">
+      <span class="pf">1 · retarget về base khi PR cha đã merge</span>
+      <span class="pf">2 · cập nhật branch nếu behind</span>
+      <span class="pf">3 · conflict → merge commit, không rebase</span>
+      <span class="pf">4 · review thread</span>
+    </div>
     <div class="rv">
       <div class="panel">
         <h3><span class="dotc" style="--c:var(--haiku)"></span>Thread chưa xử lý trên PR #41</h3>
@@ -432,12 +572,37 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
           <div class="bin skp"><h3>Không sửa</h3><div class="queue" id="rb-wont"></div></div>
         </div>
         <div class="rounds">
-          <span class="trigger" id="rv-trigger">@claude review again</span>
+          <span class="trigger" id="rv-trigger">push → review tự chạy lại</span>
           <span>vòng</span><span class="pip" id="pip1"></span><span class="pip" id="pip2"></span>
           <span id="rv-note">tối đa 2 vòng, sau đó báo bạn</span>
         </div>
       </div>
     </div>
+  </div>
+</section>
+
+<!-- ================= DISPATCH ================= -->
+<section id="dispatch">
+  <div class="sec-head">
+    <div>
+      <span class="eyebrow">Song song giữa các session · mỗi session một git worktree</span>
+      <h2>Chia lane, mỗi lane một session nền</h2>
+      <span class="cmd">/devflow:dispatch 3</span>
+    </div>
+    <div class="controls">
+      <button class="ctl primary" id="dp-play" type="button">▶ Chạy</button>
+      <button class="ctl" id="dp-reset" type="button">↺</button>
+    </div>
+  </div>
+  <div class="canvas">
+    <div class="engine-label">
+      <span class="eyebrow">Lane planner</span>
+      <span class="js">bin/devflow-lanes · chung hotspot hoặc Depends on thì chung lane</span>
+    </div>
+    <div class="issues" id="dp-pool" aria-label="Issue sẵn sàng"></div>
+    <div class="lanes" id="dp-lanes"></div>
+    <div class="log" id="dp-log" aria-live="polite"></div>
+    <p class="note">Nếu claude --bg lỗi, dispatch dừng và in lệnh claude -w lane-&lt;n&gt; tương đương để bạn chạy trong terminal. Theo dõi bằng claude agents, claude logs, claude attach.</p>
   </div>
 </section>
 
@@ -447,7 +612,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     <div>
       <span class="eyebrow">Trạng thái = label</span>
       <h2>Vòng đời của một issue</h2>
-      <p class="muted">Nhìn label là biết agent đang ở đâu, không cần board riêng. Tên label đổi được trong devflow.json.</p>
+      <p class="muted">Nhìn label là biết agent đang ở đâu, không cần board riêng. Tên label đổi được trong devflow.json. PR risk:low do merge gate đóng, risk:high do bạn đóng.</p>
     </div>
   </div>
   <div class="canvas">
@@ -465,11 +630,17 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
         <g class="st" id="s0"><rect x="10" y="42" width="140" height="56" rx="10" fill="#16241f" stroke="#3fbf8e" stroke-width="1.5"/><text x="80" y="66" text-anchor="middle" fill="#e6e9ef" font-size="14" font-weight="600">agent:ready</text><text x="80" y="86" text-anchor="middle" fill="#8e97a8" font-size="11">/spec tạo ra</text></g>
         <g class="st" id="s1"><rect x="230" y="42" width="160" height="56" rx="10" fill="#1f1c33" stroke="#a08bff" stroke-width="1.5"/><text x="310" y="66" text-anchor="middle" fill="#e6e9ef" font-size="14" font-weight="600">agent:in-progress</text><text x="310" y="86" text-anchor="middle" fill="#8e97a8" font-size="11">Claim</text></g>
         <g class="st" id="s2"><rect x="470" y="42" width="160" height="56" rx="10" fill="#132630" stroke="#45c4dc" stroke-width="1.5"/><text x="550" y="66" text-anchor="middle" fill="#e6e9ef" font-size="14" font-weight="600">agent:review</text><text x="550" y="86" text-anchor="middle" fill="#8e97a8" font-size="11">Ship mở PR</text></g>
-        <g class="st" id="s3"><rect x="710" y="42" width="160" height="56" rx="10" fill="#2a1f14" stroke="#f2913d" stroke-width="1.5"/><text x="790" y="66" text-anchor="middle" fill="#e6e9ef" font-size="14" font-weight="600">closed</text><text x="790" y="86" text-anchor="middle" fill="#8e97a8" font-size="11">bạn merge PR</text></g>
+        <g class="st" id="s3"><rect x="710" y="42" width="160" height="56" rx="10" fill="#2a1f14" stroke="#f2913d" stroke-width="1.5"/><text x="790" y="66" text-anchor="middle" fill="#e6e9ef" font-size="14" font-weight="600">closed</text><text x="790" y="86" text-anchor="middle" fill="#8e97a8" font-size="11">merge gate hoặc bạn</text></g>
         <g class="st" id="s4"><rect x="240" y="162" width="140" height="56" rx="10" fill="#2c1717" stroke="#f0625f" stroke-width="1.5"/><text x="310" y="186" text-anchor="middle" fill="#e6e9ef" font-size="14" font-weight="600">agent:blocked</text><text x="310" y="206" text-anchor="middle" fill="#8e97a8" font-size="11">+ comment câu hỏi</text></g>
-        <text x="410" y="196" fill="#8e97a8" font-size="12">kẹt ở bất kỳ bước nào → branch vẫn được push, không mất công</text>
-        <text x="20" y="232" fill="#8e97a8" font-size="12">bạn trả lời câu hỏi, gắn lại agent:ready → issue quay lại hàng đợi</text>
+        <text x="410" y="196" fill="#8e97a8" font-size="12">kẹt ở bất kỳ stage nào → branch vẫn được push, không mất công</text>
+        <text x="20" y="232" fill="#8e97a8" font-size="12">/devflow:answer ghi đáp án rồi đặt lại agent:ready → issue quay lại hàng đợi</text>
       </svg>
+    </div>
+    <div class="lblrow">
+      <span class="item"><span class="lbl rlow">risk:low</span><span class="lbl rhigh">risk:high</span>trên issue (từ spec) và trên PR; không có label thì tính là high</span>
+      <span class="item"><span class="lbl dvf">devflow</span>trên mọi PR do plugin mở</span>
+      <span class="item"><span class="lbl stk">stacked</span>PR dựa trên PR devflow khác</span>
+      <span class="item"><span class="lbl e2e">needs-e2e</span>bắt Verify chạy</span>
     </div>
   </div>
 </section>
@@ -513,8 +684,8 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
   const t = (vi, en) => (lang === 'vi' ? vi : en);
   const BLOCKS = {
     lead: {
-      vi: 'Từ <b>ý tưởng</b> đến <b>PR chờ bạn merge</b>, theo hai luồng: <b>/devflow:spec</b> biến ý tưởng thành issue, <b>/devflow:next-task</b> biến issue thành PR. Bạn chỉ quyết định ở những ô màu cam.',
-      en: 'From an <b>idea</b> to a <b>PR waiting for your merge</b>, in two flows: <b>/devflow:spec</b> turns an idea into issues, <b>/devflow:next-task</b> turns issues into PRs. You only decide at the orange boxes.',
+      vi: 'Từ <b>ý tưởng</b> đến <b>PR đã merge</b>, qua năm lệnh: <b>/devflow:spec</b>, <b>/devflow:next-task</b>, <b>/devflow:dispatch</b>, <b>/devflow:sync</b>, <b>/devflow:answer</b>. Mỗi task có mức risk; Claude không bao giờ merge. Bạn quyết định ở những ô màu cam.',
+      en: 'From an <b>idea</b> to a <b>merged PR</b>, through five commands: <b>/devflow:spec</b>, <b>/devflow:next-task</b>, <b>/devflow:dispatch</b>, <b>/devflow:sync</b>, <b>/devflow:answer</b>. Every task carries a risk level; Claude never merges. You decide at the orange boxes.',
     },
   };
   const EN = {
@@ -600,9 +771,88 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     'Đang chờ lệnh…': 'Waiting for a command…',
     'devflow · plugin Claude Code · cài bằng': 'devflow · Claude Code plugin · install with',
     'Kịch bản trên trang là ví dụ minh hoạ dựa trên TaskBoard (số issue và PR là giả định).': 'The scenarios on this page are illustrative examples based on TaskBoard (issue and PR numbers are made up).',
+    'Chấm sáng là một ý tưởng đang di chuyển. Nó chỉ dừng lại chờ ở các ô màu cam: merge spec (Gate 1) và merge PR (Gate 2: merge gate với risk:low, bạn với risk:high).': 'The glowing dot is an idea on the move. It only waits at the orange boxes: merging the spec (Gate 1) and merging the PR (Gate 2: the merge gate for risk:low, you for risk:high).',
+    'grill, risk mỗi task, test matrix': 'grill, risk per task, test matrix',
+    'duyệt thiết kế và mức risk': 'you approve the design and the risk levels',
+    'risk:low → gate · risk:high → bạn': 'risk:low → gate · risk:high → you',
+    'cơ chế: base branch, checks, risk, mergeGate, worktree, dispatch': 'mechanics: base branch, checks, risk, mergeGate, worktree, dispatch',
+    'ý tưởng → spec có risk → issues': 'idea → spec with risk → issues',
+    'chia lane, một session nền mỗi lane': 'splits into lanes, one background session per lane',
+    'trả lời câu hỏi, mở khoá issue': 'answers the questions, unblocks the issue',
+    'trạng thái và risk của từng task': 'the state and risk of each task',
+    'merge PR risk:low khi check xanh, chạy ngoài Claude': 'merges risk:low PRs when checks are green, runs outside Claude',
+    'mỗi task: risk low|high + lý do + hotspots': 'each task: risk low|high + reason + hotspots',
+    'agent QA chỉ đọc spec → các dòng Test cases': 'a QA agent reads only the spec → Test cases rows',
+    'Mở PR spec': 'Open the spec PR',
+    'merge = duyệt cả mức risk': 'merging = approving the risk levels',
+    'label ready + risk, theo thứ tự phụ thuộc': 'ready + risk labels, in dependency order',
+    'Bấm ▶ để xem từng bước': 'Press ▶ to step through',
+    'Mỗi bước có một đầu ra cụ thể. Bước 6 là chốt chặn: issue chỉ được tạo sau khi bạn đã merge spec.': 'Every step has a concrete output. Step 6 is the gate: issues are created only after you merge the spec.',
+    'Chưa có issue. Chúng xuất hiện ở bước 7, sau Gate 1.': 'No issues yet. They appear at step 7, after Gate 1.',
+    'ready, parent đã có PR, ≤ limit': 'ready, parents have PRs, ≤ limit',
+    'khoá bằng claim comment, sớm nhất thắng': 'lock via claim comments, earliest wins',
+    'chồng lên branch của PR cha': 'stacked on the parent PR branch',
+    'chỉ khi có nhiều parent: gộp parent': 'only with several parents: merges them',
+    'comment devflow-plan, không ai duyệt': 'devflow-plan comment, nobody approves',
+    'QA ∥ Dev song song, hoặc 1 agent': 'QA ∥ Dev in parallel, or 1 agent',
+    'test trước, xác nhận đỏ, rồi code': 'tests first, confirm red, then code',
+    'tất định, highPaths nâng lên high': 'deterministic, highPaths escalate to high',
+    'đọc lại PR cha · PR gắn devflow + risk': 're-reads parent PR · PR labelled devflow + risk',
+    'needs-e2e, đụng UI hoặc dòng http/e2e': 'needs-e2e, UI touched or an http/e2e row',
+    'Implement khi Plan có qaFiles': 'Implement when Plan returns qaFiles',
+    'viết test cho mọi dòng must, chỉ đọc spec + issue, chỉ sửa qaFiles': 'writes tests for every must row, reads only spec + issue, edits only qaFiles',
+    'viết code, không sửa qaFiles, không commit': 'writes the code, never edits qaFiles, does not commit',
+    'Bị chặn ở bất kỳ stage nào: push branch (nếu có commit), comment lên issue, xoá claim comment của lần chạy, label agent:blocked.': 'Blocked at any stage: pushes the branch (if it has commits), comments on the issue, deletes the run claim comment, labels agent:blocked.',
+    'Bấm ▶ để chạy kịch bản mẫu: 6 issue sẵn sàng, limit = 6.': 'Press ▶ to run the sample scenario: 6 ready issues, limit = 6.',
+    'Khi issue bị chặn vì câu hỏi': 'When an issue is blocked on questions',
+    'Câu hỏi gộp → bạn trả lời → issue sẵn sàng lại': 'Merged questions → you answer → the issue is ready again',
+    'Câu hỏi': 'Questions',
+    'từ Plan, agent QA, agent Dev': 'from Plan, the QA agent, the Dev agent',
+    'Gộp + block': 'Merge + block',
+    'devflow-questions, block đúng một lần': 'devflow-questions, blocked exactly once',
+    'bạn': 'you',
+    'mỗi câu cần một đáp án': 'every question needs an answer',
+    'PR spec nhỏ': 'Small spec PR',
+    'ghi vào spec, Refs #n, risk:low': 'recorded in the spec, Refs #n, risk:low',
+    'Mục Decisions': 'Decisions section',
+    'ghi đè spec khi khác nhau': 'overrides the spec where they differ',
+    'Sẵn sàng lại': 'Ready again',
+    'chạy next-task #n': 'run next-task #n',
+    'Câu hỏi của mọi vai trò nằm trong một comment, nên bạn trả lời một lần thay vì bị hỏi nhiều lần.': 'Questions from every role go into one comment, so you answer once instead of being asked several times.',
+    'Issue #38 trên GitHub': 'Issue #38 on GitHub',
+    'Chạy ngoài Claude · Action với token riêng': 'Runs outside Claude · an Action with its own token',
+    'Merge: risk:low tự merge khi check xanh, risk:high chờ bạn': 'Merge: risk:low merges itself when checks are green, risk:high waits for you',
+    'Claude không bao giờ merge. Action devflow-merge-gate duyệt các PR gắn devflow, cũ nhất trước, và merge tối đa một PR mỗi lần chạy. Mặc định tắt, chạy thử (dryRun) trước.': 'Claude never merges. The devflow-merge-gate Action walks the PRs labelled devflow, oldest first, and merges at most one PR per run. It is off by default and starts as a dry run.',
+    'Luật theo thứ tự, lỗi đầu tiên quyết định': 'Rules in order, the first failure decides',
+    'không phải draft, không blocked': 'not a draft, not blocked',
+    'có risk:low': 'has risk:low',
+    'Depends on đã đóng hết': 'every Depends on is closed',
+    'không behind': 'not behind its base',
+    'check bắt buộc xanh': 'required checks green',
+    'không còn thread chưa trả lời': 'no unanswered review thread',
+    'PR gắn devflow': 'PRs labelled devflow',
+    'Sau khi PR được mở · giữ PR luôn merge được': 'After the PR is opened · keep it mergeable',
+    'Retarget, cập nhật, conflict, review thread': 'Retarget, update, conflicts, review threads',
+    '1 · retarget về base khi PR cha đã merge': '1 · retarget to base once the parent PR merged',
+    '2 · cập nhật branch nếu behind': '2 · update the branch if behind',
+    '3 · conflict → merge commit, không rebase': '3 · conflicts → merge commit, never a rebase',
+    'push → review tự chạy lại': 'push → the review re-runs by itself',
+    'tối đa 2 vòng, sau đó báo bạn': 'up to 2 rounds, then it tells you',
+    'Song song giữa các session · mỗi session một git worktree': 'Parallel across sessions · one git worktree per session',
+    'Chia lane, mỗi lane một session nền': 'Split into lanes, one background session per lane',
+    'bin/devflow-lanes · chung hotspot hoặc Depends on thì chung lane': 'bin/devflow-lanes · a shared hotspot or a Depends on means the same lane',
+    'Nếu claude --bg lỗi, dispatch dừng và in lệnh claude -w lane-<n> tương đương để bạn chạy trong terminal. Theo dõi bằng claude agents, claude logs, claude attach.': 'If claude --bg fails, dispatch stops and prints the equivalent claude -w lane-<n> commands to run in a terminal. Follow with claude agents, claude logs, claude attach.',
+    'Nhìn label là biết agent đang ở đâu, không cần board riêng. Tên label đổi được trong devflow.json. PR risk:low do merge gate đóng, risk:high do bạn đóng.': 'The label tells you where the agent is, no separate board needed. Label names are configurable in devflow.json. risk:low PRs are closed by the merge gate, risk:high by you.',
+    'merge gate hoặc bạn': 'merge gate or you',
+    'kẹt ở bất kỳ stage nào → branch vẫn được push, không mất công': 'stuck at any stage → the branch is still pushed, no work lost',
+    '/devflow:answer ghi đáp án rồi đặt lại agent:ready → issue quay lại hàng đợi': '/devflow:answer records the answers and sets agent:ready again → the issue rejoins the queue',
+    'trên issue (từ spec) và trên PR; không có label thì tính là high': 'on the issue (from the spec) and on the PR; no label counts as high',
+    'trên mọi PR do plugin mở': 'on every PR the plugin opens',
+    'PR dựa trên PR devflow khác': 'PR based on another devflow PR',
+    'bắt Verify chạy': 'forces Verify to run',
   };
   const ATTR_EN = {
-    'Chú thích màu': 'Colour legend', 'Mục lục': 'Contents', 'Hàng đợi issue': 'Issue queue',
+    'Chú thích màu': 'Colour legend', 'Mục lục': 'Contents', 'Hàng đợi issue': 'Issue queue', 'Issue sẵn sàng': 'Ready issues',
     'Sơ đồ trạng thái label: ready, in-progress, review, closed, và nhánh blocked': 'Label state diagram: ready, in-progress, review, closed, and the blocked branch',
   };
   // Capture the static Vietnamese text once, before any simulation adds dynamic nodes.
@@ -656,6 +906,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
   }
 
   /* ---------------- spec flow ---------------- */
+  const bub = (box, k, who, txt) => { const b = el('div', `bubble ${k}`); b.innerHTML = `<small>${who}</small>`; b.append(txt); box.append(b); };
   const specR = runner();
   const sNodes = $$('#spec-pipe .node');
   const sArrows = $$('#spec-pipe .arrow');
@@ -670,28 +921,38 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
              ['a', t('Bạn', 'You'), t('Đồng ý, trả 409.', 'Agreed, 409.')],
              ['q', t('Claude hỏi', 'Claude asks'), t('PATCH với tên đã tồn tại: 400 hay 409? Đề xuất: 409 cho nhất quán.', 'PATCH to a name that already exists: 400 or 409? Recommended: 409, for consistency.')],
              ['a', t('Bạn', 'You'), '409.']] },
-    { c: '--sonnet', t: t('3 · Spec + tasks', '3 · Spec + tasks'),
-      d: t('Tạo branch spec/project-edit-delete, viết docs/specs/2026-10-29-project-edit-delete.md, push và mở PR spec (không cần hỏi).', 'Creates branch spec/project-edit-delete, writes docs/specs/2026-10-29-project-edit-delete.md, pushes and opens the spec PR (no need to ask).'),
-      chat: [['q', t('PR spec đã mở', 'Spec PR opened'), 'spec: project edit and delete · T1 PATCH /projects/<id> (S) · T2 DELETE /projects/<id> (S, depends on T1)']] },
-    { c: '--human', t: '4 · Gate 1',
-      d: t('Claude dừng và hỏi đúng một câu. Bạn review và merge; Claude kiểm tra lại qua MCP rằng PR đã merge thật.', 'Claude stops and asks exactly one question. You review and merge; Claude checks through MCP that the PR really is merged.'),
-      chat: [['q', t('Claude hỏi', 'Claude asks'), t('PR spec #39 đã merge chưa? (merged / changes requested / abandon)', 'Is spec PR #39 merged? (merged / changes requested / abandon)')], ['a', t('Bạn', 'You'), 'merged ✓']] },
-    { c: '--out', t: t('5 · Tạo issues', '5 · Create issues'),
-      d: t('Tìm issue trùng trước, tạo theo thứ tự phụ thuộc để dòng "Depends on" dùng số thật, rồi comment danh sách vào PR spec.', 'Searches for duplicates first, creates issues in dependency order so "Depends on" lines use real numbers, then comments the list on the spec PR.'),
+    { c: '--sonnet', t: '3 · Spec + tasks',
+      d: t('Tạo branch spec/project-edit-delete và viết docs/specs/2026-10-29-project-edit-delete.md. Mỗi task có risk low|high kèm lý do (xét theo risk.highWhen và risk.highPaths; không chắc thì high) và hotspots: các file mà task khác có thể đụng, chỉ để ghi lại.', 'Creates branch spec/project-edit-delete and writes docs/specs/2026-10-29-project-edit-delete.md. Each task gets risk low|high with a reason (judged against risk.highWhen and risk.highPaths; unsure means high) and hotspots: files other tasks are likely to touch, recorded only.'),
+      chat: [['q', 'T1 PATCH /projects/<id> (S)', t('risk: low, vì chỉ thêm tính năng, không phá contract. Hotspots: services.py', 'risk: low, because it only adds behaviour and breaks no contract. Hotspots: services.py')],
+             ['q', 'T2 DELETE /projects/<id> (S, depends on T1)', t('risk: high, vì xoá dữ liệu đã lưu (highWhen). Hotspots: services.py, repository.py', 'risk: high, because it deletes stored data (highWhen). Hotspots: services.py, repository.py')]] },
+    { c: '--opus', t: t('4 · Test matrix (QA)', '4 · Test matrix (QA)'),
+      d: t('Một agent QA (model spec.qaModel, mặc định opus) chỉ nhận file spec và CLAUDE.md, không nhận cuộc grill, nên nó test điều spec viết chứ không phải điều bạn định nói. Trả về các dòng Test cases và những tiêu chí chưa test được.', 'A QA agent (model spec.qaModel, default opus) gets only the spec file and CLAUDE.md, not the grill conversation, so it tests what the spec says rather than what you meant. It returns Test cases rows and the criteria it cannot test as written.'),
+      chat: [['q', t('QA trả về', 'QA returns'), t('11 dòng, mỗi tiêu chí có một dòng must. Ví dụ T2.3 · edge · Given project có task, When DELETE, Then 409 · level http · must', '11 rows, every criterion has a must row. Example T2.3 · edge · Given a project with tasks, When DELETE, Then 409 · level http · must')],
+             ['q', t('QA hỏi', 'QA asks'), t('Tiêu chí "xoá nhanh" không test được. Giới hạn bao nhiêu ms?', 'The criterion "deleting is fast" is not testable. What limit in ms?')],
+             ['a', t('Bạn', 'You'), t('Bỏ tiêu chí đó, không phải yêu cầu.', 'Drop it, it is not a requirement.')],
+             ['q', t('Ma trận cập nhật', 'Matrix updated'), t('10 dòng, QA chạy lại: không còn câu hỏi. Mỗi task trỏ tới các dòng của nó.', '10 rows, QA runs again: no questions left. Each task points at its rows.')]] },
+    { c: '--sonnet', t: t('5 · PR spec', '5 · Spec PR'),
+      d: t('Commit docs(spec), push branch và mở PR spec (không cần hỏi). Thân PR có bảng task kèm risk và lý do, số dòng test, câu hỏi QA đã giải quyết.', 'Commits docs(spec), pushes the branch and opens the spec PR (no need to ask). The PR body has the task table with risk and reason, the number of test rows and the QA questions resolved.'),
+      chat: [['q', t('PR spec đã mở', 'Spec PR opened'), 'spec: project edit and delete · T1 low · T2 high (deletes stored data) · 10 test rows · 1 QA question resolved']] },
+    { c: '--human', t: '6 · Gate 1',
+      d: t('Claude dừng và hỏi đúng một câu. Bạn review và merge; merge cũng là duyệt mức risk trong bảng. Claude kiểm tra lại qua MCP rằng PR đã merge thật.', 'Claude stops and asks exactly one question. You review and merge; merging also approves the risk levels in the table. Claude checks through MCP that the PR really is merged.'),
+      chat: [['q', t('Claude hỏi', 'Claude asks'), t('PR spec #39 đã merge chưa? Merge cũng là duyệt mức risk. (merged / changes requested / abandon)', 'Is spec PR #39 merged? Merging also approves the risk levels. (merged / changes requested / abandon)')], ['a', t('Bạn', 'You'), 'merged ✓']] },
+    { c: '--out', t: t('7 · Tạo issues', '7 · Create issues'),
+      d: t('Tìm issue trùng trước, tạo theo thứ tự phụ thuộc để dòng "Depends on" dùng số thật. Mỗi issue có label ready, label risk, các dòng Test cases và mục Hotspots. Rồi comment danh sách vào PR spec.', 'Searches for duplicates first, creates issues in dependency order so "Depends on" lines use real numbers. Each issue gets the ready label, a risk label, its Test cases rows and a Hotspots section. Then comments the list on the spec PR.'),
       chat: [['q', t('Hoàn tất', 'Done'), t('Đã tạo 2 issue và comment danh sách vào PR #39.', 'Created 2 issues and listed them on PR #39.')]] },
   ];
   const ISSUES = [
-    { n: 31, t: 'T1: PATCH /projects/<id>', l: ['ready', 'type:feat'] },
-    { n: 32, t: 'T2: DELETE /projects/<id>', l: ['ready', 'type:feat', 'needs-e2e'], dep: 'Depends on #31' },
+    { n: 31, t: 'T1: PATCH /projects/<id>', l: ['ready', 'risk:low', 'type:feat'], x: 'Test cases: 4 rows · Hotspots: services.py' },
+    { n: 32, t: 'T2: DELETE /projects/<id>', l: ['ready', 'risk:high', 'type:feat', 'needs-e2e'], dep: 'Depends on #31', x: 'Test cases: 6 rows · Hotspots: services.py, repository.py' },
   ];
-  const lblClass = (l) => l === 'ready' ? 'ready' : l === 'needs-e2e' ? 'e2e' : 'type';
+  const lblClass = (l) => l === 'ready' ? 'ready' : l === 'needs-e2e' ? 'e2e' : l === 'risk:low' ? 'rlow' : l === 'risk:high' ? 'rhigh' : l === 'stacked' ? 'stk' : l === 'devflow' ? 'dvf' : 'type';
   const lblText = (l) => l === 'ready' ? 'agent:ready' : l;
-  const emptyIssues = () => `<div class="empty">${t('Chưa có issue. Chúng xuất hiện ở bước 5, sau Gate 1.', 'No issues yet. They appear at step 5, after Gate 1.')}</div>`;
+  const emptyIssues = () => `<div class="empty">${t('Chưa có issue. Chúng xuất hiện ở bước 7, sau Gate 1.', 'No issues yet. They appear at step 7, after Gate 1.')}</div>`;
   function specReset() {
     specR.stop();
     sNodes.forEach((n) => n.classList.remove('active', 'done'));
     sTitle.textContent = t('Bấm ▶ để xem từng bước', 'Press ▶ to step through');
-    sDesc.textContent = t('Mỗi bước có một đầu ra cụ thể. Bước 4 là chốt chặn: issue chỉ được tạo sau khi bạn đã merge spec.', 'Every step has a concrete output. Step 4 is the gate: issues are created only after you merge the spec.');
+    sDesc.textContent = t('Mỗi bước có một đầu ra cụ thể. Bước 6 là chốt chặn: issue chỉ được tạo sau khi bạn đã merge spec.', 'Every step has a concrete output. Step 6 is the gate: issues are created only after you merge the spec.');
     sDot.style.setProperty('--c', 'var(--sonnet)');
     sChat.innerHTML = '';
     sIssues.innerHTML = emptyIssues();
@@ -706,8 +967,8 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
         sNodes[i].classList.add('active');
         sTitle.textContent = s.t; sDesc.textContent = s.d; sDot.style.setProperty('--c', `var(${s.c})`);
         sChat.innerHTML = '';
-        for (const [k, who, txt] of s.chat) { await sleep(k === 'a' ? 900 : 600); const b = el('div', `bubble ${k}`); b.innerHTML = `<small>${who}</small>`; b.append(txt); sChat.append(b); }
-        if (i === 4) {
+        for (const [k, who, txt] of s.chat) { await sleep(k === 'a' ? 900 : 600); bub(sChat, k, who, txt); }
+        if (i === 6) {
           sIssues.innerHTML = '';
           for (const it of ISSUES) {
             await sleep(600);
@@ -716,12 +977,13 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
             card.querySelector('.it').append(it.t);
             it.l.forEach((l) => card.querySelector('.labels').append(el('span', `lbl ${lblClass(l)}`, lblText(l))));
             if (it.dep) card.append(el('span', 'dep', it.dep));
+            card.append(el('span', 'dep', it.x));
             sIssues.append(card);
           }
         }
-        await sleep(i === 3 ? 1400 : 1500);
+        await sleep(i === 5 ? 1400 : 1500);
       }
-      sNodes[4].classList.remove('active'); sNodes[4].classList.add('done');
+      sNodes[6].classList.remove('active'); sNodes[6].classList.add('done');
     });
   }
   $('#spec-play').addEventListener('click', specPlay);
@@ -732,41 +994,47 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
   const stage = (k) => $(`#track [data-st="${k}"]`);
   const logBox = $('#nt-log'), queue = $('#queue');
   const POOL = [
-    { n: 31, t: 'PATCH /projects/<id>', l: ['ready', 'type:feat'] },
-    { n: 32, t: 'DELETE /projects/<id>', l: ['ready', 'needs-e2e'], dep: 31 },
-    { n: 34, t: 'GET /tasks?tag=', l: ['ready', 'type:feat'] },
-    { n: 35, t: 'GET /projects/<id>/tags', l: ['ready', 'needs-e2e'] },
-    { n: 36, t: 'PATCH /tasks/bulk', l: ['ready', 'type:feat'] },
+    { n: 31, t: 'PATCH /projects/<id>', l: ['ready', 'risk:low'] },
+    { n: 32, t: 'DELETE /projects/<id>', l: ['ready', 'risk:high', 'needs-e2e'], dep: 'Depends on #31' },
+    { n: 33, t: 'docs: API error reference', l: ['ready', 'risk:low'] },
+    { n: 34, t: 'GET /tasks?tag=', l: ['ready', 'risk:low'] },
+    { n: 35, t: 'GET /projects/<id>/tags', l: ['ready', 'risk:low'] },
+    { n: 36, t: 'GET /projects/<id>/summary', l: ['ready', 'risk:low'], dep: 'Depends on #31, #32' },
   ];
-  const STAGE_COLOR = { select: '--haiku', claim: '--haiku', impl: '--sonnet', check: '--haiku', verify: '--sonnet', review: '--opus', ship: '--out', fix: '--sonnet', block: '--block' };
-  function log(k, msg) {
+  const STAGE_COLOR = { select: '--haiku', claim: '--haiku', branch: '--haiku', integrate: '--sonnet', plan: '--sonnet', impl: '--sonnet', commit: '--haiku', check: '--haiku', verify: '--sonnet', review: '--opus', risk: '--script', ship: '--out', fix: '--sonnet', block: '--block', skill: '--fg' };
+  function logTo(box, k, msg, color) {
     const d = el('div');
-    const tag = el('span', 'k', `[${k}] `); tag.style.setProperty('--c', `var(${STAGE_COLOR[k] || '--fg'})`);
-    d.append(tag, msg); logBox.append(d); logBox.scrollTop = logBox.scrollHeight;
+    const tag = el('span', 'k', `[${k}] `); tag.style.setProperty('--c', `var(${color || '--fg'})`);
+    d.append(tag, msg); box.append(d); box.scrollTop = box.scrollHeight;
   }
+  const log = (k, msg) => logTo(logBox, k, msg, STAGE_COLOR[k]);
+  const LBL_MAP = { ready: ['ready', 'agent:ready'], prog: ['prog', 'agent:in-progress'], rev: ['rev', 'agent:review'], blk: ['blk', 'agent:blocked'] };
   const labelsHtml = (ls) => ls.map((l) => {
-    const map = { ready: ['ready', 'agent:ready'], prog: ['prog', 'agent:in-progress'], rev: ['rev', 'agent:review'], blk: ['blk', 'agent:blocked'] };
-    const [c, txt] = map[l] || [l === 'needs-e2e' ? 'e2e' : 'type', l];
+    const [c, txt] = LBL_MAP[l] || [lblClass(l), l];
     return `<span class="lbl ${c}">${txt}</span>`;
   }).join('');
   function qItem(it) {
     const d = el('div', 'q-item'); d.dataset.n = it.n;
     d.innerHTML = `<span class="it"><b>#${it.n}</b> </span><div class="labels">${labelsHtml(it.l)}</div>`;
     d.querySelector('.it').append(it.t);
+    if (it.dep) d.append(el('span', 'dep', it.dep));
     return d;
   }
   function setLabels(n, ls) { const q = $(`.q-item[data-n="${n}"] .labels`, queue); if (q) q.innerHTML = labelsHtml(ls); }
   const upTo = () => t('tối đa 2 vòng', 'up to 2 rounds');
-  function clearTrack() { $$('#track .node').forEach((n) => n.classList.remove('active', 'done', 'dim', 'skipped', 'failed')); $$('.loop').forEach((l) => l.classList.remove('on')); $('#loop-check-n').textContent = upTo(); $('#loop-review-n').textContent = upTo(); }
+  const parNodes = () => [$('#par-qa'), $('#par-dev')];
+  function parClear() { parNodes().forEach((n) => n.classList.remove('active', 'done')); $('#par-note').textContent = ''; }
+  function clearTrack() { $$('#track .node').forEach((n) => n.classList.remove('active', 'done', 'dim', 'skipped', 'failed')); $$('.loop').forEach((l) => l.classList.remove('on')); $('#loop-check-n').textContent = upTo(); $('#loop-review-n').textContent = upTo(); parClear(); }
   function ntReset() {
     ntR.stop(); clearTrack();
     $$('#pf .pf').forEach((p) => p.classList.remove('ok'));
     queue.innerHTML = `<span class="eyebrow">${t('Hàng đợi (agent:ready)', 'Queue (agent:ready)')}</span>`;
     POOL.forEach((it) => queue.append(qItem(it)));
     ['#bin-pr', '#bin-blk', '#bin-skp'].forEach((s) => ($(s).innerHTML = ''));
-    logBox.innerHTML = `<div>${t('Bấm ▶ để chạy kịch bản mẫu: 5 issue sẵn sàng, limit = 3.', 'Press ▶ to run the sample scenario: 5 ready issues, limit = 3.')}</div>`;
+    $('#par-note').textContent = t('Chạy một issue để xem hai agent làm việc song song.', 'Run an issue to see the two agents work in parallel.');
+    logBox.innerHTML = `<div>${t('Bấm ▶ để chạy kịch bản mẫu: 6 issue sẵn sàng, limit = 6.', 'Press ▶ to run the sample scenario: 6 ready issues, limit = 6.')}</div>`;
   }
-  const res = (bin, html) => $(bin).append(el('div', 'res', html));
+  const res = (bin, html, cls) => $(bin).append(el('div', cls ? `res ${cls}` : 'res', html));
 
   async function go(sleep, k, msg, ms = 900) {
     $$('#track .node').forEach((n) => n.classList.remove('active'));
@@ -779,9 +1047,55 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     const n = stage(k); n.classList.add('active'); log(k, msg); await sleep(900);
     n.classList.remove('active'); n.classList.add('failed');
   }
+  async function skipSt(sleep, k, msg, ms = 500) { stage(k).classList.add('skipped'); log(k, msg); await sleep(ms); }
   async function fixLoop(sleep, loopId, countId, round, msg) {
     const l = $(loopId); l.classList.add('on'); $(countId).textContent = t(`vòng ${round}/2`, `round ${round}/2`);
     log('fix', msg); await sleep(1100); l.classList.remove('on');
+  }
+  const cur = (n) => { $$('.q-item', queue).forEach((q) => q.classList.remove('current')); const q = $(`.q-item[data-n="${n}"]`, queue); if (q) q.classList.add('current'); };
+  const startIssue = (n) => { clearTrack(); stage('select').classList.add('done'); cur(n); };
+
+  // One issue through Claim → Branch → [Integrate] → Plan → Implement → [Commit] → Check → [Verify] → Review → Risk → Ship.
+  async function runIssue(sleep, o) {
+    const n = o.n;
+    startIssue(n);
+    await go(sleep, 'claim', o.claim);
+    setLabels(n, ['prog', ...o.rest]);
+    await go(sleep, 'branch', o.branch);
+    if (o.integrate) await go(sleep, 'integrate', o.integrate, 1300);
+    else await skipSt(sleep, 'integrate', t(`#${n}: không có hoặc chỉ một parent, bỏ qua`, `#${n}: zero or one parent, skipped`));
+    await go(sleep, 'plan', o.plan, 1100);
+    if (o.par) {
+      parNodes().forEach((p) => p.classList.add('active'));
+      $('#par-note').textContent = t('Hai agent cùng làm trong một checkout, không agent nào commit.', 'Both agents work in the same checkout, neither commits.');
+    } else {
+      $('#par-note').textContent = t('Không có qaFiles: một agent Implement viết test trước rồi code.', 'No qaFiles: one Implement agent writes the test first, then the code.');
+    }
+    await go(sleep, 'impl', o.impl, 1400);
+    if (o.par) parNodes().forEach((p) => { p.classList.remove('active'); p.classList.add('done'); });
+    if (o.par) await go(sleep, 'commit', o.commit, 1200);
+    else await skipSt(sleep, 'commit', t(`#${n}: không cần stage Commit riêng, agent Implement đã commit`, `#${n}: no separate Commit stage, the Implement agent committed`));
+    if (o.checkFail) {
+      await fail(sleep, 'check', o.checkFail[0]);
+      await fixLoop(sleep, '#loop-check', '#loop-check-n', 1, o.checkFail[1]);
+    }
+    await go(sleep, 'check', o.check);
+    if (o.verify) {
+      $('#loop-verify').classList.add('on');
+      await go(sleep, 'verify', o.verify, 1400);
+      $('#loop-verify').classList.remove('on');
+    } else await skipSt(sleep, 'verify', t(`#${n} bỏ qua Verify: không needs-e2e, không đụng UI, không có dòng http/e2e`, `#${n} skips Verify: no needs-e2e, no UI change, no http/e2e row`));
+    if (o.reviewFix) {
+      await fail(sleep, 'review', o.reviewFix[0]);
+      await fixLoop(sleep, '#loop-review', '#loop-review-n', 1, o.reviewFix[1]);
+      await go(sleep, 'check', t(`#${n} check lại sau fix ✓`, `#${n} checks again after the fix ✓`));
+      await go(sleep, 'review', t(`#${n} review vòng 2: pass`, `#${n} review round 2: pass`), 1100);
+    } else await go(sleep, 'review', o.review, 1200);
+    await go(sleep, 'risk', o.risk, 1100);
+    await go(sleep, 'ship', o.ship, 1300);
+    setLabels(n, ['rev', o.level, ...o.extra]);
+    res('#bin-pr', o.res, 'ship');
+    await sleep(700);
   }
 
   function ntPlay() {
@@ -791,68 +1105,252 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       log('skill', t('Preflight trước khi gọi workflow…', 'Preflight before calling the workflow…'));
       for (const p of pfs) { await sleep(280); p.classList.add('ok'); }
       await sleep(400);
-      log('skill', t('Gọi Workflow "devflow:next-task-engine" với args { config, limit: 3, startBranch }', 'Calls Workflow "devflow:next-task-engine" with args { config, limit: 3, startBranch }'));
+      log('skill', t('Gọi Workflow "devflow:next-task-engine" với args { config, limit: 6, startBranch, claimId }', 'Calls Workflow "devflow:next-task-engine" with args { config, limit: 6, startBranch, claimId }'));
       await sleep(700);
 
-      await go(sleep, 'select', t('Đọc 5 issue có agent:ready…', 'Reads 5 issues labelled agent:ready…'), 1000);
-      const skip = (n, why) => { const q = $(`.q-item[data-n="${n}"]`, queue); q.classList.add('gone'); res('#bin-skp', `<b>#${n}</b> ${why}`); log('select', t(`#${n} bỏ qua: ${why}`, `#${n} skipped: ${why}`)); };
-      skip(32, t('Depends on #31 (chưa đóng)', 'Depends on #31 (still open)')); await sleep(500);
-      skip(36, t('vượt limit 3', 'over limit 3')); await sleep(500);
-      log('select', t('Chọn #31, #34, #35. Chạy tuần tự.', 'Picks #31, #34, #35. Runs them one by one.')); await sleep(600);
+      await go(sleep, 'select', t('Đọc 6 issue có agent:ready. Parent trước, rồi issue cũ nhất. #32 và #36 phụ thuộc issue khác trong cùng lượt chạy → sẽ được stack.', 'Reads 6 issues labelled agent:ready. Parents first, then oldest. #32 and #36 depend on issues in this same run → they will be stacked.'), 1300);
 
-      // #31 — check fails once, then passes; no verify; review passes
-      const cur = (n) => { $$('.q-item', queue).forEach((q) => q.classList.remove('current')); const q = $(`.q-item[data-n="${n}"]`, queue); if (q) q.classList.add('current'); };
-      clearTrack(); stage('select').classList.add('done'); cur(31);
-      await go(sleep, 'claim', '#31 → agent:in-progress, git switch -c feat/31-patch-project github/feature/example_taskboard');
-      setLabels(31, ['prog', 'type:feat']);
-      await go(sleep, 'impl', t('#31 commit test(#31) fail đúng lý do → commit feat(#31): allow renaming a project', '#31 commits test(#31), which fails for the right reason → commits feat(#31): allow renaming a project'), 1300);
-      await fail(sleep, 'check', '#31 make test: 1 failed (test_patch_duplicate_name: expected 409, got 500)');
-      await fixLoop(sleep, '#loop-check', '#loop-check-n', 1, '#31 fix(#31): map duplicate-name IntegrityError to 409');
-      await go(sleep, 'check', '#31 make test ✓ · ruff ✓');
-      stage('verify').classList.add('skipped'); log('verify', t('#31 bỏ qua: không có needs-e2e, không đụng UI', '#31 skipped: no needs-e2e label, no UI change')); await sleep(700);
-      await go(sleep, 'review', t('#31 review (opus): pass · 1 suggestion ghi vào PR', '#31 review (opus): pass · 1 suggestion noted in the PR'), 1200);
-      await go(sleep, 'ship', '#31 push feat/31-patch-project → PR #40 "feat(#31): allow editing a project" · Closes #31');
-      setLabels(31, ['rev', 'type:feat']); res('#bin-pr', '<b>PR #40</b> ← #31'); log('ship', t('git switch về branch ban đầu', 'git switch back to the starting branch')); await sleep(900);
+      // #31: parallel QA, check fails once, review passes, risk low
+      await runIssue(sleep, {
+        n: 31, level: 'risk:low', extra: [], rest: ['risk:low'],
+        claim: t('#31 gán cho mình + agent:in-progress + claim comment; đọc lại mọi claim comment: của mình sớm nhất → thắng', '#31 assigns itself + agent:in-progress + claim comment; reads every claim comment back: ours is the earliest → we win'),
+        branch: '#31 git switch -c feat/31-patch-project github/feature/example_taskboard',
+        plan: t('#31 đăng plan lên issue (comment devflow-plan, không ai duyệt) · qaFiles: tests/test_projects.py · devFiles: services.py, repository.py, routes.py', '#31 posts the plan on the issue (devflow-plan comment, nobody approves) · qaFiles: tests/test_projects.py · devFiles: services.py, repository.py, routes.py'),
+        par: true,
+        impl: t('#31 QA viết test cho 4 dòng must (chỉ đọc spec + issue); Dev viết code, song song', '#31 QA writes tests for the 4 must rows (spec + issue only); Dev writes the code, in parallel'),
+        commit: t('#31 commit test(#31) trước → stash code, test fail đúng lý do ✓ → commit feat(#31): allow renaming a project', '#31 commits test(#31) first → stashes the code, tests fail for the right reason ✓ → commits feat(#31): allow renaming a project'),
+        checkFail: ['#31 make test: 1 failed (test_t1_3_duplicate_name: expected 409, got 500)', t('#31 fix(#31): map duplicate-name IntegrityError to 409 (không sửa file QA)', '#31 fix(#31): map duplicate-name IntegrityError to 409 (QA files untouched)')],
+        check: '#31 make test ✓ · ruff ✓',
+        review: t('#31 review (opus): pass · 1 suggestion ghi vào PR', '#31 review (opus): pass · 1 suggestion noted in the PR'),
+        risk: t('#31 Risk: low (theo issue) · không file nào khớp risk.highPaths', '#31 Risk: low (from the issue) · no changed file matches risk.highPaths'),
+        ship: t('#31 push + PR #40 "feat(#31): allow editing a project" · base = main · labels devflow, risk:low · Closes #31', '#31 push + PR #40 "feat(#31): allow editing a project" · base = main · labels devflow, risk:low · Closes #31'),
+        res: t('<b>PR #40</b> ← #31 · risk:low', '<b>PR #40</b> ← #31 · risk:low'),
+      });
 
-      // #34 — implement blocked on ambiguity
-      clearTrack(); stage('select').classList.add('done'); cur(34);
-      await go(sleep, 'claim', t('#34 → agent:in-progress, branch feat/34-filter-tasks-by-tag', '#34 → agent:in-progress, branch feat/34-filter-tasks-by-tag'));
-      setLabels(34, ['prog', 'type:feat']);
-      await fail(sleep, 'impl', t('#34 dừng: "?tag=a&tag=b" là AND hay OR? Spec không nói, đây là contract → không đoán', '#34 stops: is "?tag=a&tag=b" AND or OR? The spec is silent and it is a contract → no guessing'));
-      log('block', t('#34 push branch (nếu có commit), comment câu hỏi lên issue, gắn agent:blocked', '#34 pushes the branch (if it has commits), comments the question on the issue, labels agent:blocked'));
-      setLabels(34, ['blk', 'type:feat']); res('#bin-blk', t('<b>#34</b> Implement: AND hay OR khi lọc nhiều tag?', '<b>#34</b> Implement: AND or OR when filtering by several tags?')); await sleep(1200);
+      // #32: stacked on #31's PR, verify, review fix, risk high
+      await runIssue(sleep, {
+        n: 32, level: 'risk:high', extra: ['needs-e2e', 'stacked'], rest: ['risk:high', 'needs-e2e', 'stacked'],
+        claim: t('#32 thắng claim · phụ thuộc #31 đã có PR #40 → stacked', '#32 wins the claim · depends on #31, which has PR #40 → stacked'),
+        branch: t('#32 git switch -c feat/32-delete-project github/feat/31-patch-project (branch của PR cha). Nếu PR cha đã merge và branch bị xoá: tách từ base', '#32 git switch -c feat/32-delete-project github/feat/31-patch-project (the parent PR branch). If the parent already merged and its branch is gone: branch from base'),
+        plan: '#32 plan · qaFiles: tests/test_projects.py · devFiles: services.py, repository.py, routes.py',
+        par: true,
+        impl: t('#32 QA ∥ Dev (sonnet cả hai)', '#32 QA ∥ Dev (both sonnet)'),
+        commit: '#32 test(#32) → tests fail without the code ✓ → feat(#32): delete a project without tasks',
+        check: '#32 make test ✓ · ruff ✓',
+        verify: t('#32 make run → curl DELETE /projects/1 (còn task) → 409 ✓ → DELETE /projects/2 → 204 ✓ · dừng server', '#32 make run → curl DELETE /projects/1 (has tasks) → 409 ✓ → DELETE /projects/2 → 204 ✓ · server stopped'),
+        reviewFix: [t('#32 review: warning repository.py:61 xoá project trước khi kiểm tra task → race', '#32 review: warning repository.py:61 deletes the project before checking its tasks → race'), '#32 fix(#32): check tasks and delete inside one transaction'],
+        risk: t('#32 Risk: high (theo issue: xoá dữ liệu đã lưu)', '#32 Risk: high (from the issue: deletes stored data)'),
+        ship: t('#32 đọc lại PR cha #40: còn mở → PR #41 base = feat/31-patch-project, labels devflow, risk:high, stacked. Nếu cổng đã merge #40 giữa chừng: base = main, không stacked', '#32 re-reads parent PR #40: still open → PR #41 base = feat/31-patch-project, labels devflow, risk:high, stacked. Had the gate merged #40 meanwhile: base = main, not stacked'),
+        res: t('<b>PR #41</b> ← #32 · risk:high · stacked trên #40', '<b>PR #41</b> ← #32 · risk:high · stacked on #40'),
+      });
 
-      // #35 — verify runs (needs-e2e), review asks for a fix
-      clearTrack(); stage('select').classList.add('done'); cur(35);
-      await go(sleep, 'claim', '#35 → agent:in-progress, branch feat/35-project-tags');
-      setLabels(35, ['prog', 'needs-e2e']);
-      await go(sleep, 'impl', '#35 commit test(#35) → commit feat(#35): list tags with counts', 1200);
-      await go(sleep, 'check', '#35 make test ✓ · ruff ✓');
-      $('#loop-verify').classList.add('on');
-      await go(sleep, 'verify', t('#35 make run → curl GET /projects/1/tags → 200 [{"tag":"bug","count":3}] ✓ · dừng server', '#35 make run → curl GET /projects/1/tags → 200 [{"tag":"bug","count":3}] ✓ · server stopped'), 1400);
-      $('#loop-verify').classList.remove('on');
-      await fail(sleep, 'review', t('#35 review: warning repository.py:88 thiếu ORDER BY → thứ tự tag không ổn định', '#35 review: warning repository.py:88 has no ORDER BY → tag order is unstable'));
-      await fixLoop(sleep, '#loop-review', '#loop-review-n', 1, '#35 fix(#35): order tags by count desc, then name');
-      await go(sleep, 'check', t('#35 check lại sau fix ✓', '#35 checks again after the fix ✓'));
-      await go(sleep, 'review', t('#35 review vòng 2: pass', '#35 review round 2: pass'), 1100);
-      await go(sleep, 'ship', '#35 push → PR #41 "feat(#35): list project tags with counts" · Closes #35');
-      setLabels(35, ['rev', 'needs-e2e']); res('#bin-pr', '<b>PR #41</b> ← #35');
+      // #33: no qaFiles → single Implement agent
+      await runIssue(sleep, {
+        n: 33, level: 'risk:low', extra: [], rest: ['risk:low'],
+        claim: '#33 claim ✓',
+        branch: '#33 git switch -c docs/33-api-error-reference github/feature/example_taskboard',
+        plan: t('#33 plan · issue chỉ sửa docs → qaFiles rỗng', '#33 plan · docs-only issue → qaFiles is empty'),
+        par: false,
+        impl: t('#33 một agent Implement viết docs/api-errors.md', '#33 a single Implement agent writes docs/api-errors.md'),
+        check: '#33 make test ✓ · ruff ✓',
+        review: '#33 review (opus): pass',
+        risk: t('#33 Risk: low · không file nào khớp highPaths', '#33 Risk: low · no file matches highPaths'),
+        ship: '#33 push + PR #42 "docs(#33): API error reference" · labels devflow, risk:low · Closes #33',
+        res: '<b>PR #42</b> ← #33 · risk:low',
+      });
+
+      // #34: blocked at Plan with merged questions
+      startIssue(34);
+      await go(sleep, 'claim', '#34 claim ✓');
+      setLabels(34, ['prog', 'risk:low']);
+      await go(sleep, 'branch', '#34 git switch -c feat/34-filter-tasks-by-tag github/feature/example_taskboard');
+      await skipSt(sleep, 'integrate', t('#34: không có parent, bỏ qua', '#34: no parent, skipped'), 300);
+      await fail(sleep, 'plan', t('#34 Plan dừng, chưa viết dòng code nào. [BA] "?tag=a&tag=b" là AND hay OR? Spec không nói. [QA] dòng T1.4 "trả lỗi rõ ràng" không test được vì không có status code', '#34 Plan stops before any code. [BA] is "?tag=a&tag=b" AND or OR? The spec is silent. [QA] row T1.4 "fails clearly" is not testable without a status code'));
+      log('block', t('#34 một comment devflow-questions với 2 câu hỏi, block đúng một lần, xoá claim comment của mình, label agent:blocked, quay về branch ban đầu', '#34 one devflow-questions comment with 2 questions, blocked once, own claim comment deleted, labelled agent:blocked, back to the starting branch'));
+      setLabels(34, ['blk', 'risk:low']);
+      res('#bin-blk', t('<b>#34</b> Plan: 2 câu hỏi (BA, QA) → /devflow:answer #34', '<b>#34</b> Plan: 2 questions (BA, QA) → /devflow:answer #34'), 'blk');
+      await sleep(1200);
+
+      // #35: loses the claim race
+      startIssue(35);
+      stage('claim').classList.add('active');
+      log('claim', t('#35 hai session cùng claim: comment sớm nhất thắng, session kia (…-lane-2) thắng. Mình chỉ xoá claim comment của mình', '#35 two sessions claimed it: the earliest comment wins and the other session (…-lane-2) is earlier. We delete only our own claim comment'));
+      await sleep(1200);
+      stage('claim').classList.remove('active'); stage('claim').classList.add('skipped');
+      $(`.q-item[data-n="35"]`, queue).classList.add('gone');
+      res('#bin-skp', t('<b>#35</b> claimed by 1102-lane-2-4411', '<b>#35</b> claimed by 1102-lane-2-4411'), 'skp');
+      log('select', t('#35 bỏ qua: claimed by 1102-lane-2-4411', '#35 skipped: claimed by 1102-lane-2-4411'));
+      await sleep(900);
+
+      // #36: two parents → Integrate; Risk escalates by highPaths
+      await runIssue(sleep, {
+        n: 36, level: 'risk:high', extra: ['stacked'], rest: ['risk:low', 'stacked'],
+        claim: t('#36 thắng claim · phụ thuộc #31 và #32, cả hai đã có PR → stacked trên cả hai', '#36 wins the claim · depends on #31 and #32, both with PRs → stacked on both'),
+        branch: t('#36 nhiều parent: branch từ github/feature/example_taskboard, không từ PR cha', '#36 several parents: the branch starts from github/feature/example_taskboard, not from a parent PR'),
+        integrate: t('#36 merge feat/31-patch-project và feat/32-delete-project bằng merge commit (không rebase), giải conflict giữa hai bên, chạy checks → integrationSha', '#36 merges feat/31-patch-project and feat/32-delete-project with merge commits (no rebase), resolves conflicts between them, runs the checks → integrationSha'),
+        plan: '#36 plan · qaFiles: tests/test_summary.py · devFiles: services.py, repository.py, db.py',
+        par: true,
+        impl: '#36 QA ∥ Dev',
+        commit: '#36 test(#36) first → fail without the code ✓ → feat(#36): project summary endpoint',
+        check: '#36 make test ✓ · ruff ✓',
+        review: '#36 review (opus): pass',
+        risk: t('#36 Risk: issue ghi low, nhưng app/db.py khớp risk.highPaths → nâng lên high, issue cũng được gắn risk:high', '#36 Risk: the issue says low, but app/db.py matches risk.highPaths → escalated to high, the issue is relabelled risk:high too'),
+        ship: t('#36 PR #43 base = main, dòng "Stacked on #40 and #41", labels devflow, risk:high, stacked. Cổng không merge khi còn Depends on mở', '#36 PR #43 base = main, line "Stacked on #40 and #41", labels devflow, risk:high, stacked. The gate will not merge while a Depends on is open'),
+        res: t('<b>PR #43</b> ← #36 · risk:high (nâng bởi highPaths) · stacked trên #40, #41', '<b>PR #43</b> ← #36 · risk:high (escalated by highPaths) · stacked on #40, #41'),
+      });
       $$('.q-item', queue).forEach((q) => q.classList.remove('current'));
-      log('skill', t('Xong: 2 PR chờ bạn merge · 1 blocked cần bạn trả lời · 2 bỏ qua', 'Done: 2 PRs waiting for your merge · 1 blocked needs your answer · 2 skipped'));
+      log('skill', t('Xong: 4 PR (2 risk:low cho merge gate, 2 risk:high chờ bạn) · 1 blocked cần /devflow:answer · 1 bỏ qua', 'Done: 4 PRs (2 risk:low for the merge gate, 2 risk:high wait for you) · 1 blocked needs /devflow:answer · 1 skipped'));
     });
   }
   $('#nt-play').addEventListener('click', ntPlay);
   $('#nt-reset').addEventListener('click', ntReset);
 
-  /* ---------------- address-reviews ---------------- */
+  /* ---------------- merged questions → /devflow:answer ---------------- */
+  const anR = runner();
+  const anNodes = $$('#an-pipe .node');
+  const anTitle = $('#an-title'), anDesc = $('#an-desc'), anChat = $('#an-chat'), anDot = $('#an-dot'), anLabels = $('#an-labels'), anItems = $('#an-items');
+  function anStep(i, c, title, desc) {
+    anNodes.forEach((n, k) => { n.classList.toggle('active', k === i); n.classList.toggle('done', k < i); });
+    anTitle.textContent = title; anDesc.textContent = desc; anDot.style.setProperty('--c', `var(${c})`); anChat.innerHTML = '';
+  }
+  const anRes = (html) => anItems.append(el('div', 'res', html));
+  function anReset() {
+    anR.stop();
+    anNodes.forEach((n) => n.classList.remove('active', 'done'));
+    anTitle.textContent = t('Bấm ▶ để xem từng bước', 'Press ▶ to step through');
+    anDesc.textContent = t('Câu hỏi của mọi vai trò nằm trong một comment, nên bạn trả lời một lần thay vì bị hỏi nhiều lần.', 'Questions from every role go into one comment, so you answer once instead of being asked several times.');
+    anDot.style.setProperty('--c', 'var(--sonnet)'); anChat.innerHTML = '';
+    anLabels.innerHTML = labelsHtml(['prog', 'risk:low']); anItems.innerHTML = '';
+  }
+  function anPlay() {
+    anReset();
+    anR.start(async (sleep) => {
+      anStep(0, '--sonnet', t('1 · Câu hỏi từ nhiều vai trò', '1 · Questions from several roles'), t('Câu hỏi đến từ Plan ([BA] khoảng trống của spec, [QA] dòng Test cases không test được), từ agent QA và từ agent Dev. Chúng được gom lại, chưa chặn gì.', 'Questions come from Plan ([BA] spec gaps, [QA] Test cases rows not testable as written), from the QA agent and from the Dev agent. They are collected, nothing is blocked yet.'));
+      for (const [k, who, txt] of [
+        ['q', '[BA]', t('Bulk PATCH: all-or-nothing hay chấp nhận một phần?', 'Bulk PATCH: all-or-nothing, or partial success?')],
+        ['q', '[QA]', t('Dòng T1.4 "trả lỗi rõ ràng" cần status code cụ thể. Là gì?', 'Row T1.4 "fails clearly" needs a concrete status code. Which one?')],
+        ['q', '[Dev]', t('Tối đa bao nhiêu phần tử mỗi request?', 'What is the maximum number of items per request?')],
+      ]) { await sleep(600); bub(anChat, k, who, txt); }
+      await sleep(1300);
+
+      anStep(1, '--haiku', t('2 · Một comment, block một lần', '2 · One comment, blocked once'), t('Một comment bắt đầu bằng <!-- devflow-questions -->, đánh số, gắn [BA]/[QA]/[Dev], kết thúc bằng hướng dẫn trả lời. Issue bị block đúng một lần chứ không mỗi vai trò một lần.', 'One comment starting with <!-- devflow-questions -->, numbered, tagged [BA]/[QA]/[Dev], ending with how to answer. The issue is blocked once, not once per role.'));
+      await sleep(500);
+      anLabels.innerHTML = labelsHtml(['blk', 'risk:low']);
+      anRes(t('Comment devflow-questions · 3 câu hỏi · "Answer with /devflow:answer #38, or reply on this issue with numbered answers."', 'devflow-questions comment · 3 questions · "Answer with /devflow:answer #38, or reply on this issue with numbered answers."'));
+      await sleep(600);
+      anRes(t('Xoá claim comment của lần chạy · push branch nếu có commit · agent:blocked', 'Run claim comment deleted · branch pushed if it has commits · agent:blocked'));
+      await sleep(1300);
+
+      anStep(2, '--human', t('3 · Bạn trả lời', '3 · You answer'), t('Đáp án lấy từ tham số, hoặc từ comment của người (không phải bot) sau comment câu hỏi. Mọi câu đều cần một đáp án, nếu thiếu thì không thay đổi gì.', 'Answers come from the arguments, or from human (not bot) comments after the questions comment. Every question needs an answer; otherwise nothing changes.'));
+      await sleep(700); bub(anChat, 'a', t('Bạn', 'You'), '/devflow:answer #38 1: all-or-nothing; 2: 400 with errors list');
+      await sleep(1000); bub(anChat, 'q', 'devflow', t('Câu 3 chưa có đáp án. Không thay đổi gì.', 'Question 3 has no answer. Nothing was changed.'));
+      await sleep(1000); bub(anChat, 'a', t('Bạn', 'You'), '/devflow:answer #38 3: 100 per request');
+      await sleep(900); bub(anChat, 'q', 'devflow', t('Đủ 3 đáp án. Đang ghi lại.', 'All 3 answered. Recording them.'));
+      await sleep(1100);
+
+      anStep(3, '--sonnet', t('4 · PR spec nhỏ', '4 · A small spec PR'), t('Branch docs/38-answers từ base: đáp án vào đúng mục của spec và một dòng trong ## Decisions. PR gắn devflow + risk:low, "Refs #38" (không phải Closes). Không merge và không push vào base.', 'Branch docs/38-answers from base: each answer lands in its spec section plus a line in ## Decisions. The PR is labelled devflow + risk:low and says "Refs #38" (not Closes). It never merges and never pushes to base.'));
+      await sleep(600);
+      anRes(t('<b>PR #44</b> docs(#38): record answers to open questions · devflow · risk:low · Refs #38', '<b>PR #44</b> docs(#38): record answers to open questions · devflow · risk:low · Refs #38'));
+      await sleep(600);
+      anRes('## Decisions · - (#38, Q1): bulk PATCH all-or-nothing → all-or-nothing');
+      await sleep(1300);
+
+      anStep(4, '--sonnet', t('5 · Mục Decisions trong issue', '5 · Decisions in the issue'), t('Cùng các dòng được thêm vào ## Decisions của issue; Plan và Implement coi mục này ghi đè spec. Đáp án đổi tiêu chí hay dòng Test cases thì dòng đó được cập nhật và đánh dấu.', 'The same entries go into the issue ## Decisions section; Plan and Implement treat it as overriding the spec. An answer that changes a criterion or a Test cases row updates that line and marks it.'));
+      await sleep(600);
+      anRes(t('Issue #38 · ## Decisions · dòng T1.4 cập nhật (updated by /devflow:answer)', 'Issue #38 · ## Decisions · row T1.4 updated (updated by /devflow:answer)'));
+      await sleep(1300);
+
+      anStep(5, '--out', t('6 · Sẵn sàng lại', '6 · Ready again'), t('Xoá mọi claim comment và assignee do devflow đặt, gỡ blocked và in-progress, thêm ready, rồi comment một dòng. Lần chạy sau sẽ tạo lại hoặc dùng lại branch của lần bị chặn ở Plan.', 'Deletes every claim comment and the assignee devflow set, removes blocked and in-progress, adds ready, then posts one comment. The next run recreates or reuses the branch of a run that was blocked at Plan.'));
+      await sleep(600);
+      anLabels.innerHTML = labelsHtml(['ready', 'risk:low']);
+      anRes('Ready again: run /devflow:next-task #38');
+      await sleep(900);
+      anNodes[5].classList.remove('active'); anNodes[5].classList.add('done');
+    });
+  }
+  $('#an-play').addEventListener('click', anPlay);
+  $('#an-reset').addEventListener('click', anReset);
+
+  /* ---------------- merge gate ---------------- */
+  const mgR = runner();
+  const mgBox = $('#mg-log'), mgList = $('#mg-prs');
+  const MG = [
+    { n: 40, t: 'feat(#31): allow editing a project', l: ['devflow', 'risk:low'], s: 'base: main' },
+    { n: 41, t: 'feat(#32): delete a project', l: ['devflow', 'risk:high', 'stacked'], s: 'base: feat/31-patch-project' },
+    { n: 42, t: 'docs(#33): API error reference', l: ['devflow', 'risk:low'], s: 'base: main · 2 commits behind' },
+    { n: 44, t: 'feat(#38): add index on tasks.due', l: ['devflow', 'risk:low', 'stacked'], s: 'base: main · Stacked on #41' },
+    { n: 47, t: 'fix(#29): trim task titles', l: ['devflow', 'risk:low'], s: 'base: main · conflicts with main' },
+  ];
+  const mgLog = (k, msg, c) => logTo(mgBox, k, msg, c);
+  const mgCard = (n) => $(`.q-item[data-n="${n}"]`, mgList);
+  const mgSet = (n, cls, msg, labels) => { const c = mgCard(n); c.classList.remove('current'); if (cls) c.classList.add(cls); $('.dep', c).textContent = msg; if (labels) $('.labels', c).innerHTML = labelsHtml(labels); };
+  function mgReset() {
+    mgR.stop();
+    $$('#mg-rules .pf').forEach((p) => p.classList.remove('ok', 'no', 'cur'));
+    mgList.innerHTML = '';
+    MG.forEach((it) => { const d = qItem(it); $('.dep', d) || d.append(el('span', 'dep')); $('.dep', d).textContent = it.s; mgList.append(d); });
+    mgBox.innerHTML = `<div>${t('Bấm ▶: hai lần chạy của cổng trên 5 PR (mergeGate.enabled true, dryRun false).', 'Press ▶: two runs of the gate over 5 PRs (mergeGate.enabled true, dryRun false).')}</div>`;
+  }
+  // Walk the rules in order; failAt = index of the first failing rule (or -1 when all pass).
+  async function mgWalk(sleep, n, failAt) {
+    const rules = $$('#mg-rules .pf');
+    rules.forEach((p) => p.classList.remove('ok', 'no', 'cur'));
+    $$('.q-item', mgList).forEach((q) => q.classList.remove('current')); mgCard(n).classList.add('current');
+    for (let k = 0; k < rules.length; k++) {
+      rules[k].classList.add('cur'); await sleep(260);
+      rules[k].classList.remove('cur'); rules[k].classList.add(k === failAt ? 'no' : 'ok');
+      if (k === failAt) break;
+    }
+    await sleep(500);
+  }
+  function mgPlay() {
+    mgReset();
+    mgR.start(async (sleep) => {
+      mgLog('run 1', t('workflow_run: "Claude Code Review" vừa xong → cổng thức dậy, đọc devflow.json ở base, duyệt PR cũ nhất trước', 'workflow_run: "Claude Code Review" finished → the gate wakes, reads devflow.json at base, walks PRs oldest first'), '--haiku');
+      await sleep(900);
+      await mgWalk(sleep, 40, -1);
+      mgSet(40, 'merged', t('merged · merge commit, gắn đúng head SHA', 'merged · merge commit pinned to the head SHA'));
+      mgLog('merge', t('#40 risk:low, mọi luật đạt → merge (method merge). Merge tối đa một PR mỗi lần chạy', '#40 risk:low, every rule passes → merged (method merge). At most one PR per run'), '--out');
+      await sleep(900);
+      mgSet(41, '', t('base: main · đã retarget từ feat/31-patch-project', 'base: main · retargeted from feat/31-patch-project'), ['devflow', 'risk:high']);
+      mgLog('retarget', t('#41 đang dựa trên feat/31-patch-project → đổi base về main (gỡ label stacked); xoá branch feat/31-patch-project', '#41 was based on feat/31-patch-project → base changed to main (stacked label removed); branch feat/31-patch-project deleted'), '--opus');
+      await sleep(1500);
+
+      mgLog('run 2', t('CI của #41 chạy lại sau retarget → cổng thức dậy lần nữa', 'CI on #41 re-ran after the retarget → the gate wakes again'), '--haiku');
+      await sleep(900);
+      await mgWalk(sleep, 41, 1);
+      mgSet(41, 'wait', t('risk:high · chờ người merge', 'risk:high · waits for a human'));
+      mgLog('wait', t('#41 là risk:high (hoặc không có label risk) → cổng không bao giờ merge. Claude cũng không. Chờ bạn', '#41 is risk:high (or has no risk label) → the gate never merges it. Neither does Claude. Waiting for you'), '--human');
+      await sleep(900);
+      await mgWalk(sleep, 42, 5);
+      mgSet(42, '', t('đã update-branch · CI chạy lại · chờ lần sau', 'update-branch done · CI runs again · wait for the next run'));
+      mgLog('update', t('#42 behind base → update-branch rồi dừng ở PR này, CI sẽ đánh thức cổng lại', '#42 is behind base → update-branch, then stop for this PR; CI will wake the gate again'), '--sonnet');
+      await sleep(900);
+      await mgWalk(sleep, 44, 3);
+      mgSet(44, 'wait', t('giữ lại: Depends on #32 còn mở', 'held: Depends on #32 is still open'));
+      mgLog('hold', t('#44 (stacked trên #41) chưa merge được khi một Depends on còn mở → stack merge từ dưới lên', '#44 (stacked on #41) is not merged while a Depends on is open → stacks merge bottom-up'), '--skip');
+      await sleep(900);
+      await mgWalk(sleep, 47, 4);
+      mgSet(47, 'bad', t('conflict · PR và issue gắn agent:blocked', 'conflict · PR and issue labelled agent:blocked'), ['devflow', 'risk:low', 'blk']);
+      mgLog('conflict', t('#47 có conflict → gắn agent:blocked cho PR và issue, comment một lần trỏ tới /devflow:sync', '#47 has conflicts → PR and issue labelled agent:blocked, one comment pointing at /devflow:sync'), '--block');
+      await sleep(900);
+      $$('#mg-rules .pf').forEach((p) => p.classList.remove('ok', 'no', 'cur'));
+      mgLog('summary', t('1 merged (#40) · 1 retarget · 1 chờ bạn (#41) · 1 update (#42) · 1 giữ (#44) · 1 blocked (#47)', '1 merged (#40) · 1 retargeted · 1 waits for you (#41) · 1 updated (#42) · 1 held (#44) · 1 blocked (#47)'), '--fg');
+    });
+  }
+  $('#mg-play').addEventListener('click', mgPlay);
+  $('#mg-reset').addEventListener('click', mgReset);
+
+  /* ---------------- sync (replaces address-reviews) ---------------- */
   const rvR = runner();
   const THREADS = () => [
     { id: 't1', w: 'services.py:41', txt: t('Thiếu test cho project không tồn tại (404).', 'Missing a test for a project that does not exist (404).'), to: '#rb-fix', out: t('commit 7c1e2a9 · "fixed in 7c1e2a9"', 'commit 7c1e2a9 · "fixed in 7c1e2a9"') },
     { id: 't2', w: 'routes.py:30', txt: t('Vì sao trả count dạng int mà không phải string?', 'Why is count an int and not a string?'), to: '#rb-ans', out: t('trả lời: theo spec, mục API contract', 'answer: per the spec, API contract section') },
-    { id: 't3', w: 'repository.py:90', txt: t('Nên thêm cache cho endpoint này.', 'This endpoint should be cached.'), to: '#rb-wont', out: t('không sửa: ngoài scope #35, ghi chú cho task sau', "won't fix: outside #35's scope, noted for a later task") },
+    { id: 't3', w: 'repository.py:90', txt: t('Nên thêm cache cho endpoint này.', 'This endpoint should be cached.'), to: '#rb-wont', out: t('không sửa: ngoài scope #32, ghi chú cho task sau', "won't fix: outside #32's scope, noted for a later task") },
   ];
   function rvReset() {
     rvR.stop();
+    $$('#sy-steps .pf').forEach((p) => p.classList.remove('ok', 'cur'));
     const box = $('#threads'); box.innerHTML = '';
     THREADS().forEach((th) => { const d = el('div', 'thread'); d.id = th.id; d.innerHTML = `<small>${th.w}</small>`; d.append(th.txt); box.append(d); });
     ['#rb-fix', '#rb-ans', '#rb-wont'].forEach((s) => ($(s).innerHTML = ''));
@@ -862,21 +1360,126 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
   function rvPlay() {
     rvReset();
     const threads = THREADS();
+    const steps = $$('#sy-steps .pf');
+    const notes = [
+      t('PR cha #40 đã merge → đổi base feat/31-patch-project thành main, gỡ label stacked', 'parent PR #40 is merged → base feat/31-patch-project changed to main, stacked label removed'),
+      t('behind base, merge sạch → update_pull_request_branch (không phải vòng)', 'behind base and merges cleanly → update_pull_request_branch (not a round)'),
+      t('conflict ở services.py → merge main vào branch, giải theo issue + spec, checks ✓, commit merge(#32): sync with main, push, gỡ agent:blocked', 'conflict in services.py → merge main into the branch, resolve from issue + spec, checks ✓, commit merge(#32): sync with main, push, remove agent:blocked'),
+      t('thread chưa xử lý: sửa, trả lời hoặc không sửa (kèm lý do)', 'unresolved threads: fix, answer or decline (with a reason)'),
+    ];
     rvR.start(async (sleep) => {
+      for (let k = 0; k < 3; k++) {
+        steps[k].classList.add('cur'); $('#rv-note').textContent = notes[k]; await sleep(1500);
+        steps[k].classList.remove('cur'); steps[k].classList.add('ok');
+      }
+      steps[3].classList.add('cur'); $('#rv-note').textContent = notes[3];
       for (const th of threads) {
         await sleep(900);
         $('#' + th.id).classList.add('moved');
         $(th.to).append(el('div', 'res', th.out));
       }
       await sleep(900);
+      steps[3].classList.remove('cur'); steps[3].classList.add('ok');
       $('#rv-note').textContent = t('checks ✓ → push → trả lời từng thread', 'checks ✓ → push → reply on every thread');
       await sleep(1200);
       $('#rv-trigger').classList.add('on'); $('#pip1').classList.add('on');
-      $('#rv-note').textContent = t('đã yêu cầu review lại · vòng 1/2', 're-review requested · round 1/2');
+      $('#rv-note').textContent = t('comment đánh dấu devflow-sync · vòng 1/2 · không cần comment gọi review lại', 'devflow-sync marker comment · round 1/2 · no re-review comment needed');
     });
   }
   $('#rv-play').addEventListener('click', rvPlay);
   $('#rv-reset').addEventListener('click', rvReset);
+
+  /* ---------------- dispatch ---------------- */
+  const dpR = runner();
+  const dpPool = $('#dp-pool'), dpLanes = $('#dp-lanes'), dpBox = $('#dp-log');
+  const DP = [
+    { n: 31, t: 'PATCH /projects/<id>', h: 'services.py' },
+    { n: 32, t: 'DELETE /projects/<id>', h: 'services.py', dep: 'Depends on #31' },
+    { n: 33, t: 'docs: API error reference', h: 'services.py' },
+    { n: 34, t: 'GET /tasks?tag=', h: 'routes/tasks.py' },
+    { n: 35, t: 'GET /projects/<id>/tags', h: 'routes/tasks.py' },
+    { n: 36, t: 'GET /projects/<id>/summary', h: 'repository.py' },
+    { n: 37, t: 'Summary CSV export', h: '–', dep: 'Depends on #36' },
+    { n: 38, t: 'Add index on tasks.due', h: 'db.py' },
+    { n: 39, t: 'Archive a project', h: '–', dep: 'Depends on #50' },
+  ];
+  const LANES = [{ id: 'l1', ns: [31, 32, 33], h: 'services.py' }, { id: 'l2', ns: [34, 35], h: 'routes/tasks.py' }, { id: 'l3', ns: [36, 37], h: 'repository.py · Depends on #36' }];
+  const dpLog = (k, msg, c) => logTo(dpBox, k, msg, c);
+  const dpName = (n) => DP.find((d) => d.n === n).t;
+  function dpChip(n, cls, status) { // create or update the chip of issue n inside its lane
+    let c = $(`#dp-lanes .res[data-n="${n}"]`);
+    if (!c) { c = el('div', 'res'); c.dataset.n = n; }
+    c.className = cls ? `res ${cls}` : 'res';
+    c.innerHTML = `<b>#${n}</b> ${dpName(n)}${status ? `<br><span class="muted">${status}</span>` : ''}`;
+    return c;
+  }
+  function dpReset() {
+    dpR.stop();
+    dpPool.innerHTML = '';
+    DP.forEach((d) => {
+      const c = el('div', 'issue'); c.dataset.n = d.n;
+      c.innerHTML = `<span class="it"><b>#${d.n}</b> </span><div class="labels"><span class="lbl ready">agent:ready</span></div>`;
+      c.querySelector('.it').append(d.t);
+      c.append(el('span', 'dep', `Hotspots: ${d.h}${d.dep ? ` · ${d.dep}` : ''}`));
+      dpPool.append(c);
+    });
+    dpLanes.innerHTML = '';
+    LANES.forEach((l, i) => { const b = el('div', 'bin lane'); b.id = `dp-${l.id}`; b.append(el('h3', '', `Lane ${i + 1}`), el('span', 'dep', l.h), el('div', 'queue')); dpLanes.append(b); });
+    const df = el('div', 'bin def'); df.id = 'dp-def'; df.append(el('h3', '', t('Hoãn · quá maxLanes', 'Deferred · over maxLanes')), el('div', 'queue')); dpLanes.append(df);
+    dpBox.innerHTML = `<div>${t('Bấm ▶: 9 issue ready, maxLanes = 3.', 'Press ▶: 9 ready issues, maxLanes = 3.')}</div>`;
+  }
+  function dpPlay() {
+    dpReset();
+    dpR.start(async (sleep) => {
+      dpLog('collect', t('Các issue ready, chưa in-progress/blocked, chưa có PR. #39 chờ #50 (chưa có PR và không nằm trong tập) → không xếp lịch được, chỉ liệt kê', 'Ready issues, not in-progress/blocked, without a PR. #39 waits for #50 (no PR, not in the set) → not schedulable, only listed'), '--haiku');
+      await sleep(1300);
+      dpLog('plan', t('bin/devflow-lanes: gộp issue chung hotspot (đúng đường dẫn) hoặc Depends on trong tập; trong lane: parent trước, rồi theo số', 'bin/devflow-lanes: joins issues sharing a hotspot (exact path) or a Depends on inside the set; inside a lane: parents first, then by number'), '--sonnet');
+      for (const l of LANES) {
+        for (const n of l.ns) {
+          await sleep(350);
+          $(`#dp-pool .issue[data-n="${n}"]`).style.opacity = '.35';
+          $(`#dp-${l.id} .queue`).append(dpChip(n, '', ''));
+        }
+      }
+      await sleep(350);
+      $('#dp-pool .issue[data-n="38"]').style.opacity = '.35';
+      $('#dp-def .queue').append(dpChip(38, 'skp', 'over maxLanes (3)'));
+      $('#dp-pool .issue[data-n="39"] .dep').textContent = t('chờ #50 (chưa có PR), chưa xếp lịch', 'waiting for #50 (no PR), not scheduled');
+      dpLog('plan', t('3 lane: [#31 #32 #33] chung services.py · [#34 #35] chung routes/tasks.py · [#36 #37] chung repository.py và Depends on. Hoãn: #38. Chờ: #39. Hai lane không bao giờ đụng cùng file nên không conflict', '3 lanes: [#31 #32 #33] share services.py · [#34 #35] share routes/tasks.py · [#36 #37] share repository.py and a Depends on. Deferred: #38. Waiting: #39. Two lanes never touch the same files, so they never conflict'), '--sonnet');
+      await sleep(1600);
+
+      for (const [i, l] of LANES.entries()) {
+        dpLog('start', `claude --bg "/devflow:next-task ${l.ns.map((n) => '#' + n).join(' ')} --chain --isolated"`, '--haiku');
+        await sleep(450);
+        dpLog('worktree', t(`lane ${i + 1}: git worktree add --detach .claude/worktrees/lane-${l.ns.join('-')} → chạy worktree.setup (make setup)`, `lane ${i + 1}: git worktree add --detach .claude/worktrees/lane-${l.ns.join('-')} → runs worktree.setup (make setup)`), '--script');
+        await sleep(450);
+      }
+      dpLog('sessions', t('3 session nền chạy song song. Theo dõi: claude agents · claude logs <id> · claude attach <id>. Dispatch không merge', '3 background sessions run in parallel. Follow with: claude agents · claude logs <id> · claude attach <id>. Dispatch never merges'), '--fg');
+      await sleep(1400);
+
+      [31, 34, 36].forEach((n) => dpChip(n, 'run', t('đang chạy', 'running')));
+      await sleep(1500);
+      dpChip(31, 'ship', 'PR #40');
+      dpChip(34, 'blk', t('blocked: câu hỏi → /devflow:answer', 'blocked: questions → /devflow:answer'));
+      dpChip(36, 'blk', t('blocked ở Plan', 'blocked at Plan'));
+      dpLog('lane 2', t('#34 không ship → lane vẫn đi tiếp', '#34 did not ship → the lane carries on'), '--block');
+      await sleep(1300);
+      dpChip(32, 'run', t('stack trên #31 (PR #40)', 'stacked on #31 (PR #40)'));
+      dpChip(35, 'run', t('chưa issue nào ship → tách từ base', 'nothing shipped yet → starts from base'));
+      dpChip(37, 'skp', t('bỏ qua: Depends on #36 đã fail', 'skipped: its Depends on #36 failed'));
+      dpLog('lane 3', t('chỉ issue có Depends on thật vào issue fail mới bị bỏ qua (#37)', 'only an issue with a real Depends on the failed one is skipped (#37)'), '--skip');
+      await sleep(1700);
+      dpChip(32, 'blk', t('blocked ở Review', 'blocked at Review'));
+      dpChip(35, 'ship', t('PR #41 · base = main', 'PR #41 · base = main'));
+      dpChip(33, 'run', t('stack trên #31, issue cuối đã ship (không phải #32)', 'stacked on #31, the last one that shipped (not #32)'));
+      dpLog('lane 1', t('#32 fail → #33 stack trên issue cuối đã ship (#31), hoặc tách từ base nếu chưa có issue nào ship', '#32 failed → #33 stacks on the last issue that shipped (#31), or starts from base when none shipped'), '--sonnet');
+      await sleep(1700);
+      dpChip(33, 'ship', 'PR #42 · stacked on #40');
+      dpLog('done', t('Xong: 3 ship · 3 blocked · 1 bỏ qua · 1 hoãn (#38, chạy lại /devflow:dispatch sau)', 'Done: 3 shipped · 3 blocked · 1 skipped · 1 deferred (#38, run /devflow:dispatch again later)'), '--fg');
+    });
+  }
+  $('#dp-play').addEventListener('click', dpPlay);
+  $('#dp-reset').addEventListener('click', dpReset);
 
   /* ---------------- label state machine ---------------- */
   const PATHS = [
@@ -928,13 +1531,13 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     lang = next;
     try { localStorage.setItem('devflow-lang', lang); } catch (e) {}
     applyStatic();
-    specReset(); ntReset(); rvReset();
+    specReset(); ntReset(); anReset(); mgReset(); rvReset(); dpReset();
   }
   $('#lang-en').addEventListener('click', () => setLang('en'));
   $('#lang-vi').addEventListener('click', () => setLang('vi'));
 
   applyStatic();
-  specReset(); ntReset(); rvReset();
+  specReset(); ntReset(); anReset(); mgReset(); rvReset(); dpReset();
   lcTick(); smTick(); gTick();
 
   // Play the simulations once when they first scroll into view.
@@ -944,8 +1547,11 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     seen.add(e.target);
     if (e.target.id === 'spec') specPlay();
     if (e.target.id === 'next') ntPlay();
-    if (e.target.id === 'reviews') rvPlay();
+    if (e.target.id === 'answer') anPlay();
+    if (e.target.id === 'merge') mgPlay();
+    if (e.target.id === 'sync') rvPlay();
+    if (e.target.id === 'dispatch') dpPlay();
   }), { threshold: 0.35 });
-  ['#spec', '#next', '#reviews'].forEach((s) => io.observe($(s)));
+  ['#spec', '#next', '#answer', '#merge', '#sync', '#dispatch'].forEach((s) => io.observe($(s)));
 })();
 </script>

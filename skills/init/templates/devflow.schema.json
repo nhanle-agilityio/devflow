@@ -157,7 +157,8 @@
       "properties": {
         "defaultLimit": { "type": "integer", "minimum": 1, "default": 3 },
         "maxFixRounds": { "type": "integer", "minimum": 0, "default": 2 },
-        "maxReviewRounds": { "type": "integer", "minimum": 0, "default": 2 }
+        "maxReviewRounds": { "type": "integer", "minimum": 0, "default": 2 },
+        "parallelQa": { "type": "boolean", "default": true, "description": "Implement runs a QA agent (acceptance tests from the spec and issue only) in parallel with the dev agent when the plan names test files for the issue's Test cases rows. false: one agent writes the test first, then the implementation." }
       }
     },
     "worktree": {
