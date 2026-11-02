@@ -364,6 +364,10 @@ function readSpec(impl, path) {
   return String((impl && impl.specRead) || '').indexOf(path) !== -1
 }
 
+// How tests point at their Test cases row. The issue's own pattern wins over the default.
+const TEST_NAMING =
+  'If the issue, the spec or the plan states a naming pattern for these tests (for example test_t1_<n>_<description>), name every test exactly by that pattern: no extra prefix, suffix or feature word. Otherwise name it test_t<task>_<n>_<description> (row T1.2 -> test_t1_2_...) or, where names cannot carry the id, add a short comment such as "# T1.2".'
+
 // Answers from /devflow:answer live in the issue's "## Decisions" section and win over the spec.
 const DECISIONS_NOTE =
   'If the issue body has a "## Decisions" section, those decisions were made by a human after the spec was written: where they differ from the spec, the decisions win.'
@@ -596,7 +600,7 @@ Instructions:
 1. ${step1} ${DECISIONS_NOTE}
 2. Follow the project's CLAUDE.md for architecture, conventions and its "Never" list.
 3. For behaviour changes and bug fixes: first write and commit a failing test (\`test(${scopeFor(issue)}): ...\`), run it and confirm it fails for the right reason, then commit the implementation (\`feat|fix|chore|refactor(${scopeFor(issue)}): ...\`, pick the type that fits). For work without behaviour change (docs, config) one commit is fine. Use Conventional Commits in English.
-   If the issue has a "Test cases" table (rows of the spec's test matrix), write a test for every row with priority "must" and make each traceable to its row id (in the test name, e.g. test_t1_2_..., or a short comment such as "# T1.2"). "should" rows are optional. If the issue has only a test plan, follow it.
+   If the issue has a "Test cases" table (rows of the spec's test matrix), write a test for every row with priority "must" and make each traceable to its row id. ${TEST_NAMING} "should" rows are optional. If the issue has only a test plan, follow it.
    ${e2eRule(false)}
 4. Stage files by name only; never stage everything at once. Make small commits. Add no Co-Authored-By or AI attribution unless CLAUDE.md says otherwise.
 5. Stay inside the issue's scope. Anything else you notice goes into "outOfScope", unchanged in the code.
@@ -645,7 +649,7 @@ ${planText}
 Instructions:
 1. ${step1} ${DECISIONS_NOTE}
 2. Read the project's CLAUDE.md for how tests are written (fixtures, test layers, naming).
-3. Write a test for every "Test cases" row with priority "must" (and "should" rows when cheap), from the spec, the issue and its Decisions only: black box, against the public interface. Do not read or depend on the dev agent's uncommitted changes (do not run git diff or open files outside your own and the existing code). Make each test traceable to its row id (in the test name, e.g. test_t1_2_..., or a short comment such as "# T1.2"). ${e2eRule(false)}
+3. Write a test for every "Test cases" row with priority "must" (and "should" rows when cheap), from the spec, the issue and its Decisions only: black box, against the public interface. Do not read or depend on the dev agent's uncommitted changes (do not run git diff or open files outside your own and the existing code). Make each test traceable to its row id. ${TEST_NAMING} ${e2eRule(false)}
 4. Only create or edit these files: ${JSON.stringify(own.qaFiles)}. Never touch any other file.
 5. Do NOT commit, stage or stash anything: the workflow commits your tests first. The tests are expected to fail until the change exists; you may run them to check they are collected and fail for the right reason (a missing behaviour, not a syntax or import error of your own).
 6. If a row cannot be tested as written (no clear expected result, contradicts the acceptance criteria or another row), do not invent the expectation: add a question starting with "[QA] " and return status "blocked". Otherwise questions = [].
@@ -752,7 +756,7 @@ ${issueBlock(issue)}
 Run \`git diff ${parentRef}...HEAD\` and \`git log ${parentRef}..HEAD --oneline\`.${stackNote} ${specNote}
 Review, in this order:
 1. Correctness against the issue's acceptance criteria and the spec (bugs, missed edge cases, wrong contracts).
-2. Tests: does each behaviour change have a test that would fail without it? Were tests weakened? If the issue has a "Test cases" table, every row with priority "must" needs a test traceable to its row id; a missing one is a warning that names the row. ${e2eRule(true)}
+2. Tests: does each behaviour change have a test that would fail without it? Were tests weakened? If the issue has a "Test cases" table, every row with priority "must" needs a test traceable to its row id; a missing one is a warning that names the row. If the issue, the spec or the plan states a naming pattern for these tests, a test that does not follow it exactly is a warning too (it is cheap to rename now, not later). ${e2eRule(true)}
 3. Scope creep: changes not needed for the acceptance criteria.
 4. CLAUDE.md conventions and its "Never" list.
 Severity: critical = wrong behaviour / data loss / security / rule violation; warning = likely bug, missing test, scope creep; suggestion = optional improvement. Only report real problems with a file and line. verdict "pass" means no critical or warning findings.
