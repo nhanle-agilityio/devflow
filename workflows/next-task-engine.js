@@ -391,7 +391,7 @@ function issueBlock(issue) {
 
 function selectPrompt() {
   const explicit = explicitIssues.length
-    ? `Explicit issues requested by the user: ${explicitIssues.map((n) => '#' + n).join(', ')}. Use exactly these (still skip, with a reason, any that is closed or already has an open PR referencing it). Do not apply the label filter to them.${chain ? ` These issues are a lane to run in exactly this order: return them in the order given and do not reorder them. Do not skip an issue only because an earlier issue of the same list is still open without a PR: treat it as a dependency that is in the selection (parents entry with inRun true, as below).` : ''}`
+    ? `Explicit issues requested by the user: ${explicitIssues.map((n) => '#' + n).join(', ')}. Use exactly these (still skip, with a reason, any that is closed or already has an open PR referencing it). Do not apply the label filter to them.${chain ? ` These issues are a lane to run in exactly this order: return them in the order given and do not reorder them. Lane order is handled by the engine, so an earlier issue of the same list is NOT a parent by itself: add it to parents (inRun true, as below) only when this issue has a real \"Depends on\" line for it. Do not skip an issue only because an earlier issue of the same list is still open without a PR.` : ''}`
     : `No explicit issues. Select open issues labelled "${labels.ready}" that are NOT labelled "${labels.inProgress}" or "${labels.blocked}".`
   return `You are selecting GitHub issues for ${gh.owner}/${gh.repo}. ${MCP_NOTE}
 
@@ -987,7 +987,7 @@ const shipped = {}
 const status = {}
 let worked = 0
 let previous = null // chain: the last issue worked on, {number, status}
-let laneBroken = ''
+let lastShipped = null // chain: the last issue of the lane that shipped; the next one stacks on it
 
 for (const issue of queue) {
   if (worked >= limit) {
@@ -995,13 +995,10 @@ for (const issue of queue) {
     report.push({ issue: issue.number, status: 'skipped', reason: `over limit (${limit})` })
     continue
   }
-  if (chain && !laneBroken && previous && previous.status !== 'pr') {
-    laneBroken = `previous issue in the lane (#${previous.number}) did not ship (${previous.status})`
-  }
-  if (laneBroken) {
-    log(`Skipped #${issue.number}: ${laneBroken}`)
-    report.push({ issue: issue.number, status: 'skipped', reason: laneBroken })
-    continue
+  // Chain: an issue that did not ship does not stop the lane. The next one stacks on the last issue that
+  // shipped, or starts from the base; only a real "Depends on" the failed issue skips it (resolved below).
+  if (chain && previous && previous.status !== 'pr') {
+    log(`#${issue.number}: lane continues although #${previous.number} did not ship (${previous.status}); ${lastShipped ? `stacking on #${lastShipped}` : `starting from ${base}`}.`)
   }
   // Resolve parents selected in this run from the PRs they shipped.
   const resolved = []
@@ -1019,11 +1016,11 @@ for (const issue of queue) {
     resolved.push({ issue: p.issue, prNumber: parent.prNumber, branch: parent.branch, inRun: false })
     log(`#${issue.number}: parent #${p.issue} shipped as PR #${parent.prNumber} (${parent.branch}).`)
   }
-  // Chain: stack on the previous issue of the lane, which shipped (checked above).
-  if (chain && previous && !resolved.some((p) => p.issue === previous.number)) {
-    const prev = shipped[previous.number]
-    resolved.push({ issue: previous.number, prNumber: prev.prNumber, branch: prev.branch, inRun: false })
-    log(`#${issue.number}: lane, stacked on #${previous.number} (PR #${prev.prNumber}).`)
+  // Chain: stack on the last issue of the lane that shipped.
+  if (chain && lastShipped && !resolved.some((p) => p.issue === lastShipped)) {
+    const prev = shipped[lastShipped]
+    resolved.push({ issue: lastShipped, prNumber: prev.prNumber, branch: prev.branch, inRun: false })
+    log(`#${issue.number}: lane, stacked on #${lastShipped} (PR #${prev.prNumber}).`)
   }
   if (unshipped) {
     const why = `parent #${unshipped.issue} did not ship (${status[unshipped.issue] || 'not worked on'})`
@@ -1041,7 +1038,10 @@ for (const issue of queue) {
   }
   status[issue.number] = result.status
   previous = { number: issue.number, status: result.status }
-  if (result.status === 'pr') shipped[issue.number] = { prNumber: result.prNumber, branch: result.branch }
+  if (result.status === 'pr') {
+    shipped[issue.number] = { prNumber: result.prNumber, branch: result.branch }
+    lastShipped = issue.number
+  }
   report.push(result)
   // Every issue starts from a clean checkout of the original branch (an isolated run has no start branch).
   if (!isolated) await agent(restorePrompt(), { label: `restore ${startBranch}`, phase: 'Report', schema: RESTORE_SCHEMA, model: 'haiku' })
