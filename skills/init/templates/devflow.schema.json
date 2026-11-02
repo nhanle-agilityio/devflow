@@ -159,6 +159,33 @@
         "maxFixRounds": { "type": "integer", "minimum": 0, "default": 2 },
         "maxReviewRounds": { "type": "integer", "minimum": 0, "default": 2 }
       }
+    },
+    "worktree": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Isolated runs (/devflow:next-task --isolated, /devflow:dispatch): each ticket gets its own git worktree.",
+      "properties": {
+        "dir": { "type": "string", "minLength": 1, "default": ".claude/worktrees", "description": "Directory (relative to the repository root) that holds the worktrees. Keep it in .gitignore." },
+        "setup": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": [],
+          "description": "Commands run once in a fresh worktree before any work, e.g. \"make setup\" or \"npm ci\"."
+        }
+      }
+    },
+    "dispatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read by /devflow:dispatch, which starts one background Claude session per lane.",
+      "properties": {
+        "maxLanes": { "type": "integer", "minimum": 1, "default": 3, "description": "Most background sessions running at the same time." },
+        "pluginDir": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Passed as --plugin-dir to background sessions when the plugin is loaded from a local directory. Omit when it is installed from a marketplace."
+        }
+      }
     }
   }
 }
