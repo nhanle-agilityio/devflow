@@ -1,16 +1,20 @@
 #!/usr/bin/env node
 'use strict';
 // devflow-lanes: group ready issues into lanes that can run in parallel without colliding.
-// Input (stdin JSON): {"maxLanes": N, "issues": [{"number": int, "hotspots": [string], "dependsOn": [int]}]}
-// Output (stdout JSON): {"lanes": [{"issues": [int], "sharedHotspots": [string]}], "deferred": [...], "warnings": [...]}
+// Input (stdin JSON): {"maxLanes": N, "ignoreHotspots": [string], "issues": [{"number": int, "hotspots": [string], "dependsOn": [int]}]}
+// Output (stdout JSON): {"lanes": [{"issues": [int], "sharedHotspots": [string]}], "deferred": [...], "ignoredHotspots": [string], "warnings": [...]}
 
 const USAGE = `Usage: devflow-lanes < input.json
 
-Reads {"maxLanes": N, "issues": [{"number": 1, "hotspots": ["a.py"], "dependsOn": [2]}]} from stdin.
+Reads {"maxLanes": N, "ignoreHotspots": ["README.md"], "issues": [{"number": 1, "hotspots": ["a.py"], "dependsOn": [2]}]} from stdin.
+Hotspots matching ignoreHotspots (exact path, or glob with * and **; default ["README.md", "CHANGELOG.md"], [] ignores
+none) are dropped before grouping and listed in "ignoredHotspots".
 Issues that share a hotspot (exact path, trimmed) or depend on each other (inside the set) share a lane;
 inside a lane, parents come first, ties by issue number. Lanes are sorted by smallest issue number; lanes
-beyond maxLanes (default 3) go to "deferred". Prints {"lanes", "deferred", "warnings"} as JSON.
+beyond maxLanes (default 3) go to "deferred". Prints {"lanes", "deferred", "ignoredHotspots", "warnings"} as JSON.
 Exits 1 on invalid input.`;
+
+const DEFAULT_IGNORE = ['README.md', 'CHANGELOG.md'];
 
 function isPosInt(n) {
   return Number.isInteger(n) && n > 0;
@@ -20,6 +24,9 @@ function validate(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('input must be a JSON object');
   const maxLanes = input.maxLanes === undefined ? 3 : input.maxLanes;
   if (!isPosInt(maxLanes)) throw new Error('maxLanes must be a positive integer');
+  const ignoreHotspots = input.ignoreHotspots === undefined ? DEFAULT_IGNORE : input.ignoreHotspots;
+  if (!Array.isArray(ignoreHotspots) || ignoreHotspots.some((g) => typeof g !== 'string'))
+    throw new Error('ignoreHotspots must be an array of strings');
   if (!Array.isArray(input.issues)) throw new Error('issues must be an array');
   const seen = new Set();
   const issues = input.issues.map((raw, i) => {
@@ -39,11 +46,40 @@ function validate(input) {
       dependsOn: [...new Set(dependsOn)],
     };
   });
-  return { maxLanes, issues };
+  return { maxLanes, ignoreHotspots: ignoreHotspots.map((g) => g.trim()).filter(Boolean), issues };
+}
+
+// Glob to RegExp: ** matches across directories, * matches within one path segment, ? one non-slash character.
+function globToRegExp(glob) {
+  let re = '';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === '*') {
+      if (glob[i + 1] === '*') {
+        i++;
+        if (glob[i + 1] === '/') {
+          i++;
+          re += '(?:.*/)?';
+        } else re += '.*';
+      } else re += '[^/]*';
+    } else if (c === '?') re += '[^/]';
+    else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${re}$`);
 }
 
 function planLanes(input) {
-  const { maxLanes, issues } = validate(input);
+  const { maxLanes, ignoreHotspots, issues: rawIssues } = validate(input);
+  const ignore = ignoreHotspots.map(globToRegExp);
+  const ignored = new Set();
+  const issues = rawIssues.map((x) => ({
+    ...x,
+    hotspots: x.hotspots.filter((h) => {
+      if (!ignore.some((re) => re.test(h))) return true;
+      ignored.add(h);
+      return false;
+    }),
+  }));
   const byNum = new Map(issues.map((x) => [x.number, x]));
   const parent = new Map(issues.map((x) => [x.number, x.number]));
   const find = (a) => {
@@ -106,7 +142,7 @@ function planLanes(input) {
   const deferred = all
     .slice(maxLanes)
     .map(({ issues: i }) => ({ issues: i, reason: `over maxLanes (${maxLanes})` }));
-  return { lanes, deferred, warnings };
+  return { lanes, deferred, ignoredHotspots: [...ignored].sort(), warnings };
 }
 
 if (require.main !== module) {
