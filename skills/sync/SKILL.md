@@ -11,6 +11,8 @@ Arguments: $ARGUMENTS
 
 Rules: GitHub operations go through the GitHub MCP server (load its tools with ToolSearch). Only new commits and normal pushes: never rebase, never rewrite pushed history, never force-push, never merge a PR, never push to a protected branch. No `Co-Authored-By` or AI attribution in commits, comments or replies. Never write the review bot's at-sign handle anywhere. Follow `CLAUDE.md` and `.claude/devflow.json` (if the config is missing, tell the user to run `/devflow:init` and stop).
 
+**Merged state:** never trust a `merged` field from a PR list or search result; the GitHub MCP list tools report `merged: false` for merged PRs. A PR is merged when `pull_request_read` (method `get`) returns a non-null `merged_at`, or when `git merge-base --is-ancestor <head sha> <remote>/<baseBranch>` succeeds after a fetch. Closed with neither: closed without merging. Take "merged by" and "merged at" from `pull_request_read`, not from a list.
+
 ## 0. Targets
 
 - Explicit `#pr` numbers in `$ARGUMENTS` are the targets.

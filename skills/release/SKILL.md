@@ -11,6 +11,8 @@ Arguments: $ARGUMENTS
 
 Rules: use the GitHub MCP server for every GitHub operation (load its tools with ToolSearch); `gh` only if MCP is unavailable. Never merge a PR, never push to the base branch, never force-push, and never push tags from the shell: the tag is created by the GitHub release. Everything posted is English. No `Co-Authored-By` or AI attribution in notes or comments. Never write the review bot's at-sign handle anywhere. Follow `CLAUDE.md` and `.claude/devflow.json`. Config used: `release.tagPrefix` (default `v`), `release.draft` (default true), `release.deploy` (default empty), `release.notesFrom` (`prs`).
 
+**Merged state:** never trust a `merged` field from a PR list or search result; the GitHub MCP list tools report `merged: false` for merged PRs. A PR is merged when `pull_request_read` (method `get`) returns a non-null `merged_at`, or when `git merge-base --is-ancestor <head sha> <remote>/<baseBranch>` succeeds after a fetch. Closed with neither: closed without merging. Take "merged by" and "merged at" from `pull_request_read`, not from a list.
+
 ## 0. Preflight
 
 Fail fast with a clear message if any check fails.
@@ -22,10 +24,10 @@ Fail fast with a clear message if any check fails.
 
 ## 1. Collect the pull requests
 
-Collect the merged PRs labelled `labels.devflow` whose base is `baseBranch`:
+Collect the merged PRs (merged per the Merged state rule) labelled `labels.devflow` whose base is `baseBranch`:
 
 - Spec form: read the spec on the base branch (`git show <remote>/<baseBranch>:<specDir>/<file>`), find the issues whose body links it, and take the merged PRs that close them (plus the spec PR itself).
-- `since` form: the merged PRs labelled `labels.devflow` merged after the tag's commit date.
+- `since` form: the merged PRs (merged per the Merged state rule) labelled `labels.devflow` merged after the tag's commit date.
 
 For each PR keep: number, title, type (the Conventional Commit type of the title), risk label, who merged it, merged at, closing issue.
 

@@ -11,6 +11,8 @@ Arguments: $ARGUMENTS
 
 Shows the flow, not slides: for each issue of a spec, the path ticket, plan, PR, review, tests, merged, accepted, released, with who acted at each step and a link to the evidence. Rules: use the GitHub MCP server for every GitHub read (load its tools with ToolSearch); `gh` only if MCP is unavailable. This skill only reads GitHub and the repository, and posts nothing on GitHub. Never merge, never push. Everything written is English. Never write the review bot's at-sign handle in the page. Follow `.claude/devflow.json`.
 
+**Merged state:** never trust a `merged` field from a PR list or search result; the GitHub MCP list tools report `merged: false` for merged PRs. A PR is merged when `pull_request_read` (method `get`) returns a non-null `merged_at`, or when `git merge-base --is-ancestor <head sha> <remote>/<baseBranch>` succeeds after a fetch. Closed with neither: closed without merging. Take "merged by" and "merged at" from `pull_request_read`, not from a list.
+
 ## 0. Preflight
 
 1. `.claude/devflow.json` exists and parses as JSON; else tell the user to run `/devflow:init`.
