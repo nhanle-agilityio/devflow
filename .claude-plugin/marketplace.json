@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "devflow",
-      "version": "2.5.0",
+      "version": "2.5.1",
       "source": "./",
       "description": "Spec-to-PR workflow for any project: /devflow:init, /devflow:spec, /devflow:next-task, /devflow:sync, a merge gate Action for low-risk PRs, and a guard hook that blocks merges by Claude and pushes to protected branches."
     }
