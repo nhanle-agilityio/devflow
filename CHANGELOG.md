@@ -2,6 +2,12 @@
 
 All notable changes to devflow. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/).
 
+## [2.5.1]
+
+### Fixed
+- Merge gate: the `<!-- devflow-gate-merged -->` comment is posted right after the merge, before stacked PRs are retargeted and the head branch is deleted. A failure in either step (for example a 422 when GitHub already auto-deleted the branch) no longer loses the marker, which is the only gate marker for `rebase` merges.
+- Upgrade: run `/devflow:init --upgrade` in each project to get the fixed gate script.
+
 ## [2.5.0]
 
 ### Added
