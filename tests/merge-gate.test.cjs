@@ -267,6 +267,21 @@ test('real merge: commit trailer and one gate-merged comment', async () => {
   assert.ok(posted[0][1].body.startsWith(gate.GATE_MERGED_MARKER));
 });
 
+test('gate-merged comment is posted before cleanup, even when deleteRef fails', async () => {
+  const env = makeEnv({ prs: [makePr(1)], ...green(1) });
+  env.github.rest.git.deleteRef = async (a) => {
+    env.calls.push(['deleteRef', a]);
+    throw new Error('Reference does not exist');
+  };
+  await run(env, CONFIG({ method: 'rebase' }));
+  const posted = env.names('createComment');
+  assert.equal(posted.length, 1);
+  assert.ok(posted[0][1].body.startsWith(gate.GATE_MERGED_MARKER));
+  const order = env.calls.map(([c]) => c);
+  assert.ok(order.indexOf('pulls.merge') < order.indexOf('createComment'));
+  assert.ok(order.indexOf('createComment') < order.indexOf('deleteRef'));
+});
+
 test('rebase merge: no commit title or message', async () => {
   const env = makeEnv({ prs: [makePr(1)], ...green(1) });
   await run(env, CONFIG({ method: 'rebase' }));
