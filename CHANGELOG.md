@@ -2,6 +2,14 @@
 
 All notable changes to devflow. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/).
 
+## [2.4.1]
+
+### Fixed
+- Merged state is read from `pull_request_read` `merged_at` or from git ancestry, never from list results, which report `merged: false` for merged PRs. Affects doctor, accept, report, release, sync and the engine's parent check.
+
+### Changed
+- Doctor warns about `devflowVersion` only for a major or minor difference.
+
 ## [2.4.0] - wave 4
 
 ### Added

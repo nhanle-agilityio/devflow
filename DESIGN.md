@@ -266,7 +266,7 @@ Per PR:
 
 `disable-model-invocation: true`. Read-only by default; with `--fix` it changes only what the user confirms item by item. Never merges, force pushes, pushes to or deletes the base or a protected branch. Runs every check even when one fails; without a config only checks 3 and 8 run.
 
-1. **Config**: parses and validates against the schema; `devflowVersion` older or missing → warn, suggest `/devflow:init --upgrade`.
+1. **Config**: parses and validates against the schema; `devflowVersion` with a lower major or minor version, or missing → warn (a lower patch version only is ok), suggest `/devflow:init --upgrade`.
 2. **Templates**: drifted installed templates (same comparison as `--upgrade`); report only.
 3. **GitHub access**: MCP reachable (fail otherwise); `gh` missing is a warn (runs stop when the MCP connection drops).
 4. **Worktrees** under `worktree.dir`: clean or dirty, branch pushed or not. `--fix` removes clean ones whose branch is pushed or merged (no `--force`), never a dirty one.

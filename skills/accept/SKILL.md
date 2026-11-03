@@ -11,6 +11,8 @@ Arguments: $ARGUMENTS
 
 The BA step after merge: does what shipped match what the spec promised? Rules: use the GitHub MCP server for every GitHub operation (load its tools with ToolSearch); `gh` only if MCP is unavailable. Never merge a PR, never push to the base branch, never force-push. This skill changes no tracked file and makes no commit. Everything posted is English. No `Co-Authored-By` or AI attribution in issues or comments. Never write the review bot's at-sign handle anywhere. Follow `CLAUDE.md` and `.claude/devflow.json`. Run the checks with the model in `accept.model` (`sonnet` or `opus`, default `sonnet`): when the current model differs, do the walk in step 4 with an Agent of that model and give it the criteria and the run instructions.
 
+**Merged state:** never trust a `merged` field from a PR list or search result; the GitHub MCP list tools report `merged: false` for merged PRs. A PR is merged when `pull_request_read` (method `get`) returns a non-null `merged_at`, or when `git merge-base --is-ancestor <head sha> <remote>/<baseBranch>` succeeds after a fetch. Closed with neither: closed without merging. Take "merged by" and "merged at" from `pull_request_read`, not from a list.
+
 ## 0. Preflight
 
 Fail fast with a clear message if any check fails.
@@ -26,7 +28,7 @@ Fail fast with a clear message if any check fails.
 1. Find the file on the base branch only: `git show <remote>/<baseBranch>:<specDir>/<file>`. For a slug, match the file name that ends in `<slug>.md`; if several match, ask. If none, tell the user the spec is not on the base branch (its spec PR is not merged) and stop.
 2. List its tasks (`T1..Tn`), the acceptance criteria of each and the Test matrix rows with level `http` or `e2e`.
 3. Search the repository's issues (open and closed) whose body links the spec file; they are the spec's issues. Match them to tasks by the `T<n>` in the title.
-4. Report each issue's state and its closing PR (merged or not). If some are still open, say acceptance covers only the merged ones and continue with their criteria. If none is merged, say there is nothing to accept yet and stop.
+4. Report each issue's state and its closing PR (merged or not, merged per the Merged state rule). If some are still open, say acceptance covers only the merged ones and continue with their criteria. If none is merged, say there is nothing to accept yet and stop.
 
 ## 2. Fresh worktree of the base
 
