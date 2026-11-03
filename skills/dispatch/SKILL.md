@@ -31,7 +31,7 @@ Using the GitHub MCP server (`github.owner` / `github.repo`), list open issues l
 
 For each schedulable issue build `{"number": N, "hotspots": [...], "dependsOn": [...]}`:
 
-- `hotspots`: the bullet lines under the issue body's `## Hotspots` heading, backticks stripped, trimmed. Skip empty lines and a bare "None".
+- `hotspots`: the bullet lines under the issue body's `## Hotspots` heading, backticks stripped, trimmed. Skip empty lines and a bare "None". Hotspots matching `dispatch.ignoreHotspots` are dropped by the planner in step 2.
 - `dependsOn`: every issue number from its `Depends on #N` lines (open or closed; the planner ignores numbers outside the set).
 
 ## 2. Plan the lanes
@@ -46,13 +46,13 @@ JSON
 
 (A quoted heredoc, so quotes or `$` in hotspot paths cannot break the shell command.)
 
-Input: `{"maxLanes": N, "issues": [...]}`. Output: `{"lanes": [{"issues": [...], "sharedHotspots": [...]}], "deferred": [{"issues": [...], "reason": "..."}], "warnings": [...]}`. If it exits non-zero, show the message and stop. Show any `warnings`.
+Input: `{"maxLanes": N, "ignoreHotspots": [...], "issues": [...]}`, with `ignoreHotspots` = `dispatch.ignoreHotspots` from the config (`["README.md", "CHANGELOG.md"]` if unset; exact paths or globs with `*` and `**`). Conflicts in such files are small and are resolved by the merge gate's branch update or `/devflow:sync`, so they do not join lanes. Output: `{"lanes": [{"issues": [...], "sharedHotspots": [...]}], "deferred": [{"issues": [...], "reason": "..."}], "ignoredHotspots": [...], "warnings": [...]}`. If it exits non-zero, show the message and stop. Show any `warnings`.
 
 If there are no lanes, say so (and list the waiting issues) and stop.
 
 ## 3. Show the plan, then start
 
-Print a table: lane, issues in run order, shared hotspots. Below it, list deferred lanes with their reason and the "waiting for #N" issues. Then continue straight to step 4; do not ask again.
+Print a table: lane, issues in run order, shared hotspots. Below it, list the ignored hotspots (`ignoredHotspots`, "not used for lanes: ..."), deferred lanes with their reason and the "waiting for #N" issues. Then continue straight to step 4; do not ask again.
 
 ## 4. Start one background session per lane
 

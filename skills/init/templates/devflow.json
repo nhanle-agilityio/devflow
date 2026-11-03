@@ -1,6 +1,8 @@
 {
   // Annotated example. init writes plain JSON (no comments) to .claude/devflow.json.
   "$schema": "./devflow.schema.json",
+  // The plugin version the templates were installed from (written by /devflow:init, updated by /devflow:init --upgrade).
+  "devflowVersion": "2.4.0",
   // remote = the git remote that points at GitHub
   "github": { "owner": "acme", "repo": "shop", "remote": "origin" },
   // Branches start from <remote>/<baseBranch>; PRs target it.
@@ -52,7 +54,10 @@
     "modes": ["http", "browser"],
     "devServer": { "run": "npm run dev", "url": "http://localhost:3000", "readyTimeoutSec": 60 },
     // "playwright" (Playwright MCP) or "chrome" (Claude in Chrome)
-    "browserTool": "playwright"
+    "browserTool": "playwright",
+    // Only one session at a time runs Verify on this machine (a lock under the git common dir), so parallel lanes
+    // do not fight over the dev server port.
+    "lock": true
   },
   // QA step of /devflow:spec: draft a test matrix from the acceptance criteria. qaModel is "opus" or "sonnet".
   "spec": { "testMatrix": true, "qaModel": "opus" },
@@ -62,5 +67,15 @@
   "worktree": { "dir": ".claude/worktrees", "setup": ["npm ci"] },
   // /devflow:dispatch: at most maxLanes background sessions at once. pluginDir (optional) is passed as --plugin-dir
   // to those sessions when the plugin is loaded from a local directory.
-  "dispatch": { "maxLanes": 3 }
+  // ignoreHotspots: hotspots matching these paths or globs (* and **) do not join lanes; conflicts there are small and
+  // resolved by the merge gate's branch update or /devflow:sync.
+  "dispatch": { "maxLanes": 3, "ignoreHotspots": ["README.md", "CHANGELOG.md"] },
+  // Push notification (Claude Code PushNotification tool) when a run ends with a blocked issue, a risk:high PR waiting
+  // for a human, or at the end of a lane. The other three switch each event on or off.
+  "notify": { "push": true, "onDone": true, "onBlocked": true, "onHighRisk": true },
+  // /devflow:release: tag = tagPrefix + version. draft: the GitHub release is created as a draft; a human publishes it.
+  // deploy: optional shell command run after the release, only after the user says yes. notesFrom: "prs".
+  "release": { "tagPrefix": "v", "draft": true, "deploy": "", "notesFrom": "prs" },
+  // /devflow:accept: model is "sonnet" or "opus"; labels are added to the gap issues it files.
+  "accept": { "model": "sonnet", "labels": ["type:gap"] }
 }

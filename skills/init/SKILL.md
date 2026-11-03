@@ -1,12 +1,15 @@
 ---
 name: init
 description: Set up devflow in the current project once: detect remotes, branches, scripts and CLAUDE.md, write .claude/devflow.json and its schema, configure risk and the merge gate, and optionally install the GitHub Actions. Idempotent.
+argument-hint: "[--upgrade]"
 disable-model-invocation: true
 ---
 
 # /devflow:init
 
-Sets a project up for the devflow workflows. Safe to re-run: when files exist, show a diff of the proposed changes and change nothing until the user agrees. The project's own rules stay in `CLAUDE.md`; mechanics go in `.claude/devflow.json`. Do not restate CLAUDE.md in the config.
+Arguments: $ARGUMENTS
+
+Sets a project up for the devflow workflows. With `--upgrade`, skip to "Upgrade" below instead. Safe to re-run: when files exist, show a diff of the proposed changes and change nothing until the user agrees. The project's own rules stay in `CLAUDE.md`; mechanics go in `.claude/devflow.json`. Do not restate CLAUDE.md in the config.
 
 Follow the steps in order and announce each by number.
 
@@ -32,8 +35,9 @@ Collect, with read-only commands:
    - `testing.e2eFramework`: set true only when the repo has an automated e2e/browser test setup that can hold committed e2e tests (a Playwright or Cypress config, a `tests/e2e` folder, and so on); otherwise false. Say which signal you used.
    - `worktree.setup`: commands that make a fresh git worktree ready to work in (dependencies, virtualenv, build). Propose them from the detected tooling (`make setup`, `npm ci`, a venv plus `pip install -r requirements.txt`, `bundle install`, and so on) and say where each came from; empty is fine. Keep `worktree.dir` at `.claude/worktrees` unless the user wants another place.
    - `dispatch.maxLanes`: how many background sessions `/devflow:dispatch` may run at once (default 3). Leave `dispatch.pluginDir` unset unless the plugin is loaded from a local directory.
+   - Mention the newer keys with their defaults (`dispatch.ignoreHotspots`, `verify.lock`, `notify`, `release`, `accept`) and ask only about `notify.push`; leave the others unset.
    - Mention `spec.testMatrix` (default on) and `spec.qaModel` (`opus` or `sonnet`, default `opus`) and ask whether to change them.
-5. Write plain JSON (no comments) to `.claude/devflow.json` and copy the schema to `.claude/devflow.schema.json` (the config's `$schema` is `./devflow.schema.json`). If a config already exists, show the diff first and apply only after a yes.
+5. Write plain JSON (no comments) to `.claude/devflow.json` with `"devflowVersion"` set to the installed plugin version (`version` in `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`), and copy the schema to `.claude/devflow.schema.json` (the config's `$schema` is `./devflow.schema.json`). If a config already exists, show the diff first and apply only after a yes.
 6. Validate the written file against the schema (all required keys present, types right, no unknown keys).
 
 ## 3. Check CLAUDE.md
@@ -67,3 +71,17 @@ Then print the `permissions` snippet from `${CLAUDE_PLUGIN_ROOT}/README.md` for 
 Tell the user: the plugin hook blocks merging PRs and pushing to protected branches (`baseBranch` plus `protectedBranches`); GitHub MCP must be connected for the other workflows; run `/devflow:spec <idea>` next.
 
 Do not commit or push anything.
+
+## Upgrade (`--upgrade`)
+
+For a project that already ran init. Needs a clean working tree and `.claude/devflow.json` (otherwise tell the user to run `/devflow:init` without the flag). Do not touch the project's other files.
+
+1. Read the installed plugin version (`version` in `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`) and the project's `devflowVersion` (missing means unknown).
+2. Compare byte for byte every installed template file the project has with the plugin's template: `.github/workflows/claude-code-review.yml`, `.github/workflows/devflow-merge-gate.yml`, `.github/workflows/claude.yml`, `.github/scripts/devflow-merge-gate.cjs` (from `${CLAUDE_SKILL_DIR}/templates/github/`) and `.claude/devflow.schema.json` (from `${CLAUDE_SKILL_DIR}/templates/devflow.schema.json`). Skip templates the project never installed. List the drifted ones.
+3. List the config keys present in the template but missing in the project's config, with their defaults. Do not add keys whose default is fine unless the user asks for them to be written.
+4. Show the plan: the version change, the drifted files, the missing keys. For each drifted file show the diff and ask per file (we cannot tell whether the project edited it after install, so always show the diff); a file the user declines is left as it is. The merge gate workflow's `workflow_run` `workflows:` list was filled in by init: keep the project's list when copying that file.
+5. After a yes: create branch `chore/devflow-upgrade-<version>` from `<remote>/<baseBranch>`, copy the accepted templates, update `.claude/devflow.schema.json`, set `devflowVersion` (and any keys the user asked for) in `.claude/devflow.json`, and validate it against the new schema.
+6. Commit `chore(devflow): upgrade templates to devflow <version>` (stage the files by name, no attribution trailer), push the branch normally, and open a PR against `baseBranch` with the GitHub MCP, labelled `labels.devflow` and `labels.riskHigh` (it touches `.github/**` and `.claude/**`, so a human merges). If PR creation fails, print a pre-filled compare link instead (`https://github.com/<owner>/<repo>/compare/<baseBranch>...chore/devflow-upgrade-<version>?expand=1`).
+7. Remind the user: a changed merge gate workflow only acts once it is on the default branch; secrets and settings from the first init still apply.
+
+Never merge the PR, never push to the base branch, never force push.

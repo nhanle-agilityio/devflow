@@ -20,6 +20,7 @@ Fail fast with a clear message if any check fails; do not start the workflow.
 3. Not isolated: note the current branch (`git branch --show-current`); it is restored after every issue. If HEAD is detached, stop and ask the user to switch to a branch. Isolated (`--isolated`): a detached HEAD is fine and there is no start branch.
 4. `git fetch <remote> <baseBranch>` succeeds (`remote` is `github.remote`, default `origin`).
 5. The GitHub MCP server is reachable: load its tools with ToolSearch and get the authenticated user.
+6. Note whether the `gh` CLI is installed (`command -v gh`); pass it as `ghCli`. Without it, a GitHub MCP outage stops the run with "GitHub MCP unavailable" instead of blocking issue after issue.
 
 ## 2. Parse the arguments
 
@@ -52,7 +53,8 @@ Call the Workflow tool with name `devflow:next-task-engine` and this `args` obje
   "prTemplatePath": "${CLAUDE_SKILL_DIR}/templates/pr.md",
   "isolated": false,
   "chain": false,
-  "claimId": "<from step 2b>"
+  "claimId": "<from step 2b>",
+  "ghCli": true
 }
 ```
 
@@ -62,8 +64,18 @@ Fill `config` with the full parsed config object, and the other values from step
 
 Isolated mode first: if the worktree has no uncommitted changes (`git status --porcelain` empty) and every branch the run created is pushed, call ExitWorktree, then `git worktree remove <path>`. Otherwise call ExitWorktree and keep the worktree; tell the user its path and why.
 
-Then print a table: issue, then PR link (with its risk and, when stacked, the PR or PRs it is stacked on: `stackedOn` is a list, empty when not stacked), or blocked with the reason, or skipped with the reason (including `already claimed` / `claimed by <id>`: another session works on that issue). Mention that blocked issues have a comment explaining what a human must decide. An issue blocked with questions (the comment starts with `<!-- devflow-questions -->`, numbered and tagged [BA], [QA] or [Dev]) is unblocked with `/devflow:answer #<n>`, which records the answers in the spec and the issue and sets the issue ready again.
+Then print a table from the workflow result, one row per entry, using only its fields: issue, status, PR link with `risk` and `stackedOn` (a list, empty when not stacked), or the `reason` for blocked and skipped (including `already claimed` / `claimed by <id>`: another session works on that issue), and a Notes column with the entry's `notes` joined by "; " exactly as returned. Do not add your own account of what happened in between (timing, why something was or was not stacked): the notes already state it, and anything else is a guess. Mention that blocked issues have a comment explaining what a human must decide. An issue blocked with questions (the comment starts with `<!-- devflow-questions -->`, numbered and tagged [BA], [QA] or [Dev]) is unblocked with `/devflow:answer #<n>`, which records the answers in the spec and the issue and sets the issue ready again. If an entry says "GitHub MCP unavailable", say the run stopped there, that the issue keeps its in-progress label and claim, and that `/devflow:doctor --fix` cleans that up once GitHub is reachable again.
 
 Explain who merges: `risk:low` PRs are merged by the merge gate GitHub Action when it is enabled (`mergeGate.enabled`) and its required checks are green; `risk:high` PRs (and PRs without a risk label) wait for a human. A PR stacked on one or more other PRs is merged by the gate only after every dependency is closed; `risk:high` still waits for a human. `/devflow:sync` handles conflicts, retargeting of stacked PRs and review comments.
+
+## 5. Notify
+
+Only when `notify.push` is true (default true) and the PushNotification tool is available (load it with ToolSearch `select:PushNotification`; skip this step silently when it does not exist). Send one notification, at most 200 characters, naming the repository:
+
+- `notify.onBlocked` (default true) and some issue is blocked: "devflow <repo>: #<n> blocked at <stage>" (all blocked issues, comma separated).
+- `notify.onHighRisk` (default true) and a PR has risk high: "devflow <repo>: PR #<pr> is risk:high and waits for your merge".
+- Otherwise `notify.onDone` (default true): "devflow <repo>: <k> PR(s) opened, <m> skipped".
+
+Combine them into one message when several apply. This lets you follow background lanes (`/devflow:dispatch`) from your phone.
 
 Never merge a PR, never push to the base branch.

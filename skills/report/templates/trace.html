@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devflow trace</title>
+<!--
+Template of /devflow:report. The skill replaces {{TRACE_JSON}} inside the data script with the trace JSON.
+Sample data for testing (paste it in place of {{TRACE_JSON}}):
+{"generatedAt":"2026-11-03T10:00:00Z","spec":{"slug":"task-comment-count","title":"Task comment counts","path":"docs/specs/2026-11-01-task-comment-count.md","url":"https://github.com/acme/shop/blob/main/docs/specs/2026-11-01-task-comment-count.md","pr":{"number":40,"url":"https://github.com/acme/shop/pull/40","mergedAt":"2026-11-01T09:00:00Z","mergedBy":"nhanle","byGate":false}},"acceptance":{"url":"https://github.com/acme/shop/pull/40#issuecomment-1","pass":3,"fail":1,"notCheckable":0},"release":{"tag":"v0.2.0","url":"https://github.com/acme/shop/releases/tag/v0.2.0","draft":true},"issues":[{"number":41,"url":"https://github.com/acme/shop/issues/41","title":"[task-comment-count] T1: Add comment_count to task","labels":["agent:ready","risk:low","type:feat"],"risk":"low","plan":{"url":"https://github.com/acme/shop/issues/41#issuecomment-2","excerpt":"Files: services.py, repository.py"},"questions":null,"blocked":false,"pr":{"number":44,"url":"https://github.com/acme/shop/pull/44","base":"main","stacked":false,"state":"merged","mergedAt":"2026-11-02T08:00:00Z","mergedBy":"github-actions[bot]","byGate":true},"review":{"state":"success","description":"pass: 0 critical, 0 warning","rounds":1,"url":"https://github.com/acme/shop/pull/44#issuecomment-3"},"tests":{"files":["tests/test_comments.py"],"count":4,"rows":["T1.1","T1.2"],"testFirst":true},"commits":[{"sha":"a1b2c3d","message":"test(#41): comment_count"},{"sha":"d4e5f6a","message":"feat(#41): comment_count"}],"accepted":{"result":"pass","url":"https://github.com/acme/shop/pull/40#issuecomment-1"}},{"number":42,"url":"https://github.com/acme/shop/issues/42","title":"[task-comment-count] T2: Sort by comments","labels":["agent:blocked","risk:high"],"risk":"high","plan":{"url":"https://github.com/acme/shop/issues/42#issuecomment-4","excerpt":"Files: routes.py"},"questions":{"url":"https://github.com/acme/shop/issues/42#issuecomment-5","count":2,"answered":false,"answerUrl":""},"blocked":true,"pr":null,"review":null,"tests":null,"commits":[],"accepted":null},{"number":43,"url":"https://github.com/acme/shop/issues/43","title":"[task-comment-count] T3: Docs","labels":["risk:high"],"risk":"high","plan":{"url":"https://github.com/acme/shop/issues/43#issuecomment-6","excerpt":"README"},"questions":{"url":"https://github.com/acme/shop/issues/43#issuecomment-7","count":1,"answered":true,"answerUrl":"https://github.com/acme/shop/issues/43#issuecomment-8"},"blocked":false,"pr":{"number":46,"url":"https://github.com/acme/shop/pull/46","base":"main","stacked":true,"state":"merged","mergedAt":"2026-11-02T12:00:00Z","mergedBy":"nhanle","byGate":false},"review":{"state":"failure","description":"changes: 1 critical","rounds":2,"url":"https://github.com/acme/shop/pull/46#issuecomment-9"},"tests":{"files":[],"count":0,"rows":[],"testFirst":null},"commits":[{"sha":"b7c8d9e","message":"docs(#43): readme"}],"accepted":{"result":"fail","url":"https://github.com/acme/shop/pull/40#issuecomment-1"}}]}
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Same visual language as docs/devflow-flows.html: dark node canvas; colour = who acted. */
+:root {
+  color-scheme: dark;
+  --bg: #0e1116; --panel: #151a22; --panel-2: #1b212b; --line: #2b3240; --dot: #212733;
+  --fg: #e6e9ef; --muted: #8e97a8;
+  --human: #f2913d; --haiku: #45c4dc; --sonnet: #a08bff; --opus: #ec72c0;
+  --out: #3fbf8e; --block: #f0625f; --skip: #6b7385; --script: #c9d1de;
+  --f-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", sans-serif;
+  --f-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --r: 10px;
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body {
+  margin: 0; background: var(--bg);
+  background-image: radial-gradient(var(--dot) 1px, transparent 1.2px); background-size: 22px 22px;
+  color: var(--fg); font: 15px/1.6 var(--f-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 64px; overflow-x: hidden;
+}
+.wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 28px; }
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; margin: 0; line-height: 1.15; }
+h1 { font-size: clamp(28px, 5vw, 46px); font-weight: 700; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+h2 { font-size: 16px; font-weight: 700; overflow-wrap: anywhere; }
+p { margin: 0; }
+a { color: inherit; }
+.muted { color: var(--muted); }
+.eyebrow { font: 600 11px/1 var(--f-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.lang { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px; background: var(--panel); }
+.lang button { font: 600 12px/1 var(--f-mono); color: var(--muted); background: none; border: 0; border-radius: 999px; padding: 7px 12px; cursor: pointer; }
+.lang button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+button:focus-visible, a:focus-visible { outline: 2px solid var(--sonnet); outline-offset: 2px; }
+header { display: grid; gap: 14px; }
+header .lead { color: var(--muted); font-size: 15px; overflow-wrap: anywhere; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+.chip { display: inline-flex; align-items: center; gap: 7px; font: 500 12px/1 var(--f-mono); color: var(--muted); }
+.chip i { width: 10px; height: 10px; border-radius: 3px; background: var(--c); box-shadow: 0 0 10px var(--c); }
+.totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+.tot { background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; display: grid; gap: 2px; }
+.tot b { font: 700 24px/1.1 var(--f-display); }
+.tot span { font: 500 11px/1.3 var(--f-mono); color: var(--muted); }
+button.ctl { font: 600 13px/1 var(--f-mono); color: var(--bg); background: var(--fg); border: 1px solid var(--fg); border-radius: 8px; padding: 10px 14px; cursor: pointer; }
+button.ctl.alt { color: var(--fg); background: var(--panel-2); border-color: var(--line); }
+.controls { display: flex; gap: 8px; flex-wrap: wrap; }
+.canvas { background: color-mix(in srgb, var(--panel) 88%, transparent); border: 1px solid var(--line); border-radius: 14px; padding: 18px; display: grid; gap: 14px; min-width: 0; }
+.ihead { display: grid; gap: 6px; }
+.labels { display: flex; flex-wrap: wrap; gap: 5px; }
+.lbl { font: 600 10.5px/1 var(--f-mono); padding: 4px 6px; border-radius: 999px; border: 1px solid var(--c, var(--muted)); color: var(--c, var(--muted)); background: color-mix(in srgb, var(--c, var(--muted)) 12%, transparent); }
+.lbl.low { --c: var(--out); } .lbl.high { --c: var(--block); } .lbl.unknown { --c: var(--skip); }
+/* overflow-x:auto also clips vertically, so leave room for the badges (top:-9px) */
+.scroll-x { overflow-x: auto; padding-top: 18px; padding-bottom: 4px; }
+.track { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 22px 14px; }
+.node {
+  --c: var(--skip); position: relative; border: 1.5px solid color-mix(in srgb, var(--c) 70%, transparent);
+  background: color-mix(in srgb, var(--c) 9%, var(--panel-2)); border-radius: var(--r); padding: 11px 12px;
+  display: grid; gap: 4px; align-content: start; min-width: 0; transition: box-shadow .25s, transform .25s, opacity .25s;
+}
+.node .t { font: 700 14px/1.25 var(--f-display); }
+.node .s { font: 400 11.5px/1.4 var(--f-mono); color: var(--muted); overflow-wrap: anywhere; }
+.node .l { font: 600 11.5px/1.3 var(--f-mono); color: var(--fg); overflow-wrap: anywhere; }
+.node .badge { position: absolute; top: -9px; right: 10px; font: 600 10px/1 var(--f-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--bg); background: var(--c); padding: 3px 6px; border-radius: 4px; }
+.node.human { --c: var(--human); } .node.haiku { --c: var(--haiku); } .node.sonnet { --c: var(--sonnet); }
+.node.opus { --c: var(--opus); } .node.out { --c: var(--out); } .node.block { --c: var(--block); } .node.missing { --c: var(--skip); }
+.node.missing { opacity: .6; border-style: dashed; }
+.node.active { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 35%, transparent), 0 0 28px color-mix(in srgb, var(--c) 45%, transparent); transform: translateY(-2px); opacity: 1; }
+.node.pending { opacity: .25; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; } }
+.empty { font: 400 13px/1.5 var(--f-mono); color: var(--muted); border: 1px dashed var(--line); border-radius: 10px; padding: 14px; }
+footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <span class="eyebrow" id="eyebrow"></span>
+    <div class="lang" role="group" aria-label="Language">
+      <button type="button" id="lang-en" aria-pressed="true">EN</button>
+      <button type="button" id="lang-vi" aria-pressed="false">VI</button>
+    </div>
+  </div>
+  <header>
+    <h1 id="title"></h1>
+    <p class="lead" id="lead"></p>
+    <div class="legend" id="legend"></div>
+    <div class="totals" id="totals"></div>
+    <div class="controls">
+      <button type="button" class="ctl" id="play"></button>
+      <button type="button" class="ctl alt" id="reset"></button>
+    </div>
+  </header>
+  <main id="tracks" class="wrap"></main>
+  <footer id="foot"></footer>
+</div>
+<script type="application/json" id="data">{{TRACE_JSON}}</script>
+<script>
+(function () {
+  'use strict';
+  const $ = (s) => document.querySelector(s);
+  const STR = {
+    eyebrow: ['devflow trace', 'devflow trace'],
+    lead: ['The flow of one spec, not slides: ticket, plan, PR, review, tests, merged, accepted, released.', 'Luồng của một spec, không phải slide: ticket, kế hoạch, PR, review, test, merge, nghiệm thu, phát hành.'],
+    play: ['▶ Play', '▶ Chạy'],
+    reset: ['↺ Reset', '↺ Đặt lại'],
+    iss: ['Issues', 'Issue'],
+    gate: ['PRs merged by the gate', 'PR do gate merge'],
+    human: ['PRs merged by a human', 'PR do người merge'],
+    blocked: ['Blocked', 'Bị chặn'],
+    rounds: ['Review rounds', 'Vòng review'],
+    spec: ['Spec', 'Spec'],
+    specpr: ['Gate 1: spec PR', 'Gate 1: PR của spec'],
+    nodata: ['No trace data was inlined in this page.', 'Trang này chưa được nhúng dữ liệu trace.'],
+    noissues: ['This spec has no issues yet.', 'Spec này chưa có issue.'],
+    foot: ['Generated from GitHub data by /devflow:report. Grey steps have no data.', 'Tạo từ dữ liệu GitHub bởi /devflow:report. Bước màu xám là không có dữ liệu.'],
+    by: ['by', 'bởi'], at: ['at', 'lúc'],
+    s_ticket: ['Ticket', 'Ticket'], s_plan: ['Plan', 'Kế hoạch'], s_q: ['Questions', 'Câu hỏi'], s_pr: ['PR', 'PR'],
+    s_review: ['Review', 'Review'], s_tests: ['Tests', 'Test'], s_merged: ['Merged', 'Đã merge'],
+    s_acc: ['Accepted', 'Nghiệm thu'], s_rel: ['Released', 'Phát hành'],
+    b_human: ['you', 'người'], b_haiku: ['haiku', 'haiku'], b_sonnet: ['sonnet', 'sonnet'], b_opus: ['opus', 'opus'],
+    b_out: ['github', 'github'], b_block: ['blocked', 'bị chặn'], b_missing: ['missing', 'thiếu'],
+    lg_human: ['human', 'người'], lg_haiku: ['haiku', 'haiku'], lg_sonnet: ['sonnet', 'sonnet'], lg_opus: ['opus', 'opus'],
+    lg_out: ['GitHub', 'GitHub'], lg_block: ['blocked', 'bị chặn'], lg_missing: ['missing', 'thiếu'],
+    risk: ['risk', 'rủi ro'], low: ['low', 'thấp'], high: ['high', 'cao'], unknown: ['unknown', 'chưa rõ'],
+    e_ticket: ['risk', 'rủi ro'],
+    e_noplan: ['no plan comment', 'không có comment kế hoạch'],
+    e_qopen: ['unanswered questions', 'câu hỏi chưa trả lời'], e_qans: ['questions answered', 'đã trả lời câu hỏi'],
+    e_nopr: ['no PR yet', 'chưa có PR'], e_stacked: ['stacked on', 'xếp chồng trên'], e_base: ['base', 'nền'],
+    e_rev_none: ['no review status', 'chưa có trạng thái review'], e_pend: ['review pending', 'review đang chờ'],
+    e_rounds: ['rounds', 'vòng'],
+    e_notests: ['no tests in the diff', 'không có test trong diff'], e_testfirst: ['test commit first', 'commit test trước'],
+    e_testlater: ['test commit not first', 'commit test không đầu tiên'], e_files: ['files', 'tệp'], e_tfn: ['tests', 'test'], e_rows: ['rows', 'dòng'],
+    e_open: ['PR still open', 'PR vẫn mở'], e_closed: ['PR closed, not merged', 'PR đóng, chưa merge'],
+    e_gate: ['merged by the gate', 'gate đã merge'], e_hum: ['merged by', 'người merge'],
+    e_accno: ['not run', 'chưa chạy'], e_accpass: ['criteria pass', 'tiêu chí đạt'], e_accfail: ['gap found', 'có khoảng trống'], e_accna: ['not checkable', 'không kiểm tra được'],
+    e_norel: ['not released', 'chưa phát hành'], e_draft: ['draft', 'bản nháp'], e_pub: ['published', 'đã đăng']
+  };
+  let lang = 'en';
+  try { const sv = localStorage.getItem('devflow-lang'); if (sv === 'vi' || sv === 'en') lang = sv; } catch (e) {}
+  const t = (k) => (STR[k] ? STR[k][lang === 'vi' ? 1 : 0] : k);
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const link = (url, text) => { if (!/^https?:\/\//.test(url || '')) return el('span', 'l', text); const a = el('a', 'l', text); a.href = url; a.target = '_blank'; a.rel = 'noopener'; return a; };
+
+  let data = null;
+  try { data = JSON.parse($('#data').textContent); } catch (e) { data = null; }
+
+  /* A node is { key, actor, text, url, line }. line is a function so the text follows the language. */
+  function stepsOf(it, d) {
+    const pr = it.pr, out = [];
+    out.push({ key: 's_ticket', actor: 'opus', url: it.url, link: '#' + it.number, ev: () => t('risk') + ': ' + t(it.risk || 'unknown') });
+    out.push({ key: 's_plan', actor: it.plan ? 'sonnet' : 'missing', url: it.plan && it.plan.url, link: it.plan ? 'plan' : '', ev: () => (it.plan ? it.plan.excerpt : t('e_noplan')) });
+    if (it.questions) {
+      const q = it.questions, open = !q.answered;
+      out.push({ key: 's_q', actor: open ? 'block' : 'human', url: open ? q.url : q.answerUrl || q.url, link: String(q.count), ev: () => (open ? t('e_qopen') : t('e_qans')) });
+    }
+    out.push({ key: 's_pr', actor: pr ? 'sonnet' : (it.blocked ? 'block' : 'missing'), url: pr && pr.url, link: pr ? '#' + pr.number : '',
+      ev: () => (pr ? (pr.stacked ? t('e_stacked') + ' / ' : '') + t('e_base') + ' ' + pr.base : (it.blocked ? t('blocked') : t('e_nopr'))) });
+    const rv = it.review;
+    out.push({ key: 's_review', actor: !rv || rv.state === 'none' ? 'missing' : rv.state === 'success' ? 'opus' : rv.state === 'failure' ? 'block' : 'out',
+      url: rv && rv.url, link: rv && rv.state !== 'none' ? (rv.rounds || 0) + ' ' + t('e_rounds') : '',
+      ev: () => (!rv || rv.state === 'none' ? t('e_rev_none') : rv.state === 'pending' ? t('e_pend') : rv.description || rv.state) });
+    const ts = it.tests;
+    out.push({ key: 's_tests', actor: ts && (ts.files.length || ts.count) ? 'sonnet' : 'missing', url: pr && pr.url ? pr.url + '/files' : '',
+      link: ts && ts.count ? ts.count + ' ' + t('e_tfn') : '',
+      ev: () => (ts && (ts.files.length || ts.count)
+        ? ts.files.length + ' ' + t('e_files') + (ts.rows.length ? ', ' + ts.rows.length + ' ' + t('e_rows') : '') + (ts.testFirst === true ? ', ' + t('e_testfirst') : ts.testFirst === false ? ', ' + t('e_testlater') : '')
+        : t('e_notests')) });
+    const merged = pr && pr.state === 'merged';
+    out.push({ key: 's_merged', actor: merged ? (pr.byGate ? 'out' : 'human') : pr && pr.state === 'closed' ? 'block' : 'missing', url: pr && pr.url, link: merged ? (pr.mergedAt || '').slice(0, 10) : '',
+      ev: () => (merged ? (pr.byGate ? t('e_gate') : t('e_hum') + ' ' + pr.mergedBy) : pr ? (pr.state === 'closed' ? t('e_closed') : t('e_open')) : t('e_nopr')) });
+    const ac = it.accepted;
+    out.push({ key: 's_acc', actor: !ac ? 'missing' : ac.result === 'pass' ? 'sonnet' : ac.result === 'fail' ? 'block' : 'missing', url: ac && ac.url, link: '',
+      ev: () => (!ac ? t('e_accno') : ac.result === 'pass' ? t('e_accpass') : ac.result === 'fail' ? t('e_accfail') : t('e_accna')) });
+    const rl = d.release;
+    out.push({ key: 's_rel', actor: rl && merged ? 'out' : 'missing', url: rl && merged ? rl.url : '', link: rl && merged ? rl.tag : '', ev: () => (rl && merged ? (rl.draft ? t('e_draft') : t('e_pub')) : t('e_norel')) });
+    return out;
+  }
+
+  const nodes = []; // { el, col }
+  function renderNode(s, col) {
+    const n = el('div', 'node ' + s.actor);
+    n.appendChild(el('span', 'badge', '')).setAttribute('data-b', s.actor);
+    n.appendChild(el('div', 't', '')).setAttribute('data-k', s.key);
+    if (s.link) n.appendChild(link(s.url, s.link));
+    n.appendChild(el('div', 's', '')).setAttribute('data-e', '1');
+    n._s = s; nodes.push({ el: n, col });
+    return n;
+  }
+  function paintText() {
+    document.documentElement.lang = lang;
+    $('#eyebrow').textContent = t('eyebrow');
+    $('#lead').textContent = t('lead');
+    $('#play').textContent = t('play'); $('#reset').textContent = t('reset');
+    $('#foot').textContent = t('foot');
+    $('#lang-en').setAttribute('aria-pressed', String(lang === 'en'));
+    $('#lang-vi').setAttribute('aria-pressed', String(lang === 'vi'));
+    document.querySelectorAll('[data-k]').forEach((e) => (e.textContent = t(e.dataset.k)));
+    document.querySelectorAll('[data-b]').forEach((e) => (e.textContent = t('b_' + e.dataset.b)));
+    document.querySelectorAll('[data-tk]').forEach((e) => (e.textContent = t(e.dataset.tk)));
+    nodes.forEach((x) => { x.el.querySelector('[data-e]').textContent = x.el._s.ev(); });
+    document.querySelectorAll('[data-lg]').forEach((e) => (e.textContent = t('lg_' + e.dataset.lg)));
+    document.querySelectorAll('[data-risk]').forEach((e) => (e.textContent = t('risk') + ': ' + t(e.dataset.risk)));
+  }
+
+  function build() {
+    const tracks = $('#tracks');
+    const legend = $('#legend');
+    ['human', 'haiku', 'sonnet', 'opus', 'out', 'block', 'missing'].forEach((k) => {
+      const c = el('span', 'chip'); const i = el('i'); i.style.setProperty('--c', 'var(--' + (k === 'missing' ? 'skip' : k) + ')');
+      c.appendChild(i); const sp = el('span'); sp.setAttribute('data-lg', k); c.appendChild(sp); legend.appendChild(c);
+    });
+    if (!data || !data.spec) { tracks.appendChild(el('div', 'empty')).setAttribute('data-tk', 'nodata'); $('#title').textContent = 'devflow trace'; return; }
+    $('#title').textContent = data.spec.title || data.spec.slug;
+    const issues = data.issues || [];
+    const prs = issues.map((i) => i.pr).filter((p) => p && p.state === 'merged');
+    const stats = [
+      [issues.length, 'iss'],
+      [prs.filter((p) => p.byGate).length, 'gate'],
+      [prs.filter((p) => !p.byGate).length, 'human'],
+      [issues.filter((i) => i.blocked || (i.questions && !i.questions.answered)).length, 'blocked'],
+      [issues.reduce((n, i) => n + ((i.review && i.review.rounds) || 0), 0), 'rounds']
+    ];
+    stats.forEach((s) => { const d = el('div', 'tot'); d.appendChild(el('b', null, String(s[0]))); const sp = el('span'); sp.setAttribute('data-tk', s[1]); d.appendChild(sp); $('#totals').appendChild(d); });
+    const sp = data.spec.pr;
+    if (sp) {
+      const d = el('div', 'tot'); d.appendChild(link(sp.url, '#' + sp.number));
+      const s2 = el('span', null, ''); s2.setAttribute('data-tk', 'specpr'); d.appendChild(s2);
+      d.appendChild(el('span', null, sp.mergedBy ? sp.mergedBy : '')); $('#totals').appendChild(d);
+    }
+    if (!issues.length) { tracks.appendChild(el('div', 'empty')).setAttribute('data-tk', 'noissues'); return; }
+    issues.forEach((it) => {
+      const c = el('section', 'canvas'); const h = el('div', 'ihead');
+      const h2 = el('h2'); h2.appendChild(link(it.url, '#' + it.number + ' ' + it.title)); h.appendChild(h2);
+      const lb = el('div', 'labels'); const r = el('span', 'lbl ' + (it.risk || 'unknown')); r.setAttribute('data-risk', it.risk || 'unknown'); lb.appendChild(r);
+      (it.labels || []).forEach((l) => lb.appendChild(el('span', 'lbl', l))); h.appendChild(lb); c.appendChild(h);
+      const sc = el('div', 'scroll-x'); const tr = el('div', 'track');
+      stepsOf(it, data).forEach((s, col) => tr.appendChild(renderNode(s, col)));
+      sc.appendChild(tr); c.appendChild(sc); tracks.appendChild(c);
+    });
+  }
+
+  /* Cancelable runner: each play bumps the token; sleep rejects when the token changed. */
+  let token = 0;
+  const sleep = (ms, my) => new Promise((res, rej) => setTimeout(() => (my === token ? res() : rej(new Error('cancel'))), ms));
+  function showAll() { nodes.forEach((x) => x.el.classList.remove('pending', 'active')); }
+  function resetRun() { token++; showAll(); }
+  async function play() {
+    const my = ++token;
+    const cols = Math.max.apply(null, nodes.map((x) => x.col).concat([-1])) + 1;
+    nodes.forEach((x) => { x.el.classList.add('pending'); x.el.classList.remove('active'); });
+    try {
+      await sleep(150, my);
+      for (let c = 0; c < cols; c++) {
+        nodes.forEach((x) => { if (x.col === c) { x.el.classList.remove('pending'); x.el.classList.add('active'); } });
+        await sleep(520, my);
+        nodes.forEach((x) => x.el.classList.remove('active'));
+      }
+    } catch (e) { return; }
+    showAll();
+  }
+  function setLang(next) {
+    lang = next; try { localStorage.setItem('devflow-lang', lang); } catch (e) {}
+    paintText(); resetRun();
+  }
+  build(); paintText();
+  $('#play').addEventListener('click', play);
+  $('#reset').addEventListener('click', resetRun);
+  $('#lang-en').addEventListener('click', () => setLang('en'));
+  $('#lang-vi').addEventListener('click', () => setLang('vi'));
+})();
+</script>
+</body>
+</html>
