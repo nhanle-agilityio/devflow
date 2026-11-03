@@ -2,6 +2,18 @@
 
 All notable changes to devflow. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/).
 
+## [2.5.0]
+
+### Added
+- The merge gate marks what it merges: the merge commit message ends with `Merged-by: devflow merge gate` and the PR gets a comment starting with `<!-- devflow-gate-merged -->`.
+- `/devflow:release all`: every merged devflow or `spec:` PR into the base branch. It is the proposed default when no tag exists yet, so the first release covers everything shipped.
+- Release notes start with a "What's new" section written for clients, before the technical changelog.
+
+### Changed
+- `spec:` PRs go to Docs in the release notes, not Chores. The `since` form includes them too.
+- `/devflow:release` and `/devflow:report` tell gate merges from human merges by the marker. An older PR merged by the gate token owner shows "merger unknown (gate or owner)".
+- Upgrade: run `/devflow:init --upgrade` in each project to get the new gate script.
+
 ## [2.4.1]
 
 ### Fixed
