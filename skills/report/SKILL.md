@@ -24,16 +24,18 @@ Shows the flow, not slides: for each issue of a spec, the path ticket, plan, PR,
 
 Gather everything with the GitHub MCP server. Use `null` for what does not exist; never invent a value.
 
-- **Spec PR**: the PR that added the spec file: number, url, merged at, who merged it (this is Gate 1) and whether the merger is the merge gate (a bot or the `DEVFLOW_GATE_TOKEN` owner) or a human.
+- **Spec PR**: the PR that added the spec file: number, url, merged at, who merged it (this is Gate 1) and whether the merger is the merge gate or a human, by the who-merged rule below.
 - **Issues**: those whose body links the spec file: number, url, title, labels, risk (`labels.riskLow` or `labels.riskHigh`; none means `unknown`).
 - **Plan**: the comment starting with `<!-- devflow-plan -->`: url and its first 3 lines.
 - **Questions**: the comment starting with `<!-- devflow-questions -->`: url, number of questions, whether human answers followed (a later human comment, or a `## Decisions` section in the issue body) and the answer link. The blocked label on an issue with unanswered questions means `blocked`.
-- **PR**: the PR that closes the issue: number, url, base branch, stacked or not (`labels.stacked` or base other than `baseBranch`), state, merged at, merged by and whether by the gate or a human.
+- **PR**: the PR that closes the issue: number, url, base branch, stacked or not (`labels.stacked` or base other than `baseBranch`), state, merged at, merged by and whether by the gate or a human, by the who-merged rule below.
 - **Review**: the `devflow/review` commit status on the PR head (success, failure, pending) with its description, the number of review rounds (count of distinct head SHAs that got a `devflow-verdict` marker in the bot summary comments, at least 1 when a verdict exists) and the url of the bot summary comment.
 - **Tests**: from the PR diff the test files changed and the number of test functions added or changed (by the project's test naming), and the Test matrix row ids covered (from the PR body, else the `T<n>.<k>` ids found in test names or comments).
 - **Commits** in order (sha, message) and whether the first commit of the PR is a `test(...)` commit (`testFirst`).
 - **Acceptance**: the comment starting with `<!-- devflow-accept -->` on the spec PR, with its pass, fail and not-checkable counts and, per issue, the result when the table names it.
 - **Release**: the release whose notes mention the PR, or the latest release tag after the PRs merged: tag, url, draft.
+
+**Who merged** (for `byGate` of the spec PR and of each issue PR): `byGate` is true when the PR has a comment starting with `<!-- devflow-gate-merged -->` or its merge commit message contains `Merged-by: devflow merge gate`; `mergedByKnown` is true. For a PR that predates the marker: when `merged_by` equals the gate token owner (the authenticated user), set `byGate` false and `mergedByKnown` false (the gate and the owner look the same); when a different user merged it, set `byGate` false and `mergedByKnown` true.
 
 ## 2. Build the data
 
@@ -42,7 +44,7 @@ Make one JSON object with exactly this shape (the template reads it; every key i
 ```json
 {
   "generatedAt": "2026-11-03T10:00:00Z",
-  "spec": { "slug": "", "title": "", "path": "", "url": "", "pr": { "number": 0, "url": "", "mergedAt": "", "mergedBy": "", "byGate": false } },
+  "spec": { "slug": "", "title": "", "path": "", "url": "", "pr": { "number": 0, "url": "", "mergedAt": "", "mergedBy": "", "byGate": false, "mergedByKnown": true } },
   "acceptance": { "url": "", "pass": 0, "fail": 0, "notCheckable": 0 },
   "release": { "tag": "", "url": "", "draft": false },
   "issues": [
@@ -51,7 +53,7 @@ Make one JSON object with exactly this shape (the template reads it; every key i
       "plan": { "url": "", "excerpt": "" },
       "questions": { "url": "", "count": 0, "answered": false, "answerUrl": "" },
       "blocked": false,
-      "pr": { "number": 0, "url": "", "base": "", "stacked": false, "state": "merged", "mergedAt": "", "mergedBy": "", "byGate": false },
+      "pr": { "number": 0, "url": "", "base": "", "stacked": false, "state": "merged", "mergedAt": "", "mergedBy": "", "byGate": false, "mergedByKnown": true },
       "review": { "state": "success", "description": "", "rounds": 1, "url": "" },
       "tests": { "files": [""], "count": 0, "rows": [""], "testFirst": true },
       "commits": [ { "sha": "", "message": "" } ],

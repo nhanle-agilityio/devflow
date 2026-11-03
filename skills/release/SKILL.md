@@ -1,7 +1,7 @@
 ---
 name: release
-description: Cut a release from merged devflow PRs: collect them, propose a semver version, write grouped notes with a risk section, create the GitHub release (draft by default) and optionally run the deploy command after an explicit yes. Never merges.
-argument-hint: "<spec path or slug | since <tag>> [--version X.Y.Z]"
+description: Cut a release from merged devflow PRs (a spec, since a tag, or all of them): collect them, propose a semver version, write client-facing notes plus a changelog with a risk section, create the GitHub release (draft by default) and optionally run the deploy command after an explicit yes. Never merges.
+argument-hint: "<spec path or slug | since <tag> | all> [--version X.Y.Z]"
 disable-model-invocation: true
 ---
 
@@ -20,16 +20,17 @@ Fail fast with a clear message if any check fails.
 1. `.claude/devflow.json` exists and parses as JSON. If not, tell the user to run `/devflow:init`.
 2. The GitHub MCP server is reachable: load its tools with ToolSearch and get the authenticated user.
 3. `git fetch <remote> <baseBranch> --tags` succeeds (`remote` is `github.remote`, default `origin`). The working tree is not touched by this skill.
-4. `$ARGUMENTS` has one form: a spec path or slug (under `specDir`, default `docs/specs`), or `since <tag>`, or `since` alone (use the latest tag that starts with `release.tagPrefix`; list tags with the MCP server). Optional `--version X.Y.Z`. If neither form is given, ask.
+4. `$ARGUMENTS` has one form: a spec path or slug (under `specDir`, default `docs/specs`), or `since <tag>`, or `since` alone (use the latest tag that starts with `release.tagPrefix`; list tags with the MCP server), or `all`. Optional `--version X.Y.Z`. If no form is given: when no tag with `release.tagPrefix` exists yet, propose `all` as the default (the first release covers everything shipped) and ask for a yes; otherwise ask.
 
 ## 1. Collect the pull requests
 
-Collect the merged PRs (merged per the Merged state rule) labelled `labels.devflow` whose base is `baseBranch`:
+Collect the merged PRs (merged per the Merged state rule) whose base is `baseBranch` and that are labelled `labels.devflow` or have a title starting with `spec:`:
 
 - Spec form: read the spec on the base branch (`git show <remote>/<baseBranch>:<specDir>/<file>`), find the issues whose body links it, and take the merged PRs that close them (plus the spec PR itself).
-- `since` form: the merged PRs (merged per the Merged state rule) labelled `labels.devflow` merged after the tag's commit date.
+- `since` form: those PRs merged after the tag's commit date.
+- `all` form: every such PR merged into `baseBranch`, with no date limit.
 
-For each PR keep: number, title, type (the Conventional Commit type of the title), risk label, who merged it, merged at, closing issue.
+For each PR keep: number, title, type (the Conventional Commit type of the title; a title starting with `spec:` maps to **Docs**), risk label, who merged it, merged at, closing issue.
 
 Refuse if any of the spec's issues still has an open PR: list them (issue, PR) and stop, unless the user says to release anyway. An issue with no PR at all is listed as not shipped and does not block.
 
@@ -42,8 +43,10 @@ Refuse if any of the spec's issues still has an open PR: list them (issue, PR) a
 
 Build the notes in English from the PRs (`release.notesFrom` is `prs`):
 
-- Sections **Features** (`feat`), **Fixes** (`fix`), **Docs** (`docs`), **Chores** (`chore`, `refactor`, `test`, other). Omit empty ones. One line per PR: `- <title> (#<pr>)`.
-- **Risk**: every `labels.riskHigh` PR with who merged it (`- #<pr> <title>: merged by <login>`), or "No high-risk changes." Say whether each `risk:low` PR was merged by the merge gate or by a human when that is visible.
+- **What's new** comes first. It is written for clients and non-developers. Group the PRs by the spec their issues link; PRs with no spec go under "Other improvements". For each spec or feature write one short paragraph or 2-4 bullets that say what a user can now do or see, taken from the spec's Goals and acceptance criteria. Plain words only: no issue or PR numbers, no file, function or tool names, no internal labels. Leave out purely internal work (CI, devflow setup, tests, chores) unless it changes what users see.
+- Then a **Changelog** heading holding the technical sections **Features** (`feat`), **Fixes** (`fix`), **Docs** (`docs`, and any title starting with `spec:`), **Chores** (`chore`, `refactor`, `test`, other). Omit empty ones. One line per PR: `- <title> (#<pr>)`.
+- **Risk**: every `labels.riskHigh` PR with who merged it (`- #<pr> <title>: merged by <login>`), or "No high-risk changes." Say who merged each `risk:low` PR with the rule below.
+- **Who merged**: a PR was merged by the merge gate when it has a comment starting with `<!-- devflow-gate-merged -->` or its merge commit message contains `Merged-by: devflow merge gate`. Otherwise, for a PR that predates the marker: when `merged_by` equals the gate token owner (the authenticated user), say "merger unknown (gate or owner)"; when a different user merged it, say "human: <login>".
 - **Acceptance**: when `/devflow:accept` posted a comment (it starts with `<!-- devflow-accept -->`) on the spec PR, add its counts and the link to its gap issues; otherwise say acceptance was not run.
 
 Show the notes and the version. Do not continue without a yes.

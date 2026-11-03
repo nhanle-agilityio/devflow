@@ -145,7 +145,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     e_notests: ['no tests in the diff', 'không có test trong diff'], e_testfirst: ['test commit first', 'commit test trước'],
     e_testlater: ['test commit not first', 'commit test không đầu tiên'], e_files: ['files', 'tệp'], e_tfn: ['tests', 'test'], e_rows: ['rows', 'dòng'],
     e_open: ['PR still open', 'PR vẫn mở'], e_closed: ['PR closed, not merged', 'PR đóng, chưa merge'],
-    e_gate: ['merged by the gate', 'gate đã merge'], e_hum: ['merged by', 'người merge'],
+    e_gate: ['merged by the gate', 'gate đã merge'], e_unk: ['merger unknown (gate or owner)', 'chưa rõ ai merge (gate hoặc chủ repo)'], e_hum: ['merged by', 'người merge'],
     e_accno: ['not run', 'chưa chạy'], e_accpass: ['criteria pass', 'tiêu chí đạt'], e_accfail: ['gap found', 'có khoảng trống'], e_accna: ['not checkable', 'không kiểm tra được'],
     e_norel: ['not released', 'chưa phát hành'], e_draft: ['draft', 'bản nháp'], e_pub: ['published', 'đã đăng']
   };
@@ -181,7 +181,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
         : t('e_notests')) });
     const merged = pr && pr.state === 'merged';
     out.push({ key: 's_merged', actor: merged ? (pr.byGate ? 'out' : 'human') : pr && pr.state === 'closed' ? 'block' : 'missing', url: pr && pr.url, link: merged ? (pr.mergedAt || '').slice(0, 10) : '',
-      ev: () => (merged ? (pr.byGate ? t('e_gate') : t('e_hum') + ' ' + pr.mergedBy) : pr ? (pr.state === 'closed' ? t('e_closed') : t('e_open')) : t('e_nopr')) });
+      ev: () => (merged ? (pr.byGate ? t('e_gate') : pr.mergedByKnown === false ? t('e_unk') : t('e_hum') + ' ' + pr.mergedBy) : pr ? (pr.state === 'closed' ? t('e_closed') : t('e_open')) : t('e_nopr')) });
     const ac = it.accepted;
     out.push({ key: 's_acc', actor: !ac ? 'missing' : ac.result === 'pass' ? 'sonnet' : ac.result === 'fail' ? 'block' : 'missing', url: ac && ac.url, link: '',
       ev: () => (!ac ? t('e_accno') : ac.result === 'pass' ? t('e_accpass') : ac.result === 'fail' ? t('e_accfail') : t('e_accna')) });
@@ -230,7 +230,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     const stats = [
       [issues.length, 'iss'],
       [prs.filter((p) => p.byGate).length, 'gate'],
-      [prs.filter((p) => !p.byGate).length, 'human'],
+      [prs.filter((p) => !p.byGate && p.mergedByKnown !== false).length, 'human'],
       [issues.filter((i) => i.blocked || (i.questions && !i.questions.answered)).length, 'blocked'],
       [issues.reduce((n, i) => n + ((i.review && i.review.rounds) || 0), 0), 'rounds']
     ];
