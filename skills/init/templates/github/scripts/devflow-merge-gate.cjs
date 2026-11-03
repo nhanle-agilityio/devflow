@@ -7,6 +7,7 @@ const fs = require('fs');
 
 const CONFIG_PATH = '.claude/devflow.json';
 const CONFLICT_MARKER = '<!-- devflow-gate:conflict -->';
+const GATE_MERGED_MARKER = '<!-- devflow-gate-merged -->';
 const ALWAYS_PROTECTED = ['main', 'master', 'develop', 'trunk', 'production'];
 
 const DEFAULTS = {
@@ -131,9 +132,14 @@ async function mergeAndRetarget({ github, context, core }, config, pr, dryRun) {
   const { owner, repo } = context.repo;
   const { baseBranch, mergeGate } = config;
   if (dryRun) return 'would merge';
-  await github.rest.pulls.merge({
-    owner, repo, pull_number: pr.number, merge_method: mergeGate.method || 'merge', sha: pr.head.sha,
-  });
+  const method = mergeGate.method || 'merge';
+  const mergeArgs = { owner, repo, pull_number: pr.number, merge_method: method, sha: pr.head.sha };
+  if (method === 'merge' || method === 'squash') {
+    // Mark the merge so `/devflow:release` and `/devflow:report` can tell the gate from a human.
+    mergeArgs.commit_title = `Merge pull request #${pr.number} from ${pr.head.ref} (devflow merge gate)`;
+    mergeArgs.commit_message = `${pr.title || ''}\n\nMerged-by: devflow merge gate`;
+  }
+  await github.rest.pulls.merge(mergeArgs);
   // Children stacked on this branch must move to the base before the branch disappears.
   const children = await github.paginate(github.rest.pulls.list, {
     owner, repo, state: 'open', base: pr.head.ref, per_page: 100,
@@ -147,6 +153,15 @@ async function mergeAndRetarget({ github, context, core }, config, pr, dryRun) {
     pr.head.ref === baseBranch || ALWAYS_PROTECTED.includes(pr.head.ref) || pr.head.ref.startsWith('release/');
   if (sameRepo && !protectedName) {
     await github.rest.git.deleteRef({ owner, repo, ref: `heads/${pr.head.ref}` });
+  }
+  // Best effort: the merge already happened, so a failed comment must not fail the run.
+  try {
+    await github.rest.issues.createComment({
+      owner, repo, issue_number: pr.number,
+      body: `${GATE_MERGED_MARKER}\nMerged by the devflow merge gate: all required checks green, ${config.labels.riskLow}.`,
+    });
+  } catch (e) {
+    core.warning(`Could not post the merge marker on #${pr.number}: ${e.message}`);
   }
   return 'merged';
 }
@@ -271,3 +286,4 @@ module.exports = async function gate({ github, context, core, config }) {
 };
 
 module.exports.withDefaults = withDefaults;
+module.exports.GATE_MERGED_MARKER = GATE_MERGED_MARKER;

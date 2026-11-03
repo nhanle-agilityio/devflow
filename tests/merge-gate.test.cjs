@@ -255,6 +255,32 @@ test('all green: merge, retarget children, delete head branch', async () => {
   assert.ok(order.indexOf('pulls.update') < order.indexOf('deleteRef'));
 });
 
+test('real merge: commit trailer and one gate-merged comment', async () => {
+  const env = makeEnv({ prs: [makePr(1, { title: 'feat: add x' })], ...green(1) });
+  await run(env, CONFIG());
+  const merge = env.names('pulls.merge')[0][1];
+  assert.equal(merge.commit_title, 'Merge pull request #1 from feat/1 (devflow merge gate)');
+  assert.ok(merge.commit_message.startsWith('feat: add x'));
+  assert.ok(merge.commit_message.endsWith('Merged-by: devflow merge gate'));
+  const posted = env.names('createComment');
+  assert.equal(posted.length, 1);
+  assert.ok(posted[0][1].body.startsWith(gate.GATE_MERGED_MARKER));
+});
+
+test('rebase merge: no commit title or message', async () => {
+  const env = makeEnv({ prs: [makePr(1)], ...green(1) });
+  await run(env, CONFIG({ method: 'rebase' }));
+  const merge = env.names('pulls.merge')[0][1];
+  assert.equal(merge.commit_title, undefined);
+  assert.equal(merge.commit_message, undefined);
+});
+
+test('dryRun: no gate-merged comment', async () => {
+  const env = makeEnv({ prs: [makePr(1)], ...green(1) });
+  await run(env, CONFIG({ dryRun: true }));
+  assert.equal(env.names('createComment').length, 0);
+});
+
 test('fork head branch is not deleted', async () => {
   const pr = makePr(1, { head: { ref: 'feat/1', sha: 'sha1', repo: { full_name: 'fork/r' } } });
   const env = makeEnv({ prs: [pr], ...green(1) });
