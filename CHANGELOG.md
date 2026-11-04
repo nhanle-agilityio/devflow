@@ -2,6 +2,14 @@
 
 All notable changes to devflow. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/).
 
+## [2.6.0] - 2026-11-04
+
+### Added
+- `/devflow:sync` can run unattended: `/loop 15m /devflow:sync` (or `--unattended`) works in a temporary worktree that is always removed, asks nothing (threads needing a product decision are left unresolved and listed as "needs a human"), and stops with "nothing to sync" when there are no target PRs.
+
+### Changed
+- `/devflow:sync` no longer sets `disable-model-invocation`, because a scheduled `/loop` prompt can only run a skill through the Skill tool and that flag blocked it. Its description limits invocation to a user request or a `/loop` prompt naming it. Other skills are unchanged.
+
 ## [2.5.1]
 
 ### Fixed
