@@ -1,8 +1,7 @@
 ---
 name: sync
-description: Keep devflow PRs mergeable: retarget stacked PRs whose parent merged, update behind branches, resolve merge conflicts, and address unresolved review threads. Never merges.
-argument-hint: "[#pr ...]"
-disable-model-invocation: true
+description: Keep devflow PRs mergeable: retarget stacked PRs whose parent merged, update behind branches, resolve merge conflicts, and address unresolved review threads. Never merges. Invoke only when the user asks to sync devflow PRs or a scheduled /loop prompt names /devflow:sync; never on your own because PRs are mentioned.
+argument-hint: "[#pr ...] [--unattended]"
 ---
 
 # /devflow:sync
@@ -13,11 +12,21 @@ Rules: GitHub operations go through the GitHub MCP server (load its tools with T
 
 **Merged state:** never trust a `merged` field from a PR list or search result; the GitHub MCP list tools report `merged: false` for merged PRs. A PR is merged when `pull_request_read` (method `get`) returns a non-null `merged_at`, or when `git merge-base --is-ancestor <head sha> <remote>/<baseBranch>` succeeds after a fetch. Closed with neither: closed without merging. Take "merged by" and "merged at" from `pull_request_read`, not from a list.
 
+## Unattended run
+
+A run is unattended when a scheduled `/loop` prompt started it (for example `/loop 15m /devflow:sync`) or `$ARGUMENTS` contains `--unattended`. A run typed by the user is interactive and behaves exactly as described in the steps. In an unattended run:
+
+- **Ask nothing.** Where a step would ask the user (a thread that needs a product decision in step 4), leave that thread unresolved, do not reply on its behalf, and list the PR in the final table as "needs a human".
+- **No targets, no work.** If step 0 finds no target PRs, stop at once with one line ("nothing to sync") and do not create the worktree.
+- **Fresh worktree.** Work in a fresh worktree, never in the user's checkout: `git worktree add --detach <worktree.dir>/sync-<timestamp> <remote>/<baseBranch>` (`worktree.dir` default `.claude/worktrees`), then run each `worktree.setup` command in it, in order. Do every checkout, merge, commit and push (steps 3 and 4) inside it. The clean-tree requirement of step 0 applies to the worktree, and the user's checkout and its starting branch are never changed. ALWAYS remove the worktree at the end (`git worktree remove --force <path>`), also when a step failed.
+- **Round limit.** The limit of step 5 stays as is; it is the safety stop for unattended runs.
+- **Short output.** End with the same summary table, kept short so a loop's output stays readable.
+
 ## 0. Targets
 
 - Explicit `#pr` numbers in `$ARGUMENTS` are the targets.
 - Otherwise: all open PRs labelled `labels.devflow` and authored by the current user (get the authenticated user).
-- Require a clean working tree and note the current branch (restored at the end). Report and skip a PR whose head branch is on a different repository (fork).
+- Require a clean working tree and note the current branch (restored at the end). In an unattended run, see "Unattended run": the worktree is checked and the user's checkout is left alone. Report and skip a PR whose head branch is on a different repository (fork).
 
 Repeat steps 1 to 5 for each PR, one at a time, parents before children. Stop a PR's steps early when a step blocks it, and go on to the next PR.
 
@@ -47,7 +56,7 @@ Read the unresolved review threads and the latest review summary comment (MCP). 
 - **answer**: a question; reply with the answer.
 - **won't fix**: out of scope or wrong. Say why and cite `CLAUDE.md` or the linked spec.
 
-If a thread needs a product decision, do not decide silently: ask the user.
+If a thread needs a product decision, do not decide silently: ask the user. (Unattended: leave it unresolved and list it as "needs a human".)
 
 Apply fixes as new commits, one per logical change: `fix(<scope>): address review - <what>` (scope from `commitScope`, issue number from the PR's `Closes` line). Stage files by name. Run every command in `checks`; all must pass. Push normally. Reply on every thread: "fixed in <sha>", the answer, or "won't fix" with the reason. The merge gate ignores threads whose last comment is by the PR author, so a reply on every handled thread stops it from blocking the merge.
 
@@ -64,4 +73,4 @@ Steps 1 and 2 (retarget, update) do not count as rounds.
 
 ## 6. Restore and summarise
 
-Switch back to the starting branch. Print a table: PR, retargeted, updated, conflicts (resolved / blocked), threads fixed / answered / won't fix, rounds left.
+Switch back to the starting branch (unattended: remove the worktree instead; the checkout was never changed). Print a table: PR, retargeted, updated, conflicts (resolved / blocked), threads fixed / answered / won't fix, rounds left.
