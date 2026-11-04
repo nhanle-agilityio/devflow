@@ -14,7 +14,7 @@ Rules: GitHub operations go through the GitHub MCP server (load its tools with T
 
 ## Unattended run
 
-A run is unattended when a scheduled `/loop` prompt started it (for example `/loop 15m /devflow:sync`) or `$ARGUMENTS` contains `--unattended`. A run typed by the user is interactive and behaves exactly as described in the steps. In an unattended run:
+A run is unattended when `$ARGUMENTS` contains `--unattended` (use it in loops: `/loop 15m /devflow:sync --unattended`) or when you can tell a scheduled `/loop` prompt started it. When in doubt, treat the run as unattended: it is the safer mode. A run typed by the user is interactive and behaves exactly as described in the steps. In an unattended run:
 
 - **Ask nothing.** Where a step would ask the user (a thread that needs a product decision in step 4), leave that thread unresolved, do not reply on its behalf, and list the PR in the final table as "needs a human".
 - **No targets, no work.** If step 0 finds no target PRs, stop at once with one line ("nothing to sync") and do not create the worktree.
