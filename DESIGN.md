@@ -214,9 +214,9 @@ Phases: `Select`, then per issue `Implement` (Claim, Branch, Integrate, Plan, Im
 
 **Spec read.** `specPathFor(issue)` takes the first `<specDir>/…md` path from the issue body. Implement starts with `git show <baseRef>:<path>` and must return `specRead` containing the path; otherwise one Fix round re-checks the change against the spec, and a second miss blocks the issue. Review is pointed at the same path.
 
-## `/devflow:sync [#pr ...]`
+## `/devflow:sync [#pr ...] [--unattended]`
 
-`disable-model-invocation: true`. Replaces `/devflow:address-reviews`. Default targets: open PRs labelled `labels.devflow` and authored by the current user; explicit `#pr` numbers override. Needs a clean working tree; the starting branch is restored at the end. Fork PRs are skipped. PRs are processed parents before children. Only new commits and normal pushes: no rebase, no force push, no merge.
+Not `disable-model-invocation`: a scheduled `/loop` prompt arrives as plain text and Claude can only run a skill through the Skill tool, which that flag blocks, so `/loop 15m /devflow:sync` could never run. Sync is the one skill meant to run unattended; its description limits model invocation to a user request or a `/loop` prompt naming it. An unattended run (`--unattended`, the form to use in a loop, or a run evidently started by `/loop`) asks nothing: a thread needing a product decision stays unresolved and is listed as "needs a human". It works in a temporary worktree of `<remote>/<baseBranch>` (removed in every case, never touching the user's checkout), stops at once with "nothing to sync" when there are no targets, and keeps the round limit as its safety stop. Interactive runs are unchanged. Replaces `/devflow:address-reviews`. Default targets: open PRs labelled `labels.devflow` and authored by the current user; explicit `#pr` numbers override. Needs a clean working tree; the starting branch is restored at the end. Fork PRs are skipped. PRs are processed parents before children. Only new commits and normal pushes: no rebase, no force push, no merge.
 
 Per PR:
 1. **Retarget.** If the PR is stacked and its parent PR is merged (or the base branch is gone), change its base to `baseBranch` (`update_pull_request`) and remove `labels.stacked`.
