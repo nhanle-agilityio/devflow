@@ -10,13 +10,13 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 ### Changed
 - `/devflow:sync` no longer sets `disable-model-invocation`, because a scheduled `/loop` prompt can only run a skill through the Skill tool and that flag blocked it. Its description limits invocation to a user request or a `/loop` prompt naming it. Other skills are unchanged.
 
-## [2.5.1]
+## [2.5.1] - 2026-11-03
 
 ### Fixed
 - Merge gate: the `<!-- devflow-gate-merged -->` comment is posted right after the merge, before stacked PRs are retargeted and the head branch is deleted. A failure in either step (for example a 422 when GitHub already auto-deleted the branch) no longer loses the marker, which is the only gate marker for `rebase` merges.
 - Upgrade: run `/devflow:init --upgrade` in each project to get the fixed gate script.
 
-## [2.5.0]
+## [2.5.0] - 2026-11-03
 
 ### Added
 - The merge gate marks what it merges: the merge commit message ends with `Merged-by: devflow merge gate` and the PR gets a comment starting with `<!-- devflow-gate-merged -->`.
@@ -28,7 +28,7 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 - `/devflow:release` and `/devflow:report` tell gate merges from human merges by the marker. An older PR merged by the gate token owner shows "merger unknown (gate or owner)".
 - Upgrade: run `/devflow:init --upgrade` in each project to get the new gate script.
 
-## [2.4.1]
+## [2.4.1] - 2026-11-03
 
 ### Fixed
 - Merged state is read from `pull_request_read` `merged_at` or from git ancestry, never from list results, which report `merged: false` for merged PRs. Affects doctor, accept, report, release, sync and the engine's parent check.
@@ -36,7 +36,7 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 ### Changed
 - Doctor warns about `devflowVersion` only for a major or minor difference.
 
-## [2.4.0] - wave 4
+## [2.4.0] - 2026-11-03 (wave 4)
 
 ### Added
 - Engine regression tests (`tests/engine.test.cjs`).

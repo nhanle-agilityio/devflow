@@ -1,6 +1,6 @@
 # devflow
 
-A Claude Code plugin (version 2.4.0, see [CHANGELOG.md](CHANGELOG.md); the version is also in `.claude-plugin/plugin.json`) with nine project-agnostic commands, plus `/devflow:init` (and `init --upgrade`) for setup:
+A Claude Code plugin (version 2.6.0, see [CHANGELOG.md](CHANGELOG.md); the version is also in `.claude-plugin/plugin.json`) with nine project-agnostic commands, plus `/devflow:init` (and `init --upgrade`) for setup:
 
 1. `/devflow:spec <idea>`: idea, analysis, grill-me interview, spec with a risk level per task, QA test matrix, spec PR, Gate 1 (a human merges, which also approves the risk levels), then one GitHub issue per task labelled ready and `risk:low|high`.
 2. `/devflow:next-task [limit | #issue ...] [--isolated] [--chain]`: pick up to N ready issues, claim each, post a plan on it, implement (a QA agent writes the acceptance tests in parallel with the dev agent), run checks, verify against the running app, review, and open a PR labelled with its risk. An issue whose open dependencies all have open PRs is stacked on them. `--isolated` runs in its own git worktree.
@@ -45,7 +45,7 @@ Skip this if humans merge everything. The gate exists for private repos on GitHu
 6. Set `mergeGate.requiredChecks` to the check run names or status contexts that must be green. Default `["devflow/review"]`; add your CI job names.
 7. Set `mergeGate.enabled` to true but keep `dryRun` true at first. The run summary lists what each PR would get (merge, update, block, skip). Set `dryRun` to false when it looks right.
 
-The gate merges at most one PR per run. A PR is merged only when: it has the `devflow` and `risk:low` labels and is not a draft or labelled blocked; its base is `baseBranch`; no `Depends on` issue of its linked issue is still open; it is mergeable; it is not behind its base (otherwise the branch is updated and CI runs again); every `requiredChecks` entry is green on the head SHA; and no review thread is unanswered. Then it merges with a merge commit that ends with `Merged-by: devflow merge gate`, posts a `<!-- devflow-gate-merged -->` comment on the PR (so release and report can tell the gate from a human), retargets PRs stacked on it to `baseBranch` and deletes the head branch. A conflicting PR and its issue get the blocked label and a comment pointing at `/devflow:sync`.
+The gate merges at most one PR per run. A PR is merged only when: it has the `devflow` and `risk:low` labels and is not a draft or labelled blocked; its base is `baseBranch`; no `Depends on` issue of its linked issue is still open; it is mergeable; it is not behind its base (otherwise the branch is updated and CI runs again); every `requiredChecks` entry is green on the head SHA; and no review thread is unanswered. Then it merges with a merge commit that ends with `Merged-by: devflow merge gate`, posts a `<!-- devflow-gate-merged -->` comment on the PR (so release and report can tell the gate from a human), retargets PRs stacked on it to `baseBranch` and deletes the head branch. A conflicting PR and its issue get the blocked label and a comment pointing at `/devflow:sync`. Everywhere else (engine, sync, doctor, accept, report, release) a PR counts as merged only when a single `pull_request_read` returns a non-null `merged_at` or git shows its head in the base: the MCP list tools report `merged: false` for merged PRs.
 
 ## Usage
 
@@ -152,7 +152,7 @@ The `mcp__github__*` pattern depends on how your GitHub MCP server is named; use
 
 ## Out of scope
 
-Later: updating the Flow Map (`docs/devflow-flows.html`) for wave 4. Not planned: GitHub Projects board sync, uploading screenshots to PRs. Within one session issues still run sequentially; parallelism is across sessions.
+Not planned: GitHub Projects board sync, uploading screenshots to PRs. Within one session issues still run sequentially; parallelism is across sessions.
 
 ## License
 

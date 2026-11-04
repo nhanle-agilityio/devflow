@@ -1,6 +1,6 @@
 # devflow — design
 
-A Claude Code plugin (2.4.0; `version` in `plugin.json` and `marketplace.json`, history in `CHANGELOG.md`) with nine project-agnostic commands, plus `/devflow:init` (and `init --upgrade`) for setup:
+A Claude Code plugin (2.6.0; `version` in `plugin.json` and `marketplace.json`, history in `CHANGELOG.md`) with nine project-agnostic commands, plus `/devflow:init` (and `init --upgrade`) for setup:
 
 1. **`/devflow:spec`** — idea → analyse → grill-me → spec PR (risk per task) → Gate 1 (human merges; this approves the risk levels) → GitHub issues labelled ready and `risk:low|high`.
 2. **`/devflow:next-task`** — pick up to N ready issues → claim → branch → plan on the issue → implement (QA and dev agents in parallel when the plan allows it, else test first) → checks → verify → review → open PR labelled with its risk, stacked on a parent PR when needed. Runs in the user's checkout, or in its own worktree with `--isolated`; `--chain` runs a lane.
@@ -24,6 +24,7 @@ Nothing in the plugin knows about a specific stack. Project mechanics live in `.
 - **No reliance on GitHub paid features.** Target repos may be private on GitHub Free: no branch protection, no required checks, no native auto-merge. The merge gate is a plain Action that does the checking itself.
 - **Model tiers.** Opus plans and reviews; Sonnet writes the per-issue plan, implements and ships (it writes the PR body reviewers read); Haiku runs mechanical steps (selecting, claiming, branching, running checks, blocked clean-up).
 - **GitHub via the GitHub MCP server** (issues, labels, PRs, comments). `gh` is optional, never required. Adding a missing label to an issue creates it.
+- **Merged state comes from one PR read or from git, never from a list.** The GitHub MCP list and search tools report `merged: false` for merged PRs, so every skill and the engine treat a PR as merged only when `pull_request_read` (method `get`) returns a non-null `merged_at`, or `git merge-base --is-ancestor <head sha> <remote>/<baseBranch>` succeeds after a fetch. Gate merges are told from human merges by the gate's marker comment or commit trailer.
 - **Stack-agnostic verification.** `http` (API calls against the dev server), `browser` (Playwright MCP, or Claude in Chrome if that is what the user has) and `none`. A project enables any subset.
 - **All committed content is English.** No `Co-Authored-By` or AI attribution in commits or PRs, unless the project's CLAUDE.md says otherwise.
 - **Never write the review bot's at-sign handle into issues, PRs, comments or replies.** Repos that use `anthropics/claude-code-action` start a job on it. No stage posts a re-review trigger: pushing commits re-runs the review (`synchronize`). The handle appears only in the `claude.yml` template, as its trigger.
@@ -109,7 +110,7 @@ Skills reference bundled files with `${CLAUDE_SKILL_DIR}/templates/...` or `${CL
   "nextTask": { "defaultLimit": 3, "maxFixRounds": 2, "maxReviewRounds": 2, "parallelQa": true },  // parallelQa: QA agent writes the acceptance tests in parallel with the dev agent
   "worktree": { "dir": ".claude/worktrees", "setup": [] },  // isolated runs: dir holds the worktrees (keep it in .gitignore); setup commands run once in a fresh worktree
   "dispatch": { "maxLanes": 3, "ignoreHotspots": ["README.md", "CHANGELOG.md"] },  // /devflow:dispatch; optional pluginDir is passed as --plugin-dir to background sessions; ignoreHotspots (paths or * / ** globs) do not join lanes
-  "devflowVersion": "2.4.0",                     // plugin version the templates came from (init writes it, init --upgrade updates it)
+  "devflowVersion": "2.6.0",                     // plugin version the templates came from (init writes it, init --upgrade updates it)
   "notify": { "push": true, "onDone": true, "onBlocked": true, "onHighRisk": true },  // push notification at the end of a next-task run
   "release": { "tagPrefix": "v", "draft": true, "deploy": "", "notesFrom": "prs" },   // /devflow:release
   "accept": { "model": "sonnet", "labels": ["type:gap"] }  // /devflow:accept; labels go on the gap issues
@@ -320,9 +321,6 @@ Protected branches = `protectedBranches` + `baseBranch` from `.claude/devflow.js
 - `claude.yml`: the standard Claude app mention handler (unchanged upstream workflow).
 
 ## Out of scope (later waves)
-
-Later:
-- Updating the Flow Map (`docs/devflow-flows.html`) for wave 4.
 
 Not planned:
 - GitHub Projects (v2) board sync — labels are the state machine.
