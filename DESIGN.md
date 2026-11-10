@@ -1,6 +1,6 @@
 # devflow — design
 
-A Claude Code plugin (2.6.0; `version` in `plugin.json` and `marketplace.json`, history in `CHANGELOG.md`) with nine project-agnostic commands, plus `/devflow:init` (and `init --upgrade`) for setup:
+A Claude Code plugin (2.7.0; `version` in `plugin.json` and `marketplace.json`, history in `CHANGELOG.md`) with nine project-agnostic commands, plus `/devflow:init` (and `init --upgrade`) for setup:
 
 1. **`/devflow:spec`** — idea → analyse → grill-me → spec PR (risk per task) → Gate 1 (human merges; this approves the risk levels) → GitHub issues labelled ready and `risk:low|high`.
 2. **`/devflow:next-task`** — pick up to N ready issues → claim → branch → plan on the issue → implement (QA and dev agents in parallel when the plan allows it, else test first) → checks → verify → review → open PR labelled with its risk, stacked on a parent PR when needed. Runs in the user's checkout, or in its own worktree with `--isolated`; `--chain` runs a lane.
@@ -59,9 +59,20 @@ skills/report/SKILL.md              /devflow:report (+ templates/trace.html, dat
 skills/doctor/SKILL.md              /devflow:doctor
 bin/devflow-lanes                   node, stdlib only: lane planner (JSON on stdin and stdout); called as ${CLAUDE_PLUGIN_ROOT}/bin/devflow-lanes
 workflows/next-task-engine.js       meta.name "next-task-engine" → /devflow:next-task-engine (internal; users run /devflow:next-task)
-hooks/hooks.json                    PreToolUse guard (matcher Bash|mcp__.*merge_pull_request)
+hooks/hooks.json                    PreToolUse guard (Bash|mcp__.*merge_pull_request), PostToolUse formatter (Write|Edit|MultiEdit|NotebookEdit), SessionStart rules
 hooks/guard.py                      python3 (3.9+, stdlib only)
+hooks/formatter.py                  PostToolUse: runs the `format` commands on the edited file; quiet, always exit 0
+hooks/session_start.py              SessionStart: workflow rules from devflow.json as hookSpecificOutput.additionalContext (stdout)
 hooks/test_guard.py                 unittest for guard.py
+hooks/test_hooks.py                 unittest for formatter.py, session_start.py and hooks.json
+agents/reviewer.md                  devflow:reviewer, read-only Opus reviewer (Review stage and local reviews)
+bin/devflow-setup                   node, stdlib only: allow list, minimal config and leftovers for init and doctor
+skills/init/templates/github/callers/  thin caller workflows for reusable mode, pinned through {{DEVFLOW_REF}}
+skills/spec/templates/bug.md        bug issue body shared by accept gaps, Ship follow-ups and bugs filed by hand
+.github/workflows/devflow-review.yml      reusable (workflow_call) review check; jobs identical to the copy template
+.github/workflows/devflow-merge-gate.yml  reusable (workflow_call) merge gate; reads the gate script at the caller's pinned tag
+tests/setup.test.cjs                node:test for bin/devflow-setup
+tests/reusable.test.cjs             node:test: reusable workflows match the templates, callers are pinned
 tests/merge-gate.test.cjs           node:test for the merge gate script (fake Octokit)
 tests/lanes.test.cjs                node:test for the lane planner (planLanes)
 tests/engine.test.cjs               node:test: runs the engine with stub agents
@@ -104,6 +115,7 @@ Skills reference bundled files with `${CLAUDE_SKILL_DIR}/templates/...` or `${CL
     { "name": "test", "run": "npm test" },
     { "name": "lint", "run": "npm run lint" }
   ],
+  "format": { "*.ts": "npx prettier -w {file}" }, // formatter hook: glob -> command after each edit; quiet, never fails
   "verify": {
     "modes": ["http", "browser"],                // subset of http | browser; [] = none
     "devServer": { "run": "npm run dev", "url": "http://localhost:3000", "readyTimeoutSec": 60 },
@@ -114,14 +126,14 @@ Skills reference bundled files with `${CLAUDE_SKILL_DIR}/templates/...` or `${CL
   "nextTask": { "defaultLimit": 3, "maxFixRounds": 2, "maxReviewRounds": 2, "parallelQa": true },  // parallelQa: QA agent writes the acceptance tests in parallel with the dev agent
   "worktree": { "dir": ".claude/worktrees", "setup": [] },  // isolated runs: dir holds the worktrees (keep it in .gitignore); setup commands run once in a fresh worktree
   "dispatch": { "maxLanes": 3, "ignoreHotspots": ["README.md", "CHANGELOG.md"] },  // /devflow:dispatch; optional pluginDir is passed as --plugin-dir to background sessions; ignoreHotspots (paths or * / ** globs) do not join lanes
-  "devflowVersion": "2.6.0",                     // plugin version the templates came from (init writes it, init --upgrade updates it)
+  "devflowVersion": "2.7.0",                     // plugin version the templates came from (init writes it, init --upgrade updates it)
   "notify": { "push": true, "onDone": true, "onBlocked": true, "onHighRisk": true },  // push notification at the end of a next-task run
   "release": { "tagPrefix": "v", "draft": true, "deploy": "", "notesFrom": "prs" },   // /devflow:release
   "accept": { "model": "sonnet", "labels": ["type:gap"] }  // /devflow:accept; labels go on the gap issues
 }
 ```
 
-Missing optional keys take the defaults shown. `github`, `baseBranch` and `checks` are required.
+Missing optional keys take the defaults shown (`nextTask.reviewerAgent` defaults to `devflow:reviewer`). `github`, `baseBranch` and `checks` are required. `/devflow:init` writes only the keys whose value differs from the schema default (`bin/devflow-setup minimal`; required keys, `$schema` and `devflowVersion` always stay), so a project's file shows what it changed.
 
 ## `/devflow:init`
 
@@ -131,12 +143,12 @@ Missing optional keys take the defaults shown. `github`, `baseBranch` and `check
 2. Propose a filled `.claude/devflow.json` (explain each detected value and where it came from). Ask the user to confirm or edit with AskUserQuestion for anything ambiguous (which remote, base branch, dev server command, verify modes). Write it plus `devflow.schema.json`.
 3. Check the CLAUDE.md has what the workflows rely on (conventions, test approach, "Never" list). List gaps; offer to draft additions, never edit CLAUDE.md without a yes.
 4. Risk and merge gate (AskUserQuestion, recommended option each time): `risk.highWhen` (show defaults), `risk.highPaths` (globs for auth, migrations, payments, CI config), `mergeGate.enabled` (default false, `dryRun` true), `mergeGate.requiredChecks` (job names found in `.github/workflows/*` plus `devflow/review`), `testing.e2eFramework` (true only when an automated e2e setup exists; say which signal), `spec.testMatrix` / `spec.qaModel`, `worktree.setup` (proposed from the detected tooling; `worktree.dir` stays `.claude/worktrees` unless the user wants another place), `dispatch.maxLanes`.
-5. Offer (each a separate yes) to copy `claude-code-review.yml`, the pair `devflow-merge-gate.yml` + `devflow-merge-gate.cjs` (filling the `workflow_run` workflow list with the project's CI workflow names), and `claude.yml` into `.github/` when absent (otherwise show a diff). Tell the user the setup each needs (secrets `CLAUDE_CODE_OAUTH_TOKEN`, `DEVFLOW_GATE_TOKEN`; allow merge commits; gate on the default branch; see the README checklist). Add the worktree dir to `.gitignore` (diff, then a yes). Background sessions cannot answer permission prompts, so propose one merged allow-list for `.claude/settings.json`: the README snippet plus a `Bash(<cmd>:*)` rule per `checks[].run` and `worktree.setup` command and the git commands the workflows use (`git worktree`, `switch`, `fetch`, feature-branch `push`); never a rule that allows merging or pushing to a protected branch. Print the `permissions` snippet from the README.
-6. Remind the user that the plugin hook blocks merges and pushes to protected branches.
+5. Install mode for the review check and the merge gate (one question): **reusable** (recommended), thin callers from `templates/github/callers/` that `uses:` this repository's `devflow-review.yml` / `devflow-merge-gate.yml` (`on: workflow_call`) at the tag `v<plugin version>` (`{{DEVFLOW_REF}}` replaced; the tag must exist); or **copy** (fallback), the full workflows plus `devflow-merge-gate.cjs`. A private devflow repository must allow Actions access from the user's repositories (Settings > Actions > General > Access), and its gate needs `DEVFLOW_READ_TOKEN` to read the script. Then offer (each a separate yes) the review, the gate (filling the `workflow_run` workflow list with the project's CI workflow names) and `claude.yml` (always a copy) when absent (otherwise show a diff). Tell the user the setup each needs (secrets `CLAUDE_CODE_OAUTH_TOKEN`, `DEVFLOW_GATE_TOKEN`; allow merge commits; gate on the default branch; see the README checklist). Add the worktree dir to `.gitignore` (diff, then a yes). Background sessions cannot answer permission prompts and a plugin cannot grant permissions, so init generates the allow list with `bin/devflow-setup allow` from `checks`, `verify`, `worktree.setup` and the remote (specific prefixes only: no bare interpreter, shell, runner or wrapper rule; runners keep flags and tool up to the first path or glob, a concrete script operand stays; inline-code flags and wrappers give no rule and are returned in `manual`; `curl` is scoped to `verify.devServer.url`'s origin when set), merges it into `.claude/settings.json` after a diff and a yes, and writes no deny rules (the guard covers merging, force pushes, protected branches, destructive git and `git add -A`).
+6. Remind the user what the plugin hooks do and that `/devflow:doctor` lists project copies the plugin now owns.
 
 The config is written with `devflowVersion` = the installed plugin version. The newer keys (`dispatch.ignoreHotspots`, `verify.lock`, `notify`, `release`, `accept`) are mentioned with their defaults; only `notify.push` is asked.
 
-**`/devflow:init --upgrade`.** For a project that already ran init (clean tree, config present). Reads the plugin version and the project's `devflowVersion`; compares byte for byte every installed template (the three workflows, `devflow-merge-gate.cjs`, `devflow.schema.json`; templates never installed are skipped) and lists the drifted ones and the config keys missing from the project. Because devflow cannot tell whether the project edited a file after install, every drifted file gets a diff and its own yes; a declined file stays. The gate workflow's `workflow_run` list is kept. After the yes: branch `chore/devflow-upgrade-<version>`, copy the accepted files, set `devflowVersion`, validate the config against the new schema, commit `chore(devflow): upgrade templates to devflow <version>`, push, open a PR labelled `devflow` + `risk:high` (it touches `.github/**` and `.claude/**`, so a human merges; a compare link if PR creation fails). Never merges, never pushes to the base.
+**`/devflow:init --upgrade`.** For a project that already ran init (clean tree, config present). Reads the plugin version and the project's `devflowVersion`; compares byte for byte every installed template (the three workflows, `devflow-merge-gate.cjs`, `devflow.schema.json`, which upgrade keeps managing; a reusable caller is compared with `callers/` at the new tag, so upgrading moves the tag; templates never installed are skipped) and lists the drifted ones and the config keys missing from the project. Because devflow cannot tell whether the project edited a file after install, every drifted file gets a diff and its own yes; a declined file stays. The gate workflow's `workflow_run` list is kept. After the yes: branch `chore/devflow-upgrade-<version>`, copy the accepted files, set `devflowVersion`, validate the config against the new schema, commit `chore(devflow): upgrade templates to devflow <version>`, push, open a PR labelled `devflow` + `risk:high` (it touches `.github/**` and `.claude/**`, so a human merges; a compare link if PR creation fails). Never merges, never pushes to the base.
 
 ## `/devflow:spec <idea or path to a brief>`
 
@@ -274,7 +286,7 @@ Per PR:
 
 ## `/devflow:doctor [--fix]`
 
-`disable-model-invocation: true`. Read-only by default; with `--fix` it changes only what the user confirms item by item. Never merges, force pushes, pushes to or deletes the base or a protected branch. Runs every check even when one fails; without a config only checks 3 and 8 run.
+`disable-model-invocation: true`. Read-only by default; with `--fix` it changes only what the user confirms item by item. Never merges, force pushes, pushes to or deletes the base or a protected branch. Runs every check even when one fails; without a config only checks 3, 8 and 9 run.
 
 1. **Config**: parses and validates against the schema; `devflowVersion` with a lower major or minor version, or missing → warn (a lower patch version only is ok), suggest `/devflow:init --upgrade`.
 2. **Templates**: drifted installed templates (same comparison as `--upgrade`); report only.
@@ -283,7 +295,8 @@ Per PR:
 5. **Branches** matching `branchPattern` whose PR is merged or closed. `--fix` deletes local ones (`-d`; `-D` only for a merged PR, after a yes); remote ones only after a yes per branch, never the base, a protected branch or a branch with an open PR.
 6. **Claims**: in-progress issues with no running session, no open PR and a claim older than 2 hours, and claim comments on issues that are not in progress. `--fix` deletes the comment and swaps in-progress for ready, per item.
 7. **Open PRs** labelled `devflow` that are behind, conflicting or red: reported with `/devflow:sync #<pr>`, never fixed here.
-8. **Allow-list** in `.claude/settings.json` for background sessions: missing rules listed; `--fix` merges them in, never a rule that allows merging or pushing to a protected branch.
+8. **Allow-list** in `.claude/settings.json` for background sessions (`bin/devflow-setup allow`): missing rules listed; `--fix` merges them in, never a deny rule or a rule that allows merging or pushing to a protected branch.
+9. **Owned by the plugin now** (`bin/devflow-setup leftovers`): `.claude/hooks/block_git_add_all.py` and its test, the settings hook that runs it, a `hook-test` style `checks` entry, deny rules the guard enforces, a maintenance `.claude/loop.md`, a project `.claude/agents/code-reviewer.md`. Each is a `warn` with what replaces it; doctor never deletes them, also not with `--fix`.
 
 Output: a table check → `ok` / `warn` / `fail` → what to do, a line per fix applied or declined, and the one command to run next.
 
@@ -326,6 +339,19 @@ PreToolUse, matcher `Bash|mcp__.*merge_pull_request`. Exit 2 with a reason on st
 Global git options before the subcommand (`-C <dir>`, `-c k=v`, `--git-dir=...`, `--no-pager`) are skipped. A wrapper (`sudo`, `env`, `xargs`, ...) is looked through by trying every later `git` / shell token as the start of the wrapped command, so `sudo -u git git add .` is caught without knowing each wrapper's options.
 
 Protected branches = `protectedBranches` + `baseBranch` from `.claude/devflow.json` in the project (`$CLAUDE_PROJECT_DIR`), defaulting to `main`, `master`, `develop` when the file is missing. Parse commands with `shlex` like the TaskBoard `block_git_add_all.py` hook (look through `env`/`sudo`/`bash -c` wrappers; regex fallback when shlex fails). Stdlib only, Python 3.9. Ship `test_guard.py` (unittest) covering blocked and allowed cases, including that `update_pull_request` and `update_pull_request_branch` stay allowed (`/devflow:sync` needs them). The merge gate Action is outside the hook's reach by design: it is the one place merges happen, and it runs with its own token.
+
+## Formatter and session start hooks
+
+- `hooks/formatter.py`, PostToolUse, matcher `Write|Edit|MultiEdit|NotebookEdit`. Reads `format` (glob to command) from `.claude/devflow.json`; a glob without `/` matches the file name anywhere, one with `/` the path from the project root (`**` crosses directories; no brace expansion). `{file}` is the shell-quoted relative path (appended when absent). Every matching command runs from the project root with a 30 s timeout, output discarded. No config, no key, a file outside the project, a missing binary, a failure or a timeout: exit 0 and nothing printed. It formats; it never decides whether an edit is allowed.
+- `hooks/session_start.py`, SessionStart. With a parseable `.claude/devflow.json` it prints `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": <rules>}}` on stdout (stderr would not reach the context): the branch pattern and base, the commit scope with an example, failing test first, stage by name, never edit acceptance criteria or weaken checks, ask on ambiguity, never merge or push to the protected branches, file bugs as `needs-triage`, and the checks. Without one: silent, exit 0.
+
+## Reviewer agent
+
+`agents/reviewer.md` (`devflow:reviewer`, Opus, tools Read/Grep/Glob/Bash, read-only). It carries the review order (correctness, tests, scope, CLAUDE.md, out of scope against the criteria, weakened checks, fix PR fields) and the severity rules. The engine's Review stage passes `agentType: nextTask.reviewerAgent` with its schema; if that type cannot be started it notes it once and uses the default agent for the rest of the run. Users can run it locally on a branch.
+
+## Reusable workflows
+
+`.github/workflows/devflow-review.yml` and `devflow-merge-gate.yml` in this repository run on `workflow_call`. The review's jobs are kept byte-identical to the copy template (`tests/reusable.test.cjs`); the caller holds the trigger, the concurrency group, the permissions and the secrets, passed by name (`CLAUDE_CODE_OAUTH_TOKEN`; `DEVFLOW_GATE_TOKEN` and the optional `DEVFLOW_READ_TOKEN`), because `secrets: inherit` is only guaranteed inside one organization or enterprise and these repositories are user-owned. The gate checks out the caller (for `.claude/devflow.json`) and, sparsely, this repository at the `devflow-ref` input into `.devflow-plugin`, and runs the same gate script, so the logic is not copied into projects. Callers in `skills/init/templates/github/callers/` keep the names the gate needs (`Claude Code Review`) and pin both `uses:` and `devflow-ref` to `{{DEVFLOW_REF}}`. Release tags (`vX.Y.Z`, made by a human) are what callers pin to.
 
 ## Templates
 

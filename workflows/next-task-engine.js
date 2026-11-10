@@ -58,7 +58,7 @@ const labels = Object.assign(
 const priorityList = Array.isArray(labels.priority) ? labels.priority : []
 const riskCfg = Object.assign({ highPaths: [] }, cfg.risk)
 const testingCfg = Object.assign({ e2eFramework: false }, cfg.testing)
-const nt = Object.assign({ defaultLimit: 3, maxFixRounds: 2, maxReviewRounds: 2, parallelQa: true }, cfg.nextTask)
+const nt = Object.assign({ defaultLimit: 3, maxFixRounds: 2, maxReviewRounds: 2, parallelQa: true, reviewerAgent: 'devflow:reviewer' }, cfg.nextTask)
 const verifyCfg = Object.assign({ modes: [], browserTool: 'playwright', lock: true }, cfg.verify)
 const branchPattern = cfg.branchPattern || '{type}/{issue}-{slug}'
 const startBranch = args.startBranch
@@ -394,6 +394,9 @@ const RESTORE_SCHEMA = {
 // ---------------------------------------------------------------------------------------------
 // Prompt builders. One small function per stage.
 // ---------------------------------------------------------------------------------------------
+
+// Set once when the configured reviewer agent type cannot be started; later reviews use the default agent.
+let reviewerMissing = ''
 
 // Integration commit per issue number (multi-stack only), set by the Integrate stage.
 const integration = {}
@@ -1538,12 +1541,19 @@ async function runIssue(issue) {
         .map((h) => ({ file: String(h.file), line: Number(h.line) || 0, kind: String(h.kind || ''), text: String(h.text || '') }))
     }
     if (hits.length) log(`#${issue.number}: weakened-checks scan: ${hits.map(hitLine).join('; ')}`)
-    const review = await agent(reviewPrompt(issue, branch, state, round, hits), {
-      label: `review #${issue.number} (round ${round + 1})`,
-      phase: 'Review',
-      schema: REVIEW_SCHEMA,
-      model: 'opus',
-    })
+    // The plugin's reviewer agent (agents/reviewer.md) when available; the default subagent otherwise.
+    const reviewOpts = { label: `review #${issue.number} (round ${round + 1})`, phase: 'Review', schema: REVIEW_SCHEMA, model: 'opus' }
+    let review
+    if (nt.reviewerAgent && !reviewerMissing) {
+      try {
+        review = await agent(reviewPrompt(issue, branch, state, round, hits), Object.assign({ agentType: nt.reviewerAgent }, reviewOpts))
+      } catch (e) {
+        reviewerMissing = `reviewer agent ${nt.reviewerAgent} unavailable (${e && e.message ? e.message : e}); reviewed with the default agent`
+        log(`#${issue.number}: ${reviewerMissing}`)
+        notes.push(reviewerMissing)
+      }
+    }
+    if (review === undefined) review = await agent(reviewPrompt(issue, branch, state, round, hits), reviewOpts)
     if (!review) return block('Review', 'The review agent died.')
     // Every hit is critical unless the reviewer accepted it; an accepted hit makes the PR risk:high at Ship.
     const accepted = Array.isArray(review.acceptedWeakenings) ? review.acceptedWeakenings : []

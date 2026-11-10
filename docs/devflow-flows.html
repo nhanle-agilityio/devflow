@@ -274,7 +274,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
 
 <header>
   <div class="top">
-    <span class="eyebrow">Claude Code plugin · nhanle-agilityio/devflow · v2.6.0</span>
+    <span class="eyebrow">Claude Code plugin · nhanle-agilityio/devflow · v2.7.0</span>
     <div class="lang" role="group" aria-label="Language">
       <button type="button" id="lang-en" aria-pressed="true">EN</button>
       <button type="button" id="lang-vi" aria-pressed="false">VI</button>
@@ -348,7 +348,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
           <div class="node sonnet"><span class="t">/devflow:accept</span><span class="s">sau merge: kiểm tiêu chí, gap thành issue</span></div>
           <div class="node sonnet"><span class="t">/devflow:release</span><span class="s">semver, notes cho khách, release draft</span></div>
           <div class="node sonnet"><span class="t">/devflow:report</span><span class="s">trang trace của một spec, chỉ đọc</span></div>
-          <div class="node sonnet"><span class="t">/devflow:doctor</span><span class="s">8 kiểm tra sức khoẻ, --fix từng mục</span></div>
+          <div class="node sonnet"><span class="t">/devflow:doctor</span><span class="s">9 kiểm tra sức khoẻ, --fix từng mục</span></div>
         </div>
         <div class="node block"><span class="t">guard.py (hook)</span><span class="s">luôn bật · chặn merge, push vào branch bảo vệ, force push</span></div>
       </div>
@@ -769,7 +769,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
   </div>
   <div class="canvas">
     <div class="engine-label">
-      <span class="eyebrow">8 kiểm tra, chạy hết kể cả khi một cái fail</span>
+      <span class="eyebrow">9 kiểm tra, chạy hết kể cả khi một cái fail</span>
       <span class="js">chỉ đọc; --fix chỉ sửa mục bạn đồng ý</span>
     </div>
     <div class="preflight" id="dr-checks">
@@ -781,6 +781,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       <span class="pf">6 · claim treo</span>
       <span class="pf">7 · PR cần sync</span>
       <span class="pf">8 · allow-list</span>
+      <span class="pf">9 · thứ plugin đã lo</span>
     </div>
     <div class="split">
       <div class="panel">
@@ -876,7 +877,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
 </section>
 
 <footer>
-  <span>devflow 2.6.0 · plugin Claude Code · cài bằng <code>/plugin marketplace add nhanle-agilityio/devflow</code></span>
+  <span>devflow 2.7.0 · plugin Claude Code · cài bằng <code>/plugin marketplace add nhanle-agilityio/devflow</code></span>
   <span>Kịch bản trên trang là ví dụ minh hoạ dựa trên TaskBoard (số issue và PR là giả định).</span>
 </footer>
 
@@ -1071,7 +1072,8 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     'sau merge: kiểm tiêu chí, gap thành issue': 'after merge: checks the criteria, gaps become issues',
     'semver, notes cho khách, release draft': 'semver, client notes, draft release',
     'trang trace của một spec, chỉ đọc': 'a trace page of one spec, read-only',
-    '8 kiểm tra sức khoẻ, --fix từng mục': '8 health checks, --fix item by item',
+    '9 kiểm tra sức khoẻ, --fix từng mục': '9 health checks, --fix item by item',
+    '9 · thứ plugin đã lo': '9 · owned by the plugin',
     'merge PR risk:low khi check xanh, đánh dấu Merged-by, chạy ngoài Claude': 'merges risk:low PRs when checks are green, marks them Merged-by, runs outside Claude',
     'notes + tag, bạn là người publish': 'notes + tag, you are the one who publishes',
     '▶ GitHub MCP lỗi': '▶ GitHub MCP down',
@@ -1103,7 +1105,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     'dispatch.ignoreHotspots (mặc định README.md và CHANGELOG.md) không tham gia việc xếp lane: xung đột ở các file này nhỏ, merge gate (update branch) hoặc /devflow:sync xử lý được.': 'dispatch.ignoreHotspots (README.md and CHANGELOG.md by default) do not take part in lane planning: conflicts in those files are small and the merge gate (update branch) or /devflow:sync handles them.',
     '/devflow:accept: mỗi gap thành issue mới → agent:ready': '/devflow:accept: every gap becomes a new issue → agent:ready',
     'issue do /devflow:accept tạo, kèm agent:ready': 'issues created by /devflow:accept, together with agent:ready',
-    'devflow 2.6.0 · plugin Claude Code · cài bằng': 'devflow 2.6.0 · Claude Code plugin · install with',
+    'devflow 2.7.0 · plugin Claude Code · cài bằng': 'devflow 2.7.0 · Claude Code plugin · install with',
     // ---- ship ----
     'Sau khi merge · nghiệm thu, bằng chứng, release': 'After the merge · acceptance, evidence, release',
     'Sau khi merge: accept → report → release': 'After merge: accept → report → release',
@@ -1145,7 +1147,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     'Bảo trì · setup còn khoẻ không': 'Maintenance · is the setup still healthy',
     'Doctor và upgrade: kiểm tra, sửa từng mục, nâng cấp template': 'Doctor and upgrade: check, fix item by item, refresh the templates',
     '▶ Thiếu config': '▶ Missing config',
-    '8 kiểm tra, chạy hết kể cả khi một cái fail': '8 checks, all run even when one fails',
+    '9 kiểm tra, chạy hết kể cả khi một cái fail': '9 checks, all run even when one fails',
     'chỉ đọc; --fix chỉ sửa mục bạn đồng ý': 'read-only; --fix changes only what you agree to',
     '1 · config + devflowVersion': '1 · config + devflowVersion',
     '2 · template có lệch không': '2 · do the templates drift',
@@ -2113,13 +2115,13 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
   const drChecks = $$('#dr-checks .pf'), drReport = $('#dr-report'), drChat = $('#dr-chat'), drLog = $('#dr-log');
   const drNodes = $$('#dr-up .node');
   const drArrows = drNodes.map((n) => (n.nextElementSibling ? $('.arrow', n.nextElementSibling) : null));
-  const DR_NAMES = ['Config', 'Templates', 'GitHub access', 'Worktrees', 'Branches', 'Claims', 'Open PRs', 'Allow-list'];
+  const DR_NAMES = ['Config', 'Templates', 'GitHub access', 'Worktrees', 'Branches', 'Claims', 'Open PRs', 'Allow-list', 'Owned by the plugin'];
   function drReset() {
     drR.stop();
     drChecks.forEach((c) => c.classList.remove('ok', 'warn', 'no', 'skip', 'cur'));
     drReport.innerHTML = ''; drChat.innerHTML = '';
     drNodes.forEach((n) => n.classList.remove('active', 'done'));
-    drLog.innerHTML = `<div>${t('Bấm ▶: doctor chạy 8 kiểm tra, rồi --fix từng mục, rồi init --upgrade. Hoặc ▶ Thiếu config để xem nhánh không có devflow.json.', 'Press ▶: doctor runs 8 checks, then --fix item by item, then init --upgrade. Or ▶ Missing config for the branch without devflow.json.')}</div>`;
+    drLog.innerHTML = `<div>${t('Bấm ▶: doctor chạy 9 kiểm tra, rồi --fix từng mục, rồi init --upgrade. Hoặc ▶ Thiếu config để xem nhánh không có devflow.json.', 'Press ▶: doctor runs 9 checks, then --fix item by item, then init --upgrade. Or ▶ Missing config for the branch without devflow.json.')}</div>`;
   }
   async function drCheck(sleep, i, status, msg) {
     drChecks[i].classList.add('cur'); await sleep(520);
@@ -2137,8 +2139,8 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     drR.start(async (sleep) => {
       const L = (k, m, c) => logTo(drLog, k, m, c);
       drLog.innerHTML = '';
-      L('doctor', t('Đọc .claude/devflow.json, plugin là 2.6.0. Chạy cả 8 kiểm tra dù một cái fail', 'Reads .claude/devflow.json, the plugin is 2.6.0. All 8 checks run even if one fails'), '--haiku');
-      await drCheck(sleep, 0, 'warn', t('devflowVersion 2.4.0 thấp hơn plugin 2.6.0 (khác minor) → /devflow:init --upgrade. Chỉ khác patch thì vẫn ok: bản patch không đổi template, schema hay key config', 'devflowVersion 2.4.0 is lower than plugin 2.6.0 (a minor difference) → /devflow:init --upgrade. A patch-only difference stays ok: patch releases never change templates, the schema or config keys'));
+      L('doctor', t('Đọc .claude/devflow.json, plugin là 2.7.0. Chạy cả 9 kiểm tra dù một cái fail', 'Reads .claude/devflow.json, the plugin is 2.7.0. All 9 checks run even if one fails'), '--haiku');
+      await drCheck(sleep, 0, 'warn', t('devflowVersion 2.4.0 thấp hơn plugin 2.7.0 (khác minor) → /devflow:init --upgrade. Chỉ khác patch thì vẫn ok: bản patch không đổi template, schema hay key config', 'devflowVersion 2.4.0 is lower than plugin 2.7.0 (a minor difference) → /devflow:init --upgrade. A patch-only difference stays ok: patch releases never change templates, the schema or config keys'));
       await drCheck(sleep, 1, 'warn', t('lệch 2 file: .github/scripts/devflow-merge-gate.cjs, .claude/devflow.schema.json. Chỉ báo cáo; cách sửa là /devflow:init --upgrade', '2 files drift: .github/scripts/devflow-merge-gate.cjs, .claude/devflow.schema.json. Report only; the fix is /devflow:init --upgrade'));
       await drCheck(sleep, 2, 'ok', t('MCP kết nối (lấy được user đăng nhập), gh đã cài. Thiếu gh chỉ là warn', 'MCP reachable (the authenticated user was found), gh installed. A missing gh is only a warn'));
       await drCheck(sleep, 3, 'warn', t('2 worktree trong .claude/worktrees: lane-31-32-33 sạch, branch đã push · accept-project-edit-delete còn thay đổi chưa commit', '2 worktrees under .claude/worktrees: lane-31-32-33 clean, branch pushed · accept-project-edit-delete has uncommitted changes'));
@@ -2146,7 +2148,8 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       await drCheck(sleep, 5, 'warn', t('#35 đang agent:in-progress, không session nào chạy, không có PR, claim cách đây 3 giờ (> 2 giờ) → stale', '#35 is agent:in-progress with no running session and no PR, claimed 3 hours ago (> 2 hours) → stale'));
       await drCheck(sleep, 6, 'warn', t('PR #47 conflict, PR #42 behind base → /devflow:sync #47 #42. Doctor không sửa các PR này', 'PR #47 conflicts and PR #42 is behind its base → /devflow:sync #47 #42. Doctor never fixes these'));
       await drCheck(sleep, 7, 'warn', t('.claude/settings.json thiếu rule Bash(make test:*) và các lệnh git worktree → phiên nền sẽ kẹt ở permission prompt', '.claude/settings.json lacks Bash(make test:*) and the git worktree rules → background sessions would stall on permission prompts'));
-      L('report', t('fail = thứ làm các workflow dừng (config sai, MCP không với tới); warn = lệch hoặc đồ thừa. Cả tám đã xong, 7 warn', 'fail = something that stops the workflows (invalid config, MCP unreachable); warn = drift or leftovers. All eight done, 7 warn'), '--fg');
+      await drCheck(sleep, 8, 'warn', t('.claude/hooks/block_git_add_all.py, check hook-test và deny rule Bash(git push --force:*) nay plugin đã lo → có thể xoá (doctor không xoá)', '.claude/hooks/block_git_add_all.py, the hook-test check and the deny rule Bash(git push --force:*) are now covered by the plugin → removable (doctor never deletes them)'));
+      L('report', t('fail = thứ làm các workflow dừng (config sai, MCP không với tới); warn = lệch hoặc đồ thừa. Cả chín đã xong, 8 warn', 'fail = something that stops the workflows (invalid config, MCP unreachable); warn = drift or leftovers. All nine done, 8 warn'), '--fg');
       await sleep(1000);
 
       L('--fix', t('Chỉ sửa cái bạn đồng ý, từng mục một (AskUserQuestion). Không bao giờ merge, force push, push vào branch bảo vệ hay xoá base', 'Changes only what you confirm, one item at a time (AskUserQuestion). Never merges, force pushes, pushes to a protected branch or deletes the base'), '--human');
@@ -2161,11 +2164,11 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       await sleep(1400);
 
       const UP = [
-        ['--sonnet', t('devflowVersion 2.4.0 trong .claude/devflow.json, plugin 2.6.0. Cần working tree sạch', 'devflowVersion 2.4.0 in .claude/devflow.json, plugin 2.6.0. Needs a clean working tree')],
+        ['--sonnet', t('devflowVersion 2.4.0 trong .claude/devflow.json, plugin 2.7.0. Cần working tree sạch', 'devflowVersion 2.4.0 in .claude/devflow.json, plugin 2.7.0. Needs a clean working tree')],
         ['--sonnet', t('So từng byte với template của plugin: lệch .github/scripts/devflow-merge-gate.cjs (bản mới có trailer Merged-by và comment marker) và .claude/devflow.schema.json. Template dự án chưa từng cài thì bỏ qua', 'Byte-for-byte against the plugin templates: .github/scripts/devflow-merge-gate.cjs drifts (the new one has the Merged-by trailer and the marker comment) and so does .claude/devflow.schema.json. A template the project never installed is skipped')],
         ['--sonnet', t('Key có trong template mà config thiếu, kèm default (verify.lock, dispatch.ignoreHotspots, notify, release, accept…). Không ghi key nào trừ khi bạn yêu cầu', 'Keys present in the template but missing from the config, with defaults (verify.lock, dispatch.ignoreHotspots, notify, release, accept…). No key is written unless you ask')],
         ['--human', t('Hiện kế hoạch rồi hỏi từng file kèm diff: devflow-merge-gate.cjs → có · devflow.schema.json → có. File bị từ chối giữ nguyên. Workflow của cổng giữ nguyên danh sách workflow_run do init điền', 'Shows the plan, then asks per file with a diff: devflow-merge-gate.cjs → yes · devflow.schema.json → yes. A declined file stays as it is. The gate workflow keeps the workflow_run list init filled in')],
-        ['--sonnet', t('Tạo branch chore/devflow-upgrade-2.6.0 từ github/main, chép template đã nhận, đặt devflowVersion, kiểm tra với schema mới. Commit chore(devflow): upgrade templates to devflow 2.6.0 (stage theo tên), push bình thường', 'Creates branch chore/devflow-upgrade-2.6.0 from github/main, copies the accepted templates, sets devflowVersion, validates against the new schema. Commit chore(devflow): upgrade templates to devflow 2.6.0 (files staged by name), normal push')],
+        ['--sonnet', t('Tạo branch chore/devflow-upgrade-2.7.0 từ github/main, chép template đã nhận, đặt devflowVersion, kiểm tra với schema mới. Commit chore(devflow): upgrade templates to devflow 2.7.0 (stage theo tên), push bình thường', 'Creates branch chore/devflow-upgrade-2.7.0 from github/main, copies the accepted templates, sets devflowVersion, validates against the new schema. Commit chore(devflow): upgrade templates to devflow 2.7.0 (files staged by name), normal push')],
         ['--out', t('Mở PR gắn devflow + risk:high (đụng .github/** và .claude/**, nên người merge). PR lỗi thì in link compare điền sẵn. Workflow cổng mới chỉ hoạt động khi đã nằm trên default branch. Không bao giờ tự merge', 'Opens a PR labelled devflow + risk:high (it touches .github/** and .claude/**, so a human merges). If PR creation fails it prints a pre-filled compare link. A changed gate workflow only acts once it is on the default branch. Never merges by itself')],
       ];
       for (let i = 0; i < drNodes.length; i++) {
@@ -2183,13 +2186,14 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     drR.start(async (sleep) => {
       const L = (k, m, c) => logTo(drLog, k, m, c);
       drLog.innerHTML = '';
-      L('doctor', t('Không có .claude/devflow.json: kiểm tra 1 fail, gợi ý /devflow:init và chỉ chạy kiểm tra 3 và 8', 'No .claude/devflow.json: check 1 fails, /devflow:init is suggested and only checks 3 and 8 run'), '--haiku');
+      L('doctor', t('Không có .claude/devflow.json: kiểm tra 1 fail, gợi ý /devflow:init và chỉ chạy kiểm tra 3, 8 và 9', 'No .claude/devflow.json: check 1 fails, /devflow:init is suggested and only checks 3, 8 and 9 run'), '--haiku');
       const skip = async (i) => { drChecks[i].classList.add('skip'); drReport.append(el('div', 'res skp', `<span class="stat skip">skip</span><b>${DR_NAMES[i]}</b> ${t('bỏ qua: cần config', 'skipped: needs the config')}`)); await sleep(300); };
       await drCheck(sleep, 0, 'fail', t('thiếu .claude/devflow.json → chạy /devflow:init', '.claude/devflow.json is missing → run /devflow:init'));
       for (const i of [1]) await skip(i);
       await drCheck(sleep, 2, 'warn', t('MCP kết nối nhưng gh chưa cài: chỉ là warn, song nếu kết nối MCP rớt thì các lượt chạy sẽ dừng', 'MCP is reachable but gh is not installed: only a warn, yet if the MCP connection drops, runs stop'));
       for (const i of [3, 4, 5, 6]) await skip(i);
       await drCheck(sleep, 7, 'warn', t('chưa có rule permissions nào cho phiên nền trong .claude/settings.json: xem snippet trong README của plugin', 'no permissions rules for background sessions in .claude/settings.json yet: see the snippet in the plugin README'));
+      await drCheck(sleep, 8, 'ok', t('không có file hay rule nào trùng với plugin', 'no project file or rule duplicates the plugin'));
       L('next', t('Lệnh nên chạy tiếp: /devflow:init', 'Next command: /devflow:init'), '--fg');
     });
   }
