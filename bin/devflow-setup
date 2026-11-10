@@ -1,0 +1,183 @@
+#!/usr/bin/env node
+'use strict';
+// devflow-setup: deterministic helpers for /devflow:init and /devflow:doctor. Node, no dependencies.
+//   allow    < devflow.json                    -> {"permissions": {"allow": [...]}} for .claude/settings.json
+//   minimal  <schema.json> < devflow.json      -> the config without keys equal to their schema default
+//   leftovers < {"settings", "config", "files"} -> project files and rules the plugin now owns (report only)
+// Pure functions allowRules, minimalConfig and ownedLeftovers are exported for tests.
+
+const USAGE = `Usage:
+  devflow-setup allow [--github-mcp 'mcp__github__*'] < .claude/devflow.json
+  devflow-setup minimal <path to devflow.schema.json> < config.json
+  devflow-setup leftovers < {"settings": <settings.json>, "config": <devflow.json>, "files": ["path", ...]}
+
+allow: the Bash and MCP allow rules background sessions need, built from checks, verify, worktree.setup and the
+github remote. Never a deny rule (the guard hook blocks merges, force pushes and protected branches), never a rule
+that merges or force pushes.
+minimal: drops every key whose value equals its schema default (required keys, $schema and devflowVersion stay),
+so init writes only what differs from the defaults.
+leftovers: lists files and rules a project kept from before the plugin owned them; nothing is deleted.`;
+
+const GIT_RULES = [
+  'git status', 'git diff', 'git log', 'git show', 'git fetch', 'git switch', 'git add', 'git commit',
+  'git merge', 'git branch', 'git worktree', 'git stash', 'git rev-parse', 'git ls-remote', 'git merge-base',
+  'git ls-tree', 'git symbolic-ref',
+];
+
+// Split a shell command at && ; || | into its simple commands, each trimmed.
+function simpleCommands(run) {
+  return String(run || '')
+    .split(/&&|\|\||;|\|/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+// A prefix rule for one simple command: drop trailing path-like or flag arguments that change per call
+// ("." or "src"), keep the program and its subcommand words.
+function prefixOf(cmd) {
+  const words = cmd.split(/\s+/);
+  const keep = [words[0]];
+  for (const w of words.slice(1)) {
+    if (w === '.' || w.startsWith('-') || w.includes('{') || w.includes('=') || w.includes('"') || w.includes("'")) break;
+    keep.push(w);
+    if (keep.length >= 3) break;
+  }
+  return keep.join(' ');
+}
+
+function allowRules(config, opts = {}) {
+  const c = config || {};
+  const remote = (c.github && c.github.remote) || 'origin';
+  const rules = new Set(GIT_RULES.map((g) => `Bash(${g}:*)`));
+  rules.add(`Bash(git push -u ${remote}:*)`);
+  rules.add(`Bash(git push ${remote}:*)`);
+  const commands = []
+    .concat((Array.isArray(c.checks) ? c.checks : []).map((x) => x && x.run))
+    .concat(c.verify && c.verify.devServer ? [c.verify.devServer.run] : [])
+    .concat(c.worktree && Array.isArray(c.worktree.setup) ? c.worktree.setup : []);
+  for (const run of commands) for (const cmd of simpleCommands(run)) rules.add(`Bash(${prefixOf(cmd)}:*)`);
+  const verify = c.verify || {};
+  const modes = Array.isArray(verify.modes) ? verify.modes : [];
+  if (modes.includes('http')) rules.add('Bash(curl:*)');
+  if (modes.includes('browser')) rules.add(verify.browserTool === 'chrome' ? 'mcp__claude-in-chrome__*' : 'mcp__playwright__*');
+  rules.add(opts.githubMcp || 'mcp__github__*');
+  for (const r of rules) {
+    if (/merge_pull_request|gh pr merge|--force|git push:\*|git push -u:\*/.test(r)) rules.delete(r);
+  }
+  return [...rules].sort();
+}
+
+function deepEqual(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+const ALWAYS_KEEP = new Set(['$schema', 'devflowVersion']);
+
+function strip(value, schema, top) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !schema || !schema.properties) return value;
+  const required = new Set(schema.required || []);
+  const out = {};
+  for (const [key, v] of Object.entries(value)) {
+    const sub = schema.properties[key];
+    const keep = required.has(key) || (top && ALWAYS_KEEP.has(key));
+    if (!sub) {
+      out[key] = v; // unknown keys are left for validation to report
+      continue;
+    }
+    if (!keep && 'default' in sub && deepEqual(v, sub.default)) continue;
+    const stripped = sub.properties ? strip(v, sub, false) : v;
+    if (!keep && sub.properties && stripped && typeof stripped === 'object' && !Array.isArray(stripped) && !Object.keys(stripped).length) continue;
+    out[key] = stripped;
+  }
+  return out;
+}
+
+function minimalConfig(config, schema) {
+  return strip(JSON.parse(JSON.stringify(config || {})), schema, true);
+}
+
+// Deny rules the guard hook already enforces: force pushes, merges, pushes to protected branches.
+function guardDuplicate(rule, protectedNames) {
+  const m = /^Bash\((.*)\)$/.exec(rule);
+  if (!m) return /merge_pull_request/.test(rule);
+  const cmd = m[1].replace(/:\*$/, '').trim();
+  if (/^git push\b.*(--force|\s-f\b|\s\+)/.test(cmd)) return true;
+  if (/^gh pr merge\b|^gh api\b.*merge/.test(cmd)) return true;
+  if (/^git (reset --hard|clean|branch -D|add -A|add \.|add --all|stash (drop|clear))/.test(cmd)) return true;
+  const push = /^git push\b(.*)$/.exec(cmd);
+  if (push) {
+    const words = push[1].trim().split(/\s+/);
+    return words.some((w) => protectedNames.has(w.replace(/^.*:/, '')));
+  }
+  return false;
+}
+
+function ownedLeftovers({ settings, config, files } = {}) {
+  const out = [];
+  const s = settings || {};
+  const c = config || {};
+  const list = Array.isArray(files) ? files : [];
+  const protectedNames = new Set((Array.isArray(c.protectedBranches) ? c.protectedBranches : ['main', 'master', 'develop']).concat(c.baseBranch ? [c.baseBranch] : []));
+  for (const f of list) {
+    if (/(^|\/)\.claude\/hooks\/(test_)?block_git_add_all\.py$/.test(f)) {
+      out.push({ what: f, why: 'the plugin guard blocks git add -A / --all / . (its cases are in hooks/test_guard.py)' });
+    } else if (/(^|\/)\.claude\/loop\.md$/.test(f)) {
+      out.push({ what: f, why: 'maintenance loop prompt: use /loop 15m /devflow:sync --unattended and /devflow:doctor instead' });
+    } else if (/(^|\/)\.claude\/agents\/code-reviewer\.md$/.test(f)) {
+      out.push({ what: f, why: 'the plugin ships the devflow:reviewer agent used by the Review stage and for local reviews' });
+    }
+  }
+  for (const [event, entries] of Object.entries((s.hooks && typeof s.hooks === 'object' && s.hooks) || {})) {
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      for (const h of (entry && entry.hooks) || []) {
+        if (/block_git_add_all\.py/.test(String(h.command || ''))) {
+          out.push({ what: 'settings.json hook running block_git_add_all.py', why: `${event} hook duplicated by the plugin guard` });
+        }
+      }
+    }
+  }
+  for (const check of Array.isArray(c.checks) ? c.checks : []) {
+    if (check && (/^hook-?test/.test(String(check.name || '')) || /block_git_add_all|\.claude\/hooks/.test(String(check.run || '')))) {
+      out.push({ what: `checks entry "${check.name}"`, why: 'it tests the project hook the plugin guard replaces' });
+    }
+  }
+  const deny = (s.permissions && Array.isArray(s.permissions.deny) && s.permissions.deny) || [];
+  for (const rule of deny) {
+    if (guardDuplicate(String(rule), protectedNames)) out.push({ what: `deny rule ${rule}`, why: 'the plugin guard hook already blocks it' });
+  }
+  return out;
+}
+
+if (require.main !== module) {
+  module.exports = { allowRules, minimalConfig, ownedLeftovers, simpleCommands, prefixOf };
+} else {
+  const argv = process.argv.slice(2);
+  if (!argv.length || argv.some((a) => a === '--help' || a === '-h')) {
+    console.log(USAGE);
+    process.exit(argv.length ? 0 : 1);
+  }
+  let data = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => (data += chunk));
+  process.stdin.on('end', () => {
+    try {
+      const input = JSON.parse(data);
+      let out;
+      if (argv[0] === 'allow') {
+        const i = argv.indexOf('--github-mcp');
+        out = { permissions: { allow: allowRules(input, { githubMcp: i !== -1 ? argv[i + 1] : undefined }) } };
+      } else if (argv[0] === 'minimal') {
+        if (!argv[1]) throw new Error('minimal needs the schema path');
+        out = minimalConfig(input, JSON.parse(require('fs').readFileSync(argv[1], 'utf8')));
+      } else if (argv[0] === 'leftovers') {
+        out = ownedLeftovers(input);
+      } else {
+        throw new Error(`unknown command ${argv[0]}`);
+      }
+      process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+    } catch (e) {
+      console.error(`devflow-setup: ${e.message}`);
+      process.exit(1);
+    }
+  });
+}
