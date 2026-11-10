@@ -2,7 +2,7 @@
   // Annotated example. init writes plain JSON (no comments) to .claude/devflow.json.
   "$schema": "./devflow.schema.json",
   // The plugin version the templates were installed from (written by /devflow:init, updated by /devflow:init --upgrade).
-  "devflowVersion": "2.6.0",
+  "devflowVersion": "2.7.0",
   // remote = the git remote that points at GitHub
   "github": { "owner": "acme", "repo": "shop", "remote": "origin" },
   // Branches start from <remote>/<baseBranch>; PRs target it.
