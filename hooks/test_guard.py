@@ -339,6 +339,143 @@ class DestructiveGit(unittest.TestCase):
         self.assertIn("git stash clear", reasons_on("git stash clear")[0])
 
 
+class MoreBashRules(unittest.TestCase):
+    BLOCKED = [
+        # skipping hooks
+        "git commit --no-verify -m x",
+        "git commit -n -m x",
+        "git commit -nm x",
+        "git commit -anm 'x'",
+        "git commit -m x -n",
+        "git commit -m x --no-verify",
+        "git commit -am x --no-verify",
+        "git -C /repo commit -n -m x",
+        "git push --no-verify origin feature/x",
+        "git push origin feature/x --no-verify",
+        # gh api: protected refs and commit statuses
+        "gh api -X DELETE repos/acme/shop/git/refs/heads/main",
+        "gh api --method DELETE repos/acme/shop/git/refs/heads/develop",
+        "gh api -X PATCH repos/acme/shop/git/refs/heads/main -f sha=abc -F force=true",
+        "gh api repos/acme/shop/git/refs/heads/main -f sha=abc",
+        "gh api repos/acme/shop/git/refs/heads/main --input body.json",
+        "gh api -XDELETE /repos/acme/shop/git/refs/heads/main",
+        "gh api -X DELETE repos/acme/shop/git/refs/heads/release/1.2",
+        "gh api -X POST repos/acme/shop/statuses/abc123 -f state=success -f context=devflow/review",
+        "gh api repos/acme/shop/statuses/abc123 -f state=success",
+        "gh api repos/acme/shop/statuses/abc123 --raw-field state=success",
+        "gh api repos/acme/shop/statuses/abc123 --field=state=success",
+        "gh api -X PUT repos/acme/shop/statuses/abc123",
+        # risk labels
+        "gh pr edit 12 --add-label risk:low",
+        "gh pr edit 12 --add-label=risk:low",
+        "gh issue edit 5 --add-label bug,risk:low",
+        "gh issue edit 5 --add-label=bug,risk:low,x",
+        "gh pr edit 12 --remove-label risk:high",
+        "gh pr edit 12 --remove-label=bug,risk:high",
+        "gh -R acme/shop pr edit 12 --add-label risk:low",
+        # staging everything with a glob
+        "git add *",
+        "git add -v *",
+        # discarding local changes
+        "git checkout -f feature/x",
+        "git checkout --force feature/x",
+        "git checkout -fb feature/x",
+        "git switch -f feature/x",
+        "git switch --force feature/x",
+        "git switch --discard-changes feature/x",
+        "git -C /repo checkout -f main",
+        "git clean -f -d --force",
+    ]
+    ALLOWED = [
+        "git commit -m x",
+        "git commit -am 'x'",
+        "git commit -m '-n'",
+        "git commit -m 'use --no-verify'",
+        "git commit -m --no-verify",
+        "git commit --message=--no-verify",
+        "git commit -F -",
+        "git commit -mn",
+        "git commit -m x --author='A <a@b.c>'",
+        "git commit -m x -- -n",
+        "git push -n origin feature/x",
+        "git push --dry-run origin feature/x",
+        "git push origin feature/x",
+        "gh api repos/acme/shop/git/refs/heads/main",
+        "gh api -X GET repos/acme/shop/git/refs/heads/main",
+        "gh api -X GET repos/acme/shop/git/refs/heads/main -f per_page=1",
+        "gh api -X DELETE repos/acme/shop/git/refs/heads/feature/x",
+        "gh api -X POST repos/acme/shop/git/refs -f ref=refs/heads/feature/x -f sha=abc",
+        "gh api repos/acme/shop/statuses/abc123",
+        "gh api -X GET repos/acme/shop/statuses/abc123",
+        "gh api repos/acme/shop/commits/abc123/statuses",
+        "gh api repos/acme/shop/commits/abc123/status",
+        "gh pr edit 12 --add-label risk:high",
+        "gh pr edit 12 --add-label devflow,bug",
+        "gh pr edit 12 --remove-label risk:low",
+        "gh issue edit 5 --remove-label bug",
+        "gh pr edit 12 --title 'risk:low'",
+        "git add src/a.py",
+        "echo git add *",
+        "git checkout -b feature/x",
+        "git checkout -B feature/x",
+        "git checkout feature/x",
+        "git switch feature/x",
+        "git switch -c feature/x",
+        "git switch -C feature/x origin/feature/x",
+        "git clean -nf",
+        "git clean -fn",
+        "git clean -fnd",
+        "git clean -f --dry-run",
+        "git clean -dfn",
+    ]
+
+    def test_blocked(self):
+        for command in self.BLOCKED:
+            with self.subTest(command=command):
+                self.assertTrue(reasons_on(command, protected={"main", "develop", "release/*"}), command)
+
+    def test_allowed(self):
+        for command in self.ALLOWED:
+            with self.subTest(command=command):
+                self.assertEqual(reasons_on(command, protected={"main", "develop", "release/*"}), [], command)
+
+    def test_reasons_are_specific(self):
+        self.assertIn("skips the project's hooks", reasons_on("git commit -nm x")[0])
+        self.assertIn("skips the project's hooks", reasons_on("git push --no-verify")[0])
+        self.assertIn("protected branch", reasons_on("gh api -X DELETE repos/a/b/git/refs/heads/main")[0])
+        self.assertIn("commit status", reasons_on("gh api repos/a/b/statuses/abc -f state=success")[0])
+        self.assertIn("risk label", reasons_on("gh pr edit 1 --add-label risk:low")[0])
+        self.assertIn("stage the files you changed by name", reasons_on("git add *")[0])
+        self.assertIn("discards", reasons_on("git switch --discard-changes x")[0])
+
+
+class RiskLabelConfig(unittest.TestCase):
+    def test_default_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(guard.load_risk_labels(tmp), ("risk:low", "risk:high"))
+
+    def test_configured_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, ".claude"))
+            with open(os.path.join(tmp, ".claude", "devflow.json"), "w", encoding="utf-8") as fh:
+                json.dump({"labels": {"riskLow": "safe", "riskHigh": "danger"}}, fh)
+            self.assertEqual(guard.load_risk_labels(tmp), ("safe", "danger"))
+            command = "gh pr edit 1 --add-label safe"
+            payload = {"tool_name": "Bash", "tool_input": {"command": command}}
+            self.assertEqual(run_hook(payload, tmp).returncode, 2)
+            payload = {"tool_name": "Bash", "tool_input": {"command": "gh pr edit 1 --add-label risk:low"}}
+            self.assertEqual(run_hook(payload, tmp).returncode, 0)
+            payload = {"tool_name": "Bash", "tool_input": {"command": "gh pr edit 1 --remove-label danger"}}
+            self.assertEqual(run_hook(payload, tmp).returncode, 2)
+
+    def test_invalid_config_uses_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, ".claude"))
+            with open(os.path.join(tmp, ".claude", "devflow.json"), "w", encoding="utf-8") as fh:
+                fh.write('{"labels": "nope"}')
+            self.assertEqual(guard.load_risk_labels(tmp), ("risk:low", "risk:high"))
+
+
 class StageEverything(unittest.TestCase):
     """Cases ported from TaskBoard's .claude/hooks/test_block_git_add_all.py."""
 
