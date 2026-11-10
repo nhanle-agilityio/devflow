@@ -2,16 +2,31 @@
 
 All notable changes to devflow. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.7.0] - 2026-11-10
+
+Minor release: every new config key is optional and existing configs stay valid. Behaviour is stricter (the guard blocks more git commands, accept gaps wait for triage, weakened checks raise risk), but no setup change is required.
 
 ### Added
+- Plugin hooks: `hooks/formatter.py` (PostToolUse) runs the new `format` config key's per-glob formatters on each edited file, quietly; `hooks/session_start.py` (SessionStart) gives every session the workflow rules built from `.claude/devflow.json`, and is silent without one.
+- The `devflow:reviewer` agent (`agents/reviewer.md`), used by the Review stage (`nextTask.reviewerAgent`) and for local reviews.
+- Reusable workflows `devflow-review.yml` and `devflow-merge-gate.yml` (`on: workflow_call`) and thin caller templates pinned to a tag; `/devflow:init` chooses reusable or copy mode, `--upgrade` moves the tag.
+- `bin/devflow-setup`: the allow list from `checks`, `verify`, `worktree.setup` and the remote; the minimal config (non-default keys only); the leftovers list for doctor.
+- `/devflow:doctor` check 9: project files and rules the plugin now owns (`block_git_add_all.py` and its `hook-test` check, deny rules, a maintenance `loop.md`, a project `code-reviewer` agent), reported as removable and never deleted.
 - Guard: blocks git commands that discard work (`reset --hard`, `clean -f`, `branch -D`, `checkout .`, `restore .`, `stash drop|clear`, `filter-branch`, `update-ref -d`, `reflog expire`) and staging everything (`git add -A`, `--all`, `.`). `git add -u` is allowed. Replaces the per-project `block_git_add_all.py` hook.
 - Engine: a deterministic weakened-checks scan of the diff before every review round, run by the shipped `bin/devflow-scan` script (new `noqa`, `type: ignore`, `eslint-disable`, `@ts-ignore`, skipped, focused or deleted tests, removed assertions, empty `except` / `catch`, edited check configuration). Hits are critical findings; hits the reviewer accepts as required by the issue make the PR `risk:high`.
 - Review (engine and the `claude-code-review.yml` check): an out-of-scope item that leaves an acceptance criterion unmet is critical. Ship files the remaining real out-of-scope problems as follow-up issues labelled `needs-triage` and links them in the PR.
 
+- Priority labels (`labels.priority`, default `priority:critical|high|normal|low`, no label = normal). `/devflow:next-task` orders by dependencies, then priority, then issue number, and a critical or high issue pulls its open parents forward. The merge gate tries candidates by the linked issue's priority, then PR number. No preemption, and priority never changes who merges.
+- `labels.triage` (`needs-triage`): accept gaps and Ship's follow-up issues get it instead of ready, with a comment suggesting priority and risk; next-task and dispatch never pick such issues. Only a human sets ready.
+- A shared bug issue template (`skills/spec/templates/bug.md`) and a "Filing a bug" section in the README.
+- Fix PRs (bugs, gaps, `type:fix`) carry Root cause, Introduced by and Why it was missed.
+- `/devflow:release` lists critical fixes first.
+
 ### Changed
+- `/devflow:init` writes no deny rules (the guard covers them), generates the allow list, and writes only non-default keys to `devflow.json`.
+- `/devflow:accept` no longer labels gaps ready or sets their risk label: a human triages them.
 - `/devflow:doctor --fix` prints `git branch -D` for the user instead of running it (the guard blocks it).
-- Upgrade: run `/devflow:init --upgrade` to get the new review prompt.
+- Upgrade: run `/devflow:init --upgrade` in each project for the new review prompt and gate script (or to switch to reusable mode), then `/devflow:doctor` to see which project files can go.
 
 ## [2.6.0] - 2026-11-04
 

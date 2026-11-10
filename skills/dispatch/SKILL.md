@@ -22,7 +22,7 @@ Fail fast with a clear message if any check fails.
 
 ## 1. Collect the schedulable issues
 
-Using the GitHub MCP server (`github.owner` / `github.repo`), list open issues labelled `labels.ready` that are not labelled `labels.inProgress` or `labels.blocked`. Apply the same rules as the `/devflow:next-task` engine's Select stage:
+Using the GitHub MCP server (`github.owner` / `github.repo`), list open issues labelled `labels.ready` that are not labelled `labels.inProgress`, `labels.blocked` or `labels.triage` (default `needs-triage`). Lanes are planned by hotspots and dependencies only; inside a lane the issues run parents first, and priority (`labels.priority`) only breaks ties in that order. Apply the same rules as the `/devflow:next-task` engine's Select stage:
 
 - Skip an issue that has an open PR closing it ("Closes"/"Fixes" lines, branch names, search open PRs for `#<n>`).
 - Read `Depends on #N` lines from the body. Dependencies that are closed do not count.

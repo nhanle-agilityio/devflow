@@ -1,6 +1,8 @@
 'use strict';
 // Devflow merge gate. Called from .github/workflows/devflow-merge-gate.yml.
 // Merges at most one `devflow` + `risk:low` PR per run, and only when everything is green.
+// Candidates are tried in priority order (the linked issue's labels.priority label, then PR number);
+// priority only changes the order, never the rules.
 // Config: .claude/devflow.json (baseBranch, github, labels, mergeGate). Claude itself never merges.
 
 const fs = require('fs');
@@ -12,7 +14,10 @@ const ALWAYS_PROTECTED = ['main', 'master', 'develop', 'trunk', 'production'];
 
 const DEFAULTS = {
   baseBranch: 'main',
-  labels: { devflow: 'devflow', riskLow: 'risk:low', riskHigh: 'risk:high', blocked: 'agent:blocked', stacked: 'stacked' },
+  labels: {
+    devflow: 'devflow', riskLow: 'risk:low', riskHigh: 'risk:high', blocked: 'agent:blocked', stacked: 'stacked',
+    priority: ['priority:critical', 'priority:high', 'priority:normal', 'priority:low'],
+  },
   mergeGate: { enabled: false, dryRun: true, requiredChecks: ['devflow/review'], method: 'merge' },
 };
 
@@ -46,13 +51,58 @@ async function loadConfig({ github, context, core }) {
   return withDefaults(config);
 }
 
-async function listCandidates({ github, context }, config, only) {
+// Index of the first label in `list` that the item has. No priority label counts as the "normal" entry
+// (the first one whose name ends in "normal"), or after every listed priority when there is none.
+function priorityRank(names, list) {
+  const order = Array.isArray(list) ? list : [];
+  const has = new Set(names || []);
+  const hit = order.findIndex((l) => has.has(l));
+  if (hit !== -1) return hit;
+  const normal = order.findIndex((l) => /normal$/i.test(l));
+  return normal !== -1 ? normal : order.length;
+}
+
+// Sorted copy: lower rank first, then lower PR number.
+function orderCandidates(prs) {
+  return [...prs].sort((a, b) => a.rank - b.rank || a.number - b.number);
+}
+
+async function readIssueCached({ github, context }, state, number) {
+  const { owner, repo } = context.repo;
+  state.issues = state.issues || new Map();
+  if (!state.issues.has(number)) {
+    const { data } = await github.rest.issues.get({ owner, repo, issue_number: number });
+    state.issues.set(number, data);
+  }
+  return state.issues.get(number);
+}
+
+async function listCandidates(ctx, config, only, state) {
+  const { github, context, core } = ctx;
   const { owner, repo } = context.repo;
   const open = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', per_page: 100 });
-  return open
+  const mine = open
     .filter((p) => (p.labels || []).some((l) => l.name === config.labels.devflow))
-    .filter((p) => !only || p.number === only)
-    .sort((a, b) => a.number - b.number);
+    .filter((p) => !only || p.number === only);
+  const ranked = [];
+  for (const pr of mine) {
+    // The best priority among the linked issues; the PR's own labels when it links none.
+    let names = (pr.labels || []).map((l) => l.name);
+    const linked = linkedIssues(pr.body);
+    if (linked.length) {
+      names = [];
+      for (const n of linked) {
+        try {
+          const issue = await readIssueCached(ctx, state, n);
+          names = names.concat((issue.labels || []).map((l) => (typeof l === 'string' ? l : l.name)));
+        } catch (e) {
+          core.info(`#${pr.number}: could not read linked issue #${n} for its priority: ${e.message}`);
+        }
+      }
+    }
+    ranked.push(Object.assign(pr, { rank: priorityRank(names, config.labels.priority) }));
+  }
+  return orderCandidates(ranked);
 }
 
 function linkedIssues(body) {
@@ -185,14 +235,7 @@ async function evaluate(ctx, config, listed, state) {
   if (state.merged) return { action: 'deferred', reason: 'deferred: one merge per run' };
 
   // A PR merges only when every issue its linked issues depend on is closed.
-  state.issues = state.issues || new Map();
-  const readIssue = async (number) => {
-    if (!state.issues.has(number)) {
-      const { data } = await github.rest.issues.get({ owner, repo, issue_number: number });
-      state.issues.set(number, data);
-    }
-    return state.issues.get(number);
-  };
+  const readIssue = (number) => readIssueCached(ctx, state, number);
   for (const n of linkedIssues(listed.body)) {
     const re = /depends on #(\d+)/gi;
     const body = (await readIssue(n)).body || '';
@@ -268,9 +311,9 @@ module.exports = async function gate({ github, context, core, config }) {
     }
     const dryRun = cfg.mergeGate.dryRun !== false;
     const only = Number(context.payload?.inputs?.pr) || null;
-    const candidates = await listCandidates(ctx, cfg, only);
-    const rows = [];
     const state = { merged: false };
+    const candidates = await listCandidates(ctx, cfg, only, state);
+    const rows = [];
     for (const listed of candidates) {
       try {
         const d = await evaluate(ctx, cfg, listed, state);
@@ -287,4 +330,6 @@ module.exports = async function gate({ github, context, core, config }) {
 };
 
 module.exports.withDefaults = withDefaults;
+module.exports.priorityRank = priorityRank;
+module.exports.orderCandidates = orderCandidates;
 module.exports.GATE_MERGED_MARKER = GATE_MERGED_MARKER;

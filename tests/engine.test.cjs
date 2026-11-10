@@ -24,11 +24,12 @@ async function run(args, opts = {}) {
   const pick = (v, n) => (typeof v === 'function' ? v(n) : v);
   const agent = async (prompt, o) => {
     const l = o.label;
-    calls.push({ l, prompt, model: o.model });
+    calls.push({ l, prompt, model: o.model, agentType: o.agentType });
+    if (opts.reviewerMissing && o.agentType) throw new Error('Unknown agent type ' + o.agentType);
     const n = Number((/#(\d+)/.exec(l) || [])[1]);
     if (l === 'select issues') {
       return {
-        issues: (args.issues || []).map((i) => ({ number: i, title: 't' + i, labels: opts.labels || [], body: 'spec docs/specs/a.md', dependsOn: [], parents: [] })),
+        issues: (args.issues || []).map((i) => ({ number: i, title: 't' + i, labels: opts.selectLabels ? opts.selectLabels(i) : opts.labels || [], body: 'spec docs/specs/a.md', dependsOn: [], parents: [] })),
         skipped: [],
       };
     }
@@ -49,6 +50,11 @@ async function run(args, opts = {}) {
       return Object.assign({ status: 'done', tests: [{ rowId: 'T1.1', test: 'test_t1_1' }], filesChanged: opts.qaFiles || [], questions: [], specRead: 'docs/specs/a.md' }, opts.qaOut || {});
     }
     if (l.startsWith('commit')) return { ok: true, commits: ['t1 test(#1): x', 'f1 feat(#1): y'], failedFirst: opts.failedFirst !== false, failureNote: '404' };
+    if (l.startsWith('fix') && opts.fixOut !== undefined) {
+      const f = pick(opts.fixOut, n);
+      if (f === null) return null;
+      return Object.assign({ status: 'done', summary: 'f', commits: [], filesChanged: [], assumptions: [], outOfScope: [], touchesUi: false, specRead: 'none' }, f);
+    }
     if (l.startsWith('implement') || l.startsWith('fix')) {
       return Object.assign(
         { status: 'done', summary: 's', commits: ['a b'], filesChanged: ['src/x.py'], assumptions: [], outOfScope: [], touchesUi: false, specRead: 'docs/specs/a.md' },
@@ -404,6 +410,112 @@ test('follow-up issues from Ship are noted', async () => {
   assert.match(rep[0].notes.join(), /out-of-scope follow-ups \(needs-triage\): #77/);
 });
 
+// ---------------------------------------------------------------------------------------------
+// Priority (B2), triage (A4) and fix PR fields (E1)
+// ---------------------------------------------------------------------------------------------
+
+const PRIO = ['priority:critical', 'priority:high', 'priority:normal', 'priority:low'];
+const iss = (number, labels = [], dependsOn = []) => ({ number, labels, dependsOn, parents: [] });
+
+test('priorityRank: first listed label wins, no label is normal', async () => {
+  const { priorityRank } = await helpers();
+  assert.equal(priorityRank(['priority:high', 'priority:low'], PRIO), 1);
+  assert.equal(priorityRank(['bug'], PRIO), 2);
+  assert.equal(priorityRank([], ['p0', 'p1']), 2); // no "normal" entry: after every listed priority
+});
+
+test('orderIssues: priority, then number', async () => {
+  const { orderIssues } = await helpers();
+  const out = orderIssues([iss(5), iss(3, ['priority:low']), iss(9, ['priority:critical']), iss(4, ['priority:high']), iss(1)], PRIO);
+  assert.deepEqual(out.map((i) => i.number), [9, 4, 1, 5, 3]);
+});
+
+test('orderIssues: dependencies first, and a critical child pulls its parent forward', async () => {
+  const { orderIssues } = await helpers();
+  const out = orderIssues([iss(2), iss(3), iss(10, [], []), iss(11, ['priority:critical'], [10]), iss(12, ['priority:low'], [2])], PRIO);
+  assert.deepEqual(out.map((i) => i.number), [10, 11, 2, 3, 12]);
+});
+
+test('orderIssues: a dependency outside the set is ignored and a cycle keeps every issue', async () => {
+  const { orderIssues } = await helpers();
+  const out = orderIssues([iss(1, [], [2]), iss(2, [], [1]), iss(3, ['priority:high'], [99])], PRIO);
+  assert.deepEqual(out.map((i) => i.number), [3, 1, 2]);
+});
+
+test('Select output is reordered by priority; a lane keeps its given order', async () => {
+  // select stub returns args.issues in order with opts.labels; give per-issue labels through a function
+  const labelsOf = { 1: [], 2: ['priority:critical'], 3: ['priority:high'] };
+  let r = await run({ ...BASE, issues: [1, 2, 3] }, { selectLabels: (n) => labelsOf[n] });
+  assert.deepEqual(r.rep.map((x) => x.issue), [2, 3, 1]);
+  r = await run({ ...BASE, issues: [1, 2, 3], chain: true }, { selectLabels: (n) => labelsOf[n] });
+  assert.deepEqual(r.rep.map((x) => x.issue), [1, 2, 3]);
+});
+
+test('needs-triage issues are never worked on', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1, 2] }, { selectLabels: (n) => (n === 1 ? ['needs-triage'] : []) });
+  assert.equal(rep.find((x) => x.issue === 1).status, 'skipped');
+  assert.match(rep.find((x) => x.issue === 1).reason, /needs-triage: a human sets it ready/);
+  assert.ok(!has(calls, 'claim #1'));
+  assert.equal(rep.find((x) => x.issue === 2).status, 'pr');
+  assert.match(prompt(calls, 'select'), /Never select an issue labelled "needs-triage"/);
+  assert.match(prompt(calls, 'select'), /priority:critical, priority:high, priority:normal, priority:low/);
+});
+
+test('isFixIssue: fix type, gap and bug labels, gap titles and bug bodies', async () => {
+  const { isFixIssue } = await helpers();
+  const cfg = { accept: { labels: ['type:gap'] } };
+  assert.ok(isFixIssue({ title: 'x', labels: ['type:fix'], body: '' }, cfg));
+  assert.ok(isFixIssue({ title: 'x', labels: ['type:gap'], body: '' }, cfg));
+  assert.ok(isFixIssue({ title: 'x', labels: ['bug'], body: '' }, cfg));
+  assert.ok(isFixIssue({ title: '[tasks] Gap: sort order', labels: [], body: '' }, cfg));
+  assert.ok(isFixIssue({ title: 'x', labels: [], body: '## Introduced by\n#54' }, cfg));
+  assert.ok(!isFixIssue({ title: '[tasks] T1: add export', labels: ['type:feat'], body: '' }, cfg));
+});
+
+test('a fix issue asks Implement for the root cause and Ship puts it in the PR', async () => {
+  const rc = { cause: 'sort key ignored', introducedBy: 'PR #54 (AC2.5)', whyMissed: 'no test for AC2.5' };
+  const { calls } = await run({ ...BASE, issues: [1] }, { selectLabels: () => ['type:fix'], devOut: { rootCause: rc } });
+  assert.match(prompt(calls, 'implement'), /This issue is a fix/);
+  const ship = prompt(calls, 'ship');
+  assert.match(ship, /Root cause: .*sort key ignored/);
+  assert.match(ship, /"Root cause", "Introduced by" and "Why it was missed"/);
+  assert.ok(!has(calls, 'fix'));
+});
+
+test('a fix issue without a root cause gets one fix round to supply it, then ships with unknown', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { selectLabels: () => ['type:fix'] });
+  assert.match(prompt(calls, 'fix'), /root cause/);
+  assert.match(prompt(calls, 'ship'), /Introduced by: unknown/);
+  assert.match(rep[0].notes.join(), /root cause not found/);
+});
+
+test('a feature issue has no root cause step', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] });
+  assert.doesNotMatch(prompt(calls, 'implement'), /This issue is a fix/);
+  assert.doesNotMatch(prompt(calls, 'ship'), /Why it was missed/);
+});
+
+test('Ship files follow-ups with the bug template and a triage suggestion comment', async () => {
+  const { calls } = await run({ ...BASE, issues: [1], bugTemplatePath: '/p/skills/spec/templates/bug.md' }, { devOut: { outOfScope: ['typo in README'] } });
+  const ship = prompt(calls, 'ship');
+  assert.match(ship, /\/p\/skills\/spec\/templates\/bug\.md/);
+  assert.match(ship, /suggest a priority .* and a risk/);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Reviewer agent (P6)
+// ---------------------------------------------------------------------------------------------
+
+test('Review runs as the plugin reviewer agent, configurable and with a fallback', async () => {
+  let r = await run({ ...BASE, issues: [1] });
+  assert.equal(r.calls.find((c) => c.l.startsWith('review')).agentType, 'devflow:reviewer');
+  r = await run({ ...BASE, config: { ...CFG, nextTask: { reviewerAgent: '' } }, issues: [1] });
+  assert.equal(r.calls.find((c) => c.l.startsWith('review')).agentType, undefined);
+  r = await run({ ...BASE, issues: [1] }, { reviewerMissing: true });
+  assert.equal(r.rep[0].status, 'pr');
+  assert.match(r.rep[0].notes.join(), /reviewer agent devflow:reviewer unavailable/);
+});
+
 test('parseDiff: --- and +++ inside a hunk are content lines, not file headers', async () => {
   const { parseDiff, scanWeakenedChecks } = await helpers();
   const text = 'diff --git a/db/schema.sql b/db/schema.sql\nindex 1..2 100644\n--- a/db/schema.sql\n+++ b/db/schema.sql\n@@ -3,2 +3,2 @@\n--- old comment\n-select 1;\n+++ new counter\n+select 2;\n' +
@@ -413,4 +525,20 @@ test('parseDiff: --- and +++ inside a hunk are content lines, not file headers',
   assert.deepEqual(files[0].removed, [{ line: 3, text: '-- old comment' }, { line: 4, text: 'select 1;' }]);
   assert.deepEqual(files[0].added, [{ line: 3, text: '++ new counter' }, { line: 4, text: 'select 2;' }]);
   assert.ok(scanWeakenedChecks(text, []).some((h) => h.file === 'tests/test_a.py' && /removed 1 test/.test(h.kind)));
+});
+
+test('a failed root-cause round never blocks: died or blocked ships with unknown and a note', async () => {
+  for (const fixOut of [null, { status: 'blocked', blockedReason: 'cannot tell' }]) {
+    const { rep, calls } = await run({ ...BASE, issues: [1] }, { selectLabels: () => ['type:fix'], fixOut });
+    assert.equal(rep[0].status, 'pr', JSON.stringify(fixOut));
+    assert.match(prompt(calls, 'ship'), /Root cause: unknown; Introduced by: unknown/);
+    assert.match(rep[0].notes.join(), /root cause round failed/);
+    assert.ok(!has(calls, 'blocked'));
+  }
+});
+
+test('a root-cause round that edits a QA file still blocks', async () => {
+  const { rep } = await run({ ...BASE, issues: [1] }, { ...QA, selectLabels: () => ['type:fix'], fixOut: { filesChanged: ['tests/test_a.py'] } });
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(rep[0].reason, /QA test files/);
 });

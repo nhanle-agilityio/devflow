@@ -373,3 +373,39 @@ test('issue reads are cached within a run', async () => {
   await run(env, CONFIG());
   assert.equal(env.names('issues.get').length, 2); // #7 and #50, once each
 });
+
+test('candidates are ordered by the linked issue priority, then PR number', async () => {
+  const prs = [makePr(1), makePr(2), makePr(3), makePr(4, { body: 'no link', labels: [{ name: 'devflow' }, { name: 'risk:low' }, { name: 'priority:high' }] })];
+  const env = makeEnv({
+    prs,
+    issues: {
+      101: { state: 'open', body: '', labels: [{ name: 'priority:low' }] },
+      102: { state: 'open', body: '', labels: [] },
+      103: { state: 'open', body: '', labels: [{ name: 'priority:critical' }] },
+    },
+    ...green(1), runs: { ...green(1).runs, ...green(2).runs, ...green(3).runs, ...green(4).runs },
+  });
+  await run(env, CONFIG());
+  assert.deepEqual(env.decisions().map((d) => d.pr), ['#3', '#4', '#2', '#1']);
+  assert.equal(env.names('pulls.merge')[0][1].pull_number, 3);
+});
+
+test('priority never loosens the rules: a critical risk:high PR is still skipped', async () => {
+  const env = makeEnv({
+    prs: [makePr(1, { labels: [{ name: 'devflow' }, { name: 'risk:high' }] }), makePr(2)],
+    issues: { 101: { state: 'open', body: '', labels: [{ name: 'priority:critical' }] }, 102: { state: 'open', body: '', labels: [] } },
+    ...green(1), runs: { ...green(1).runs, ...green(2).runs },
+  });
+  await run(env, CONFIG());
+  assert.equal(env.decisions()[0].pr, '#1');
+  assert.match(env.decisions()[0].reason, /risk:high/);
+  assert.equal(env.names('pulls.merge')[0][1].pull_number, 2);
+});
+
+test('priorityRank and orderCandidates are exported and use labels.priority', async () => {
+  assert.equal(gate.priorityRank(['p1'], ['p0', 'p1']), 1);
+  assert.equal(gate.priorityRank([], ['priority:critical', 'priority:normal']), 1);
+  const out = gate.orderCandidates([{ number: 2, rank: 1 }, { number: 1, rank: 1 }, { number: 3, rank: 0 }]);
+  assert.deepEqual(out.map((p) => p.number), [3, 1, 2]);
+  assert.deepEqual(gate.withDefaults({}).labels.priority, ['priority:critical', 'priority:high', 'priority:normal', 'priority:low']);
+});
