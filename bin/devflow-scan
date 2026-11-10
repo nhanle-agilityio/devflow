@@ -1,0 +1,60 @@
+#!/usr/bin/env node
+'use strict';
+// devflow-scan: the deterministic weakened-checks scan of the Review stage, run in the checkout.
+// Usage: devflow-scan <parentRef> [config path, default .claude/devflow.json]
+// Runs `git diff --unified=0 <parentRef>...HEAD`, scans it with the engine's pure helpers (parseDiff,
+// scanWeakenedChecks, checkConfigGlobs from workflows/next-task-engine.js, loaded through its exports hook)
+// and prints one JSON object: {"scanned": true, "hits": [{file, line, kind, text}]}. On any failure it prints
+// {"scanned": false, "hits": [], "error": "..."} and exits 1. Node, no dependencies.
+
+const fs = require('fs');
+const path = require('path');
+const { execFileSync } = require('child_process');
+
+const ENGINE = path.join(__dirname, '..', 'workflows', 'next-task-engine.js');
+
+// The engine is a workflow script (top-level return, `export const meta`); with args.exports it returns its helpers.
+async function helpers() {
+  const src = fs.readFileSync(ENGINE, 'utf8').replace(/^export /m, '');
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const noop = () => {};
+  return new AsyncFunction('args', 'agent', 'phase', 'log', 'parallel', src)({ exports: true }, noop, noop, noop, noop);
+}
+
+function readChecks(configPath) {
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    return Array.isArray(config.checks) ? config.checks : [];
+  } catch (e) {
+    return []; // the default check-configuration list still applies
+  }
+}
+
+async function main(argv) {
+  const [parentRef, configPath = '.claude/devflow.json'] = argv;
+  if (!parentRef || parentRef.startsWith('-')) throw new Error('usage: devflow-scan <parentRef> [config path]');
+  let diff;
+  try {
+    diff = execFileSync('git', ['diff', '--unified=0', '--no-color', '--no-ext-diff', `${parentRef}...HEAD`], {
+      encoding: 'utf8',
+      maxBuffer: 512 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (e) {
+    throw new Error(`git diff failed: ${String((e.stderr || e.message || '')).trim().split('\n')[0]}`);
+  }
+  const h = await helpers();
+  return { scanned: true, hits: h.scanWeakenedChecks(diff, h.checkConfigGlobs(readChecks(configPath))) };
+}
+
+if (require.main === module) {
+  main(process.argv.slice(2)).then(
+    (out) => process.stdout.write(JSON.stringify(out) + '\n'),
+    (e) => {
+      process.stdout.write(JSON.stringify({ scanned: false, hits: [], error: e.message }) + '\n');
+      process.exit(1);
+    },
+  );
+} else {
+  module.exports = { main, helpers };
+}
