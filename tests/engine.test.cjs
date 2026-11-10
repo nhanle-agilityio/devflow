@@ -433,7 +433,7 @@ test('needs-triage issues are never worked on', async () => {
   assert.match(rep.find((x) => x.issue === 1).reason, /needs-triage: a human sets it ready/);
   assert.ok(!has(calls, 'claim #1'));
   assert.equal(rep.find((x) => x.issue === 2).status, 'pr');
-  assert.match(prompt(calls, 'select'), /NOT labelled .*"needs-triage"/);
+  assert.match(prompt(calls, 'select'), /Never select an issue labelled "needs-triage"/);
   assert.match(prompt(calls, 'select'), /priority:critical, priority:high, priority:normal, priority:low/);
 });
 
