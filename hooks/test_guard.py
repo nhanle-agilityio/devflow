@@ -409,14 +409,11 @@ class MoreBashRules(unittest.TestCase):
         "gh api repos/acme/shop/statuses/abc123 --raw-field state=success",
         "gh api repos/acme/shop/statuses/abc123 --field=state=success",
         "gh api -X PUT repos/acme/shop/statuses/abc123",
-        # risk labels
-        "gh pr edit 12 --add-label risk:low",
-        "gh pr edit 12 --add-label=risk:low",
-        "gh issue edit 5 --add-label bug,risk:low",
-        "gh issue edit 5 --add-label=bug,risk:low,x",
+        # risk labels, commit flags that precede an attached value
+        "git commit -S -n -m x",
+        "git commit -nuno -m x",
         "gh pr edit 12 --remove-label risk:high",
         "gh pr edit 12 --remove-label=bug,risk:high",
-        "gh -R acme/shop pr edit 12 --add-label risk:low",
         # staging everything with a glob
         "git add *",
         "git add -v *",
@@ -454,6 +451,14 @@ class MoreBashRules(unittest.TestCase):
         "gh api repos/acme/shop/commits/abc123/statuses",
         "gh api repos/acme/shop/commits/abc123/status",
         "gh pr edit 12 --add-label risk:high",
+        "gh pr edit 12 --add-label risk:low",
+        "gh pr edit 12 --add-label=risk:low",
+        "gh pr edit 12 --add-label devflow,risk:low",
+        "gh issue edit 5 --add-label=bug,risk:low,x",
+        "git commit -uno -m x",
+        "git commit -SABCDn123 -m x",
+        "git commit -S -m x",
+        "git commit --untracked-files=no -m x",
         "gh pr edit 12 --add-label devflow,bug",
         "gh pr edit 12 --remove-label risk:low",
         "gh issue edit 5 --remove-label bug",
@@ -488,7 +493,7 @@ class MoreBashRules(unittest.TestCase):
         self.assertIn("skips the project's hooks", reasons_on("git push --no-verify")[0])
         self.assertIn("protected branch", reasons_on("gh api -X DELETE repos/a/b/git/refs/heads/main")[0])
         self.assertIn("commit status", reasons_on("gh api repos/a/b/statuses/abc -f state=success")[0])
-        self.assertIn("risk label", reasons_on("gh pr edit 1 --add-label risk:low")[0])
+        self.assertIn("downgrades the risk", reasons_on("gh pr edit 1 --remove-label risk:high")[0])
         self.assertIn("stage the files you changed by name", reasons_on("git add *")[0])
         self.assertIn("discards", reasons_on("git switch --discard-changes x")[0])
 
@@ -504,10 +509,9 @@ class RiskLabelConfig(unittest.TestCase):
             with open(os.path.join(tmp, ".claude", "devflow.json"), "w", encoding="utf-8") as fh:
                 json.dump({"labels": {"riskLow": "safe", "riskHigh": "danger"}}, fh)
             self.assertEqual(guard.load_risk_labels(tmp), ("safe", "danger"))
-            command = "gh pr edit 1 --add-label safe"
-            payload = {"tool_name": "Bash", "tool_input": {"command": command}}
-            self.assertEqual(run_hook(payload, tmp).returncode, 2)
-            payload = {"tool_name": "Bash", "tool_input": {"command": "gh pr edit 1 --add-label risk:low"}}
+            payload = {"tool_name": "Bash", "tool_input": {"command": "gh pr edit 1 --add-label safe"}}
+            self.assertEqual(run_hook(payload, tmp).returncode, 0)
+            payload = {"tool_name": "Bash", "tool_input": {"command": "gh pr edit 1 --remove-label risk:high"}}
             self.assertEqual(run_hook(payload, tmp).returncode, 0)
             payload = {"tool_name": "Bash", "tool_input": {"command": "gh pr edit 1 --remove-label danger"}}
             self.assertEqual(run_hook(payload, tmp).returncode, 2)
