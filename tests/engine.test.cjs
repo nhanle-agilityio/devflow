@@ -561,6 +561,7 @@ test('package.json hits only on script and tool-config lines, whatever the check
     '@@ -0,0 +5 @@\n+    "lint-staged": "^15.0.0"',
     '@@ -0,0 +5 @@\n+    "test": "^1.2.3"',
     '@@ -0,0 +5 @@\n+    "build": "workspace:*"',
+    '@@ -0,0 +5 @@\n+    "build-tools": "github:acme/build-tools#v2"',
   ]) {
     assert.deepEqual(kinds(hunk), [], hunk);
   }
