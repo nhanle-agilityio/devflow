@@ -17,6 +17,10 @@ export const meta = {
 // Config. Everything stack-specific comes from args.config; nothing is hardcoded here.
 // ---------------------------------------------------------------------------------------------
 
+// Test hook: the pure helpers below are function declarations (hoisted), so tests get them without a run.
+// They take every input as a parameter and never touch the run state.
+if (args && args.exports === true) return { parseDiff, scanWeakenedChecks, checkConfigGlobs, globToRegExp }
+
 // Run through /devflow:next-task only: it does the preflight and builds args. Calling this workflow
 // directly (e.g. /devflow:next-task-engine) arrives without args, so stop with a clear message.
 const missing = ['config'].filter((k) => !args || !args[k])
@@ -46,6 +50,7 @@ const labels = Object.assign(
     riskLow: 'risk:low',
     riskHigh: 'risk:high',
     stacked: 'stacked',
+    triage: 'needs-triage',
   },
   cfg.labels,
 )
@@ -189,6 +194,11 @@ const IMPLEMENT_SCHEMA = {
     filesChanged: { type: 'array', items: { type: 'string' } },
     assumptions: { type: 'array', items: { type: 'string' } },
     outOfScope: { type: 'array', items: { type: 'string' } },
+    outOfScopeDone: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Fix rounds: items of the earlier out-of-scope list that this fix implemented, copied exactly',
+    },
     touchesUi: { type: 'boolean', description: 'True when the diff against the base branch changes user-facing UI' },
     blockedReason: { type: 'string' },
     specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
@@ -287,10 +297,28 @@ const VERIFY_SCHEMA = {
   required: ['ran', 'mode', 'steps', 'notes'],
 }
 
+const DIFF_SCHEMA = {
+  type: 'object',
+  properties: {
+    diff: { type: 'string', description: 'The command output, verbatim' },
+    truncated: { type: 'boolean', description: 'True when the output was cut at the line limit' },
+  },
+  required: ['diff', 'truncated'],
+}
+
 const REVIEW_SCHEMA = {
   type: 'object',
   properties: {
     verdict: { enum: ['pass', 'changes'] },
+    acceptedWeakenings: {
+      type: 'array',
+      description: 'Scan hits (weakened checks) that are justified by the issue itself; each stays in the PR and makes it risk:high',
+      items: {
+        type: 'object',
+        properties: { file: { type: 'string' }, line: { type: 'integer' }, reason: { type: 'string' } },
+        required: ['file', 'line', 'reason'],
+      },
+    },
     findings: {
       type: 'array',
       items: {
@@ -316,6 +344,15 @@ const SHIP_SCHEMA = {
     prNumber: { type: 'integer' },
     url: { type: 'string' },
     unstacked: { type: 'boolean', description: 'true when the parent PR was already merged and the PR targets the base' },
+    followUps: {
+      type: 'array',
+      description: 'Issues created (or found open) for the out-of-scope items',
+      items: {
+        type: 'object',
+        properties: { number: { type: 'integer' }, title: { type: 'string' }, existing: { type: 'boolean' } },
+        required: ['number', 'title'],
+      },
+    },
     problem: { type: 'string' },
   },
   required: ['ok', 'prNumber', 'url'],
@@ -449,6 +486,154 @@ function globToRegExp(glob) {
     }
   }
   return new RegExp(`^${re}$`)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Weakened checks (pure). A deterministic scan of the diff for changes that make checks pass by
+// weakening them instead of fixing the cause. Hits go to Review as critical findings; the ones the
+// reviewer accepts as justified stay in the PR and raise its risk to high at Ship.
+// ---------------------------------------------------------------------------------------------
+
+// Unified diff (any context size) -> [{file, deleted, added: [{line, text}], removed: [{line, text}]}].
+function parseDiff(text) {
+  const files = []
+  let cur = null
+  let oldLine = 0
+  let newLine = 0
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.replace(/\r$/, '')
+    if (line.startsWith('diff --git ')) {
+      const m = / b\/(.+)$/.exec(line)
+      cur = { file: m ? m[1] : '', deleted: false, added: [], removed: [] }
+      files.push(cur)
+      continue
+    }
+    if (!cur) continue
+    if (line.startsWith('deleted file mode')) {
+      cur.deleted = true
+      continue
+    }
+    if (line.startsWith('+++ ')) {
+      const m = /^\+\+\+ b\/(.+)$/.exec(line)
+      if (m) cur.file = m[1]
+      continue
+    }
+    if (line.startsWith('--- ')) {
+      const m = /^--- a\/(.+)$/.exec(line)
+      if (m && !cur.file) cur.file = m[1]
+      continue
+    }
+    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
+    if (h) {
+      oldLine = Number(h[1])
+      newLine = Number(h[2])
+      continue
+    }
+    if (line.startsWith('+')) cur.added.push({ line: newLine++, text: line.slice(1) })
+    else if (line.startsWith('-')) cur.removed.push({ line: oldLine++, text: line.slice(1) })
+    else if (line.startsWith(' ')) {
+      oldLine++
+      newLine++
+    }
+  }
+  return files
+}
+
+// Files that configure the project's checks: linters, type checkers, test runners, CI, devflow itself,
+// and any script path named in a check command. Globs, matched with globToRegExp.
+function checkConfigGlobs(checks) {
+  const globs = [
+    '.claude/devflow.json',
+    '**/pyproject.toml',
+    '**/setup.cfg',
+    '**/tox.ini',
+    '**/.flake8',
+    '**/ruff.toml',
+    '**/.ruff.toml',
+    '**/mypy.ini',
+    '**/.mypy.ini',
+    '**/pytest.ini',
+    '**/.coveragerc',
+    '**/.eslintrc*',
+    '**/eslint.config.*',
+    '**/.prettierrc*',
+    '**/tsconfig*.json',
+    '**/jest.config.*',
+    '**/vitest.config.*',
+    '**/playwright.config.*',
+    '**/.golangci.y*ml',
+    '.pre-commit-config.yaml',
+    '.github/workflows/*',
+  ]
+  for (const c of Array.isArray(checks) ? checks : []) {
+    const words = String((c && c.run) || '').split(/\s+/).filter(Boolean)
+    if (/^make$/.test(words[0] || '')) globs.push('Makefile')
+    for (const w of words) {
+      // A script path in the command (scripts/lint.sh, ./bin/check): a word with a slash and no flag or URL.
+      if (/^(\.\/)?[\w.-]+(\/[\w.-]+)+$/.test(w) && !/^(\.\/)?(\.venv|venv|node_modules)\//.test(w)) {
+        globs.push(w.replace(/^\.\//, ''))
+      }
+    }
+  }
+  return Array.from(new Set(globs))
+}
+
+// hits: [{file, line, kind, text}]. diffText is `git diff` output; configGlobs from checkConfigGlobs.
+function scanWeakenedChecks(diffText, configGlobs) {
+  const isTestFile = (f) =>
+    /(^|\/)(tests?|__tests__|spec|specs)\//.test(f) ||
+    /(^|\/)(test_[^/]*\.py|[^/]*_test\.(py|go)|[^/]*\.(test|spec)\.[cm]?[jt]sx?)$/.test(f)
+  const ADDED = [
+    { kind: 'noqa', re: /#\s*noqa\b/i },
+    { kind: 'type: ignore', re: /#\s*type:\s*ignore\b/ },
+    { kind: 'pyright/pylint disable', re: /#\s*(pyright:\s*ignore|pylint:\s*disable)\b/ },
+    { kind: 'skipped test', re: /@?pytest\.mark\.(skip|skipif|xfail)\b|@unittest\.(skip|skipIf|skipUnless|expectedFailure)\b|\bpytest\.(skip|xfail)\(/ },
+    { kind: 'skipped or focused test', re: /\b(it|test|describe|context|suite)\.(skip|only|todo)\b|\b(xit|xdescribe|xtest|fit|fdescribe)\(/ },
+    { kind: 'eslint-disable', re: /eslint-disable/ },
+    { kind: 'ts-ignore', re: /@ts-(ignore|nocheck|expect-error)\b/ },
+    { kind: 'empty except', re: /^\s*except\b[^:]*:\s*(pass|\.\.\.)\s*(#.*)?$/ },
+    { kind: 'empty catch', re: /\bcatch\s*(\([^)]*\))?\s*\{\s*\}/ },
+  ]
+  const TEST_DEF = /^\s*(async\s+)?def\s+test\w*\s*\(|^\s*(it|test)\s*\(|^\s*func\s+Test\w+\s*\(/
+  const ASSERT = /\bassert\b|\bself\.assert\w+\(|\bexpect\s*\(|\bassert\w*\s*\(|\bt\.(Error|Fatal)f?\(/
+  const configRes = (Array.isArray(configGlobs) ? configGlobs : []).map(globToRegExp)
+  const hits = []
+  for (const f of parseDiff(diffText)) {
+    if (!f.file) continue
+    if (f.deleted && isTestFile(f.file)) {
+      hits.push({ file: f.file, line: 0, kind: 'deleted test file', text: '' })
+      continue
+    }
+    if (configRes.some((re) => re.test(f.file)) && (f.added.length || f.removed.length || f.deleted)) {
+      const first = f.added[0] || f.removed[0] || { line: 0, text: '' }
+      hits.push({ file: f.file, line: first.line, kind: 'check configuration changed', text: first.text.trim() })
+    }
+    for (let i = 0; i < f.added.length; i++) {
+      const a = f.added[i]
+      for (const p of ADDED) {
+        if (p.re.test(a.text)) hits.push({ file: f.file, line: a.line, kind: p.kind, text: a.text.trim() })
+      }
+      // "except ...:" with "pass" on the next added line
+      const next = f.added[i + 1]
+      if (/^\s*except\b[^:]*:\s*(#.*)?$/.test(a.text) && next && next.line === a.line + 1 && /^\s*(pass|\.\.\.)\s*(#.*)?$/.test(next.text)) {
+        hits.push({ file: f.file, line: a.line, kind: 'empty except', text: `${a.text.trim()} ${next.text.trim()}` })
+      }
+    }
+    if (isTestFile(f.file)) {
+      const count = (lines, re) => lines.filter((l) => re.test(l.text)).length
+      const lostTests = count(f.removed, TEST_DEF) - count(f.added, TEST_DEF)
+      if (lostTests > 0) {
+        const first = f.removed.find((l) => TEST_DEF.test(l.text))
+        hits.push({ file: f.file, line: first.line, kind: `removed ${lostTests} test(s)`, text: first.text.trim() })
+      }
+      const lostAsserts = count(f.removed, ASSERT) - count(f.added, ASSERT)
+      if (lostAsserts > 0) {
+        const first = f.removed.find((l) => ASSERT.test(l.text))
+        hits.push({ file: f.file, line: first.line, kind: `removed ${lostAsserts} assertion(s)`, text: first.text.trim() })
+      }
+    }
+  }
+  return hits
 }
 
 // Deterministic risk: the issue's label, then escalation by touched paths. Unlabelled counts as high.
@@ -740,6 +925,7 @@ Instructions:
 - Stay inside the issue's scope. Record unrelated problems in "outOfScope" without changing them.${qaRule}
 - Commit with Conventional Commits in English, scope "${scopeFor(issue)}", staging files by name. Never rewrite existing commits. Do not push.
 - If you cannot fix it without a decision the spec does not make, return status "blocked" with blockedReason. ${DECISIONS_NOTE}
+When a problem says an out-of-scope item is required by the acceptance criteria, implement it (test first) and copy that item exactly into "outOfScopeDone".
 Return the same structure as the implement stage; "commits" lists only the commits you made now. In "specRead" put the spec path if you read the spec (for example with \`git show ${baseRef}:<path>\`), otherwise "none".`
 }
 
@@ -772,7 +958,25 @@ ${verifyCfg.lock !== false ? `0. Take the verify lock first, so parallel session
 If you cannot run verification at all (server never started, tool unavailable), return ran=false with the reason in notes; a failure of the code under test is ran=true with pass=false steps.`
 }
 
-function reviewPrompt(issue, branch, state, round) {
+const DIFF_LINE_LIMIT = 5000
+
+function diffPrompt(issue, branch) {
+  return `Print the change of branch ${branch} (issue #${issue.number}) for a scan. Read-only: change nothing.
+
+Run exactly: \`git diff --unified=0 --no-color --no-ext-diff ${parentRefFor(issue)}...HEAD\`
+Return its output verbatim in "diff" (do not summarise, reformat or drop lines). If it is longer than ${DIFF_LINE_LIMIT} lines, return the first ${DIFF_LINE_LIMIT} lines and truncated=true; otherwise truncated=false.`
+}
+
+// Hits the reviewer accepted as justified (same file and line).
+function acceptedHit(hit, accepted) {
+  return (accepted || []).some((a) => a && a.file === hit.file && Number(a.line) === Number(hit.line))
+}
+
+function hitLine(h) {
+  return `${h.file}${h.line ? ':' + h.line : ''} ${h.kind}${h.text ? ' (' + h.text.slice(0, 80) + ')' : ''}`
+}
+
+function reviewPrompt(issue, branch, state, round, hits) {
   const parentRef = parentRefFor(issue)
   const parents = parentsOf(issue)
   const specPath = specPathFor(issue)
@@ -798,10 +1002,14 @@ Review, in this order:
 2. Tests: does each behaviour change have a test that would fail without it? Were tests weakened? If the issue has a "Test cases" table, every row with priority "must" needs a test traceable to its row id; a missing one is a warning that names the row. If the issue, the spec or the plan states a naming pattern for these tests, a test that does not follow it exactly is a warning too (it is cheap to rename now, not later). ${e2eRule(true)}
 3. Scope creep: changes not needed for the acceptance criteria.
 4. CLAUDE.md conventions and its "Never" list.
+5. Out of scope: an item in the out-of-scope list below that leaves behaviour unmet that the issue's acceptance criteria (or a "must" Test cases row) require is NOT out of scope: report it as critical, naming the criterion (for example "AC2.5 requires X; the out-of-scope note leaves it as is"). Only problems the criteria do not cover may stay out of scope.
+6. Weakened checks: a deterministic scan of the diff found the hits below (new noqa / type: ignore / eslint-disable / ts-ignore, skipped, focused or deleted tests, removed assertions, empty except or catch, edited check configuration). Each one is critical unless the issue itself asks for exactly that change. For each hit either report it as a critical finding (same file and line) or, only when the issue requires it, list it in acceptedWeakenings with the reason; an accepted hit stays in the PR and makes it risk:high. Also report as critical any other weakening of a check that the scan missed.
+Scan hits: ${hits && hits.length ? JSON.stringify(hits) : 'none'}
 Severity: critical = wrong behaviour / data loss / security / rule violation; warning = likely bug, missing test, scope creep; suggestion = optional improvement. Only report real problems with a file and line. verdict "pass" means no critical or warning findings.
 
 Implementation summary: ${state.summary}
 Assumptions recorded so far: ${JSON.stringify(state.assumptions)}
+Out of scope recorded so far: ${JSON.stringify(state.outOfScope)}
 Manual checks (rows checked by hand): ${JSON.stringify(state.manualChecks)}. A "must" Test cases row that is neither covered by a test nor in this list with result pass is a warning that names the row; a manual check with result fail is a warning too.`
 }
 
@@ -839,13 +1047,14 @@ Data:
 - Manual checks (put them in the Tests section as a table: row, result, evidence): ${JSON.stringify(state.manualChecks)}
 - Review notes (suggestions that were NOT applied): ${JSON.stringify(state.suggestions)}
 - Assumptions: ${JSON.stringify(state.assumptions)}
-- Out of scope: ${JSON.stringify(state.outOfScope)}
+- Out of scope: ${JSON.stringify(state.outOfScope)} (review already confirmed none of these is required by the acceptance criteria)
 - ${riskLine}
 ${stacked ? `- Stacked on ${parentList(issue)}.\n` : ''}
 Steps:
 1. \`git push -u ${remote} ${branch}\`. Never push to ${base} or any protected branch; never force-push.${parents.length === 1 ? `
 1b. Read PR #${parents[0].prNumber} with pull_request_read; it may have been merged (and its branch deleted) while this issue was built. Merged (\`merged_at\` is not null in that result): its changes are in ${base}, so in steps 2 and 3 use base ${base}, leave out the stack line and do not add the "${labels.stacked}" label, and return unstacked=true. Closed without merging: stop and return ok=false with the problem.` : ''}
 2. Open a PR with head ${branch} and base ${prBase} in ${gh.owner}/${gh.repo}. Title: Conventional Commits style summary with scope "${scopeFor(issue)}", English, under 72 characters. Body as described, with a "Risk" section holding exactly this line: "${riskLine}"${stacked ? `, and the line "${stackLine}"` : ''}, ending with the line "Closes #${issue.number}". The body must not contain any at-sign mention of a bot or user, and no AI attribution.
+2b. Out of scope: for each out-of-scope item that describes a real problem in the product (not a note about style or a remark), search open issues in ${gh.owner}/${gh.repo} for one that already covers it; if there is none, create an issue titled "[follow-up #${issue.number}] <short summary>" with labels "${labels.triage}" only (never "${labels.ready}": a human triages it) and a body with the sections Context (found while working on #${issue.number}, PR link), Expected, Actual, Introduced by (unknown unless you know the commit or PR) and Acceptance criteria. List every such issue in the PR body's "Out of scope" section as "- <item>: #<number>", and return them in followUps (existing=true for one that was already open). Items that are only remarks stay in the section as text.
 3. Label the new PR (a PR is an issue: use issue_write with the PR number; read its labels first, keep existing ones): ${prLabels.map((l) => '"' + l + '"').join(', ')}.
 4. On issue #${issue.number} add the label "${labels.review}" and remove "${labels.inProgress}" (keep other labels).${risk.escalation ? ` Also add "${labels.riskHigh}" to the issue and remove "${labels.riskLow}" (the change was escalated to high).` : ''}
 5. ${isolated ? 'Stay on the branch (this checkout is a dedicated worktree; do not switch branches).' : `\`git switch ${startBranch}\`.`}
@@ -935,7 +1144,8 @@ function merge(state, result) {
   state.commits = state.commits.concat(result.commits)
   state.filesChanged = Array.from(new Set(state.filesChanged.concat(result.filesChanged)))
   state.assumptions = state.assumptions.concat(result.assumptions)
-  state.outOfScope = state.outOfScope.concat(result.outOfScope)
+  const done = new Set((Array.isArray(result.outOfScopeDone) ? result.outOfScopeDone : []).map((x) => String(x).trim()))
+  state.outOfScope = state.outOfScope.concat(result.outOfScope || []).filter((x) => !done.has(String(x).trim()))
   state.touchesUi = state.touchesUi || result.touchesUi
   // A later check of the same row (after a fix) replaces the earlier one.
   for (const m of Array.isArray(result.manualChecks) ? result.manualChecks : []) {
@@ -960,6 +1170,8 @@ async function runIssue(issue) {
     verification: null,
     qaFiles: [],
     manualChecks: [],
+    weakened: [],
+    scanProblem: '',
   }
   let branch = ''
   // Facts the final report states as they happened (the skill prints them, nothing is inferred later).
@@ -1179,19 +1391,40 @@ async function runIssue(issue) {
     }
   }
 
-  // Review
+  // Review. Before each round a deterministic scan of the diff looks for weakened checks.
+  const configGlobs = checkConfigGlobs(cfg.checks)
   for (let round = 0; round <= nt.maxReviewRounds; round++) {
     phase('Review')
-    const review = await agent(reviewPrompt(issue, branch, state, round), {
+    const diff = await agent(diffPrompt(issue, branch), {
+      label: `diff #${issue.number}${round ? ` (round ${round + 1})` : ''}`,
+      phase: 'Review',
+      schema: DIFF_SCHEMA,
+      model: 'haiku',
+    })
+    const hits = diff ? scanWeakenedChecks(diff.diff, configGlobs) : []
+    state.scanProblem = !diff ? 'the weakened-checks scan could not run (the diff agent died)' : diff.truncated ? `the weakened-checks scan saw only the first ${DIFF_LINE_LIMIT} diff lines` : ''
+    if (hits.length) log(`#${issue.number}: weakened-checks scan: ${hits.map(hitLine).join('; ')}`)
+    const review = await agent(reviewPrompt(issue, branch, state, round, hits), {
       label: `review #${issue.number} (round ${round + 1})`,
       phase: 'Review',
       schema: REVIEW_SCHEMA,
       model: 'opus',
     })
     if (!review) return block('Review', 'The review agent died.')
+    // Every hit is critical unless the reviewer accepted it; an accepted hit makes the PR risk:high at Ship.
+    const accepted = Array.isArray(review.acceptedWeakenings) ? review.acceptedWeakenings : []
+    let injected = 0
+    for (const h of hits) {
+      if (acceptedHit(h, accepted)) continue
+      if (review.findings.some((f) => f.severity === 'critical' && f.file === h.file && Number(f.line) === Number(h.line))) continue
+      injected++
+      review.findings.push({ severity: 'critical', file: h.file, line: h.line, problem: `Weakened check (${h.kind}): ${h.text || h.file}`, fix: 'Remove it and fix the cause instead; keep it only if the issue itself requires it.' })
+    }
+    state.weakened = hits.filter((h) => acceptedHit(h, accepted)).map((h) => Object.assign({}, h, { reason: (accepted.find((a) => a.file === h.file && Number(a.line) === Number(h.line)) || {}).reason || '' }))
     const blocking = review.findings.filter((f) => f.severity !== 'suggestion')
     state.suggestions = review.findings.filter((f) => f.severity === 'suggestion')
-    if (review.verdict === 'pass' || blocking.length === 0) break
+    // A pass verdict does not override a scan hit the reviewer neither reported nor accepted.
+    if ((review.verdict === 'pass' && !injected) || blocking.length === 0) break
     const details = blocking
       .map((f) => `- [${f.severity}] ${f.file}:${f.line}: ${f.problem}\n  Suggested fix: ${f.fix}`)
       .join('\n')
@@ -1214,6 +1447,20 @@ async function runIssue(issue) {
     risk.escalation = escalation
     log(`#${issue.number}: risk escalated to high: ${escalation}`)
   }
+  // Weakened checks that remain after review (accepted as justified), or a scan that could not see the whole diff.
+  const weakReason = (state.weakened || []).length
+    ? `weakened checks kept after review: ${state.weakened.map(hitLine).join('; ')}`
+    : state.scanProblem || ''
+  if (weakReason) {
+    if (risk.level !== 'high') {
+      risk.level = 'high'
+      risk.escalation = risk.escalation ? `${risk.escalation}; ${weakReason}` : weakReason
+    } else {
+      risk.reason = risk.reason ? `${risk.reason}; ${weakReason}` : weakReason
+    }
+    log(`#${issue.number}: risk high: ${weakReason}`)
+    notes.push(`risk high: ${weakReason}`)
+  }
   if (parentsOf(issue).length) log(`#${issue.number}: stacked on ${parentList(issue)}; PR base is ${prBaseFor(issue)}.`)
 
   // Ship
@@ -1229,6 +1476,8 @@ async function runIssue(issue) {
     log(`#${issue.number}: parent PR merged while this issue was built; PR #${ship.prNumber} targets ${base}, not stacked.`)
     notes.push(`parent PR #${parentsOf(issue)[0].prNumber} was merged while this issue was built; the PR targets ${base}, not stacked`)
   }
+  const followUps = Array.isArray(ship.followUps) ? ship.followUps : []
+  if (followUps.length) notes.push(`out-of-scope follow-ups (${labels.triage}): ${followUps.map((f) => '#' + f.number).join(', ')}`)
   const missingManual = state.manualChecks.filter((m) => m.result !== 'pass').map((m) => `${m.rowId} ${m.result}`)
   if (missingManual.length) notes.push(`manual checks not passing: ${missingManual.join(', ')}`)
   return done({
