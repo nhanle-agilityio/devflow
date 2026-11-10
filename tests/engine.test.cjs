@@ -24,7 +24,8 @@ async function run(args, opts = {}) {
   const pick = (v, n) => (typeof v === 'function' ? v(n) : v);
   const agent = async (prompt, o) => {
     const l = o.label;
-    calls.push({ l, prompt, model: o.model });
+    calls.push({ l, prompt, model: o.model, agentType: o.agentType });
+    if (opts.reviewerMissing && o.agentType) throw new Error('Unknown agent type ' + o.agentType);
     const n = Number((/#(\d+)/.exec(l) || [])[1]);
     if (l === 'select issues') {
       return {
@@ -476,4 +477,18 @@ test('Ship files follow-ups with the bug template and a triage suggestion commen
   const ship = prompt(calls, 'ship');
   assert.match(ship, /\/p\/skills\/spec\/templates\/bug\.md/);
   assert.match(ship, /suggest a priority .* and a risk/);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Reviewer agent (P6)
+// ---------------------------------------------------------------------------------------------
+
+test('Review runs as the plugin reviewer agent, configurable and with a fallback', async () => {
+  let r = await run({ ...BASE, issues: [1] });
+  assert.equal(r.calls.find((c) => c.l.startsWith('review')).agentType, 'devflow:reviewer');
+  r = await run({ ...BASE, config: { ...CFG, nextTask: { reviewerAgent: '' } }, issues: [1] });
+  assert.equal(r.calls.find((c) => c.l.startsWith('review')).agentType, undefined);
+  r = await run({ ...BASE, issues: [1] }, { reviewerMissing: true });
+  assert.equal(r.rep[0].status, 'pr');
+  assert.match(r.rep[0].notes.join(), /reviewer agent devflow:reviewer unavailable/);
 });
