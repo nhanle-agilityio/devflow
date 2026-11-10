@@ -150,7 +150,7 @@ Run the hook tests with `python3 -m unittest discover -s hooks -p 'test_*.py' -v
 
 ## Permissions snippet
 
-A plugin cannot grant permissions, so the project's `.claude/settings.json` needs allow rules for the workflow not to stop on routine prompts. `/devflow:init` generates them from your config with `node "${CLAUDE_PLUGIN_ROOT}/bin/devflow-setup" allow < .claude/devflow.json` (git commands, `git push` to your remote, every `checks[].run`, `verify.devServer.run` and `worktree.setup` command, `curl` for http verification, the browser and GitHub MCP tools). The base it starts from:
+A plugin cannot grant permissions, so the project's `.claude/settings.json` needs allow rules for the workflow not to stop on routine prompts. `/devflow:init` generates them from your config with `node "${CLAUDE_PLUGIN_ROOT}/bin/devflow-setup" allow < .claude/devflow.json` (git commands, `git push` to your remote, every `checks[].run`, `verify.devServer.run` and `worktree.setup` command, `curl` scoped to the dev server origin for http verification, the browser and GitHub MCP tools). Rules are specific prefixes, never a bare interpreter, shell or runner: `python3 -m pytest tests` gives `Bash(python3 -m pytest:*)`, `node --test tests/*.cjs` gives `Bash(node --test:*)`. A command with no safe prefix (`bash -c "..."`, `env FOO=1 ...`) is listed for you to allow by hand. The base it starts from:
 
 ```json
 {
