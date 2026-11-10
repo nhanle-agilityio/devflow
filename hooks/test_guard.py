@@ -5,6 +5,7 @@ python3 -m unittest discover -s hooks -p 'test_*.py' -v
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -200,6 +201,57 @@ class HookProcess(unittest.TestCase):
     def test_non_bash_tool_is_allowed(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(run_hook({"tool_name": "Read", "tool_input": {}}, tmp).returncode, 0)
+
+
+class McpBranchWrites(unittest.TestCase):
+    TOOLS = (
+        "mcp__github__push_files",
+        "mcp__0322__create_or_update_file",
+        "mcp__github__delete_file",
+    )
+
+    def call(self, tool, tool_input, config=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            if config is not None:
+                os.makedirs(os.path.join(tmp, ".claude"))
+                with open(os.path.join(tmp, ".claude", "devflow.json"), "w", encoding="utf-8") as fh:
+                    json.dump(config, fh)
+            return run_hook({"tool_name": tool, "tool_input": tool_input}, tmp)
+
+    def test_protected_branch_is_blocked(self):
+        for tool in self.TOOLS:
+            for branch in ("main", "develop"):
+                with self.subTest(tool=tool, branch=branch):
+                    result = self.call(tool, {"branch": branch})
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn("protected branch", result.stderr)
+
+    def test_missing_or_empty_branch_is_blocked(self):
+        for tool in self.TOOLS:
+            for tool_input in ({}, {"branch": ""}, {"branch": None}):
+                with self.subTest(tool=tool, tool_input=tool_input):
+                    result = self.call(tool, tool_input)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn("default branch", result.stderr)
+
+    def test_feature_branch_is_allowed(self):
+        for tool in self.TOOLS:
+            with self.subTest(tool=tool):
+                self.assertEqual(self.call(tool, {"branch": "feat/12-x"}).returncode, 0)
+
+    def test_glob_protected_entry_is_blocked(self):
+        result = self.call(self.TOOLS[0], {"branch": "release/1.2"}, {"protectedBranches": ["release/*"]})
+        self.assertEqual(result.returncode, 2)
+
+    def test_configured_base_branch_is_blocked(self):
+        self.assertEqual(self.call(self.TOOLS[0], {"branch": "trunk"}, {"baseBranch": "trunk"}).returncode, 2)
+
+    def test_matcher_covers_bash_and_mcp_tools(self):
+        hooks_json = json.loads(Path(__file__).with_name("hooks.json").read_text(encoding="utf-8"))
+        matcher = hooks_json["hooks"]["PreToolUse"][0]["matcher"]
+        for tool in ("Bash", "mcp__github__merge_pull_request") + self.TOOLS:
+            self.assertTrue(re.fullmatch(matcher, tool), tool)
+        self.assertFalse(re.fullmatch(matcher, "Read"))
 
 
 class DestructiveGit(unittest.TestCase):
