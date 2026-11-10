@@ -31,7 +31,9 @@ function makePr(number, over = {}) {
 }
 
 // In-memory fake of the Octokit surface the gate uses. `calls` records every call as [name, args].
-function makeEnv({ prs = [], runs = {}, statuses = {}, behind = {}, unresolved = {}, comments = [], issues = {} } = {}) {
+function makeEnv({
+  prs = [], runs = {}, statuses = {}, behind = {}, unresolved = {}, comments = [], issues = {}, files = {},
+} = {}) {
   const calls = [];
   const rec = (name, fn) => async (args) => {
     calls.push([name, args]);
@@ -49,13 +51,16 @@ function makeEnv({ prs = [], runs = {}, statuses = {}, behind = {}, unresolved =
       }),
       updateBranch: rec('pulls.updateBranch'),
       merge: rec('pulls.merge'),
+      listFiles: rec('pulls.listFiles', (a) => ({ data: files[a.pull_number] || [{ filename: 'src/app.js' }] })),
     },
     repos: {
       compareCommitsWithBasehead: rec('compare', (a) => {
         const n = Number(a.basehead.match(/sha(\d+)/)[1]);
         return { data: { behind_by: behind[n] || 0 } };
       }),
-      listCommitStatusesForRef: rec('statuses', (a) => ({ data: statuses[a.ref] || [] })),
+      listCommitStatusesForRef: rec('statuses', (a) => ({
+        data: (statuses[a.ref] || []).map((s) => ({ creator: { login: 'github-actions[bot]' }, ...s })),
+      })),
       getContent: rec('getContent', () => {
         throw new Error('not found');
       }),
@@ -66,6 +71,7 @@ function makeEnv({ prs = [], runs = {}, statuses = {}, behind = {}, unresolved =
         return { data: issues[a.issue_number] || { state: 'open', body: '' } };
       }),
       addLabels: rec('addLabels'),
+      removeLabel: rec('removeLabel'),
       createComment: rec('createComment', (a) => {
         comments.push({ body: a.body });
         return { data: {} };
@@ -113,7 +119,9 @@ async function run(env, config) {
   assert.equal(env.messages.failed, null);
 }
 
-const MUTATIONS = ['pulls.update', 'pulls.updateBranch', 'pulls.merge', 'addLabels', 'createComment', 'deleteRef'];
+const MUTATIONS = [
+  'pulls.update', 'pulls.updateBranch', 'pulls.merge', 'addLabels', 'removeLabel', 'createComment', 'deleteRef',
+];
 const mutated = (env) => env.calls.filter(([c]) => MUTATIONS.includes(c));
 
 test('disabled: no API calls', async () => {
@@ -408,4 +416,112 @@ test('priorityRank and orderCandidates are exported and use labels.priority', as
   const out = gate.orderCandidates([{ number: 2, rank: 1 }, { number: 1, rank: 1 }, { number: 3, rank: 0 }]);
   assert.deepEqual(out.map((p) => p.number), [3, 1, 2]);
   assert.deepEqual(gate.withDefaults({}).labels.priority, ['priority:critical', 'priority:high', 'priority:normal', 'priority:low']);
+});
+
+// Path-based risk: the label is a claim, the file list is the evidence.
+test('risk:low PR touching a workflow is not merged and is relabelled high', async () => {
+  const env = makeEnv({ prs: [makePr(1)], files: { 1: [{ filename: '.github/workflows/ci.yml' }] }, ...green(1) });
+  await run(env, CONFIG());
+  assert.equal(env.decisions()[0].action, 'skipped');
+  assert.match(env.decisions()[0].reason, /touches \.github\/workflows\/ci\.yml \(\.github\/\*\*\): waits for a human/);
+  assert.equal(env.names('pulls.merge').length, 0);
+  const added = env.names('addLabels')[0][1];
+  assert.deepEqual([added.issue_number, added.labels], [1, ['risk:high']]);
+  assert.equal(env.names('removeLabel')[0][1].name, 'risk:low');
+});
+
+test('a failing relabel does not throw past the gate', async () => {
+  const env = makeEnv({ prs: [makePr(1)], files: { 1: [{ filename: '.claude/settings.json' }] }, ...green(1) });
+  env.github.rest.issues.addLabels = async () => {
+    throw new Error('forbidden');
+  };
+  await run(env, CONFIG());
+  assert.equal(env.decisions()[0].action, 'skipped');
+  assert.equal(env.names('pulls.merge').length, 0);
+});
+
+test('a configured risk.highPaths glob keeps the PR from merging', async () => {
+  const env = makeEnv({ prs: [makePr(1)], files: { 1: [{ filename: 'src/auth/login.js' }] }, ...green(1) });
+  await run(env, { ...CONFIG(), risk: { highPaths: ['src/auth/**'] } });
+  assert.equal(env.decisions()[0].action, 'skipped');
+  assert.match(env.decisions()[0].reason, /touches src\/auth\/login\.js \(src\/auth\/\*\*\)/);
+  assert.equal(env.names('pulls.merge').length, 0);
+});
+
+test('a rename whose previous name matches is not merged', async () => {
+  const files = { 1: [{ filename: 'docs/ci.yml', previous_filename: '.github/workflows/ci.yml' }] };
+  const env = makeEnv({ prs: [makePr(1)], files, ...green(1) });
+  await run(env, CONFIG());
+  assert.equal(env.decisions()[0].action, 'skipped');
+  assert.match(env.decisions()[0].reason, /touches \.github\/workflows\/ci\.yml/);
+  assert.equal(env.names('pulls.merge').length, 0);
+});
+
+test('ordinary files still merge, with highPaths configured or not', async () => {
+  const env = makeEnv({ prs: [makePr(1)], files: { 1: [{ filename: 'src/app.js' }, { filename: 'README.md' }] }, ...green(1) });
+  await run(env, { ...CONFIG(), risk: { highPaths: ['src/auth/**'] } });
+  assert.equal(env.decisions()[0].action, 'merged');
+  assert.equal(env.names('removeLabel').length, 0);
+  const plain = makeEnv({ prs: [makePr(1)], ...green(1) });
+  await run(plain, CONFIG());
+  assert.equal(plain.decisions()[0].action, 'merged');
+});
+
+test('dry run: a high-path PR is reported but nothing is relabelled', async () => {
+  const env = makeEnv({ prs: [makePr(1)], files: { 1: [{ filename: '.github/workflows/ci.yml' }] }, ...green(1) });
+  await run(env, CONFIG({ dryRun: true }));
+  assert.equal(env.decisions()[0].action, 'would skip');
+  assert.match(env.decisions()[0].reason, /touches \.github\/workflows\/ci\.yml/);
+  assert.equal(mutated(env).length, 0);
+});
+
+test('a high-path PR is not auto-updated when behind', async () => {
+  const env = makeEnv({ prs: [makePr(1)], behind: { 1: 2 }, files: { 1: [{ filename: '.github/x.yml' }] }, ...green(1) });
+  await run(env, CONFIG());
+  assert.equal(env.names('pulls.updateBranch').length, 0);
+});
+
+test('devflow/review status counts only from github-actions[bot]', async () => {
+  const user = { creator: { login: 'mallory' }, context: 'devflow/review', state: 'success' };
+  const bad = makeEnv({ prs: [makePr(1)], statuses: { sha1: [user] } });
+  await run(bad, CONFIG());
+  assert.equal(bad.decisions()[0].action, 'skipped');
+  assert.match(bad.decisions()[0].reason, /waiting for devflow\/review/);
+  const bot = { creator: { login: 'github-actions[bot]' }, context: 'devflow/review', state: 'success' };
+  const ok = makeEnv({ prs: [makePr(1)], statuses: { sha1: [user, bot] } });
+  await run(ok, CONFIG());
+  assert.equal(ok.decisions()[0].action, 'merged');
+  // The newest status from the bot decides, not a newer one from a user.
+  const stale = makeEnv({ prs: [makePr(1)], statuses: { sha1: [user, { ...bot, state: 'failure' }, bot] } });
+  await run(stale, CONFIG());
+  assert.match(stale.decisions()[0].reason, /waiting for devflow\/review: failure/);
+});
+
+test('other status contexts are not restricted to the bot', async () => {
+  const env = makeEnv({
+    prs: [makePr(1)],
+    statuses: { sha1: [{ creator: { login: 'ci-user' }, context: 'ci/build', state: 'success' }] },
+    ...green(1),
+  });
+  await run(env, CONFIG({ requiredChecks: ['ci/build'] }));
+  assert.equal(env.decisions()[0].action, 'merged');
+});
+
+test('globToRegExp matches the engine implementation', async () => {
+  const { helpers } = require('../bin/devflow-scan');
+  const engine = await helpers();
+  const globs = [
+    '.github/**', '.claude/**', '**/pyproject.toml', 'src/**/*.js', 'src/*.js', '*.md', 'a?c', 'docs/**/',
+    '**/.eslintrc*', 'a.b+c', 'src/(x)/**', '**', 'dir/**/file',
+  ];
+  const paths = [
+    '.github/workflows/ci.yml', '.github', '.claude/settings.json', 'pyproject.toml', 'pkg/pyproject.toml',
+    'src/a.js', 'src/x/y/a.js', 'src/x/a.ts', 'README.md', 'docs/README.md', 'abc', 'a/c', 'a.b+c', 'aXb+c',
+    'src/(x)/f', 'sub/.eslintrc.json', 'dir/file', 'dir/x/y/file', 'dir/xfile', 'docs/',
+  ];
+  for (const g of globs) {
+    for (const p of paths) {
+      assert.equal(gate.globToRegExp(g).test(p), engine.globToRegExp(g).test(p), `${g} vs ${p}`);
+    }
+  }
 });
