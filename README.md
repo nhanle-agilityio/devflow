@@ -71,7 +71,11 @@ Issue state is a label state machine: ready, in-progress, review, blocked (names
 
 ### Risk
 
-Each issue and PR carries `labels.riskLow` or `labels.riskHigh`. The spec judges it per task; you approve it by merging the spec PR. `next-task` escalates a PR to high, deterministically, when a changed file matches `risk.highPaths` (and also labels the issue high). An issue with no risk label counts as high. The PR body has a `Risk: low|high - reason` line.
+Each issue and PR carries `labels.riskLow` or `labels.riskHigh`. The spec judges it per task; you approve it by merging the spec PR. `next-task` escalates a PR to high, deterministically, when a changed file matches `risk.highPaths` or a weakened check stays in the diff after review (and also labels the issue high). An issue with no risk label counts as high. The PR body has a `Risk: low|high - reason` line.
+
+### Weakened checks and out of scope
+
+Before each review round the engine scans the diff, without a model, for checks made to pass by weakening them: new `# noqa`, `type: ignore`, `eslint-disable`, `@ts-ignore`, skipped, focused or deleted tests, removed assertions, empty `except` / `catch`, and edits to files that configure your `checks` (linter, type checker, test runner, CI config, `.claude/devflow.json`, scripts a check runs). Each hit is a critical review finding. The reviewer may accept a hit only when the issue itself asks for it; an accepted hit stays in the PR and makes it `risk:high` with the hit named in the Risk line, so a human merges it. Review also treats an "Out of scope" item that leaves an acceptance criterion unmet as critical. Real out-of-scope problems are filed by Ship as follow-up issues labelled `needs-triage` and linked in the PR body; a human decides whether they become ready. The CI review check (`claude-code-review.yml`) applies the same two rules.
 
 ### Review check
 
@@ -110,11 +114,12 @@ One ticket per session, each in its own git worktree, so sessions never share a 
 
 - Claude never merges. The plugin pushes only its own feature branches, never merges, never pushes to `baseBranch` or `protectedBranches`, and never force-pushes (except `--force-with-lease` on its own branch). `/devflow:sync` only adds commits and pushes normally.
 - Merging is done by a human, or for `risk:low` PRs by the merge gate Action, which runs outside Claude with its own token, merges at most one PR per run and is off until `mergeGate.enabled` (dry run first).
-- A PreToolUse hook (`hooks/guard.py`) enforces this: it blocks MCP `merge_pull_request`, `gh pr merge`, `gh api .../merge`, GraphQL merge mutations, pushes to protected branches (explicit refspec, `--delete`, or a bare push while on one), `--force`, `-f`, `+refspec`, `--mirror` and `--all`. Retargeting a PR and updating its branch (`update_pull_request`, `update_pull_request_branch`) are allowed. It reads the protected branches from `.claude/devflow.json` and falls back to `main`, `master`, `develop`. It guards against habit, not deliberate evasion.
+- A PreToolUse hook (`hooks/guard.py`) enforces this: it blocks MCP `merge_pull_request`, `gh pr merge`, `gh api .../merge`, GraphQL merge mutations, pushes to protected branches (explicit refspec, `--delete`, or a bare push while on one), `--force`, `-f`, `+refspec`, `--mirror` and `--all`. Retargeting a PR and updating its branch (`update_pull_request`, `update_pull_request_branch`) are allowed.
+- The same hook blocks git commands that discard work (`reset --hard`, `clean -f`, `branch -D`, `checkout .`, `restore .`, `stash drop|clear`, `filter-branch`, `update-ref -d`, `reflog expire`) and staging everything (`git add -A`, `--all`, `.`); `git add -u` is allowed. Global options such as `git -C <dir>` are seen through. A project no longer needs its own `block_git_add_all.py` hook. It reads the protected branches from `.claude/devflow.json` and falls back to `main`, `master`, `develop`. It guards against habit, not deliberate evasion.
 - All committed content is English. No `Co-Authored-By` or AI attribution is added unless the project's `CLAUDE.md` says otherwise.
 - Issues, PRs, comments and replies never contain the review bot's at-sign handle. Pushing new commits re-triggers the review, so no trigger comment is needed. The only place the handle appears is the mention-handler workflow `claude.yml`, whose trigger it is.
 
-Run the hook tests with `python3 -m unittest discover -s hooks -p 'test_*.py' -v` and the Node tests with `node --test tests/*.test.cjs`: the merge gate, the lane planner and the engine. `tests/engine.test.cjs` runs `workflows/next-task-engine.js` with stub agents and covers stacking, claims, file ownership, merged questions, report notes, the MCP stop, branch resume, manual checks and the verify lock. CI (`.github/workflows/test.yml`) runs both the Node tests and the guard unittests on every PR and on pushes to `main`.
+Run the hook tests with `python3 -m unittest discover -s hooks -p 'test_*.py' -v` and the Node tests with `node --test tests/*.test.cjs`: the merge gate, the lane planner and the engine. `tests/engine.test.cjs` runs `workflows/next-task-engine.js` with stub agents and covers stacking, claims, file ownership, merged questions, report notes, the MCP stop, branch resume, manual checks, the verify lock, the weakened-checks scanner and the out-of-scope rules. CI (`.github/workflows/test.yml`) runs both the Node tests and the guard unittests on every PR and on pushes to `main`.
 
 ## Permissions snippet
 
