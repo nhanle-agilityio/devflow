@@ -52,6 +52,7 @@ Call the Workflow tool with name `devflow:next-task-engine` and this `args` obje
   "startBranch": "<the current branch, \"\" when isolated>",
   "prTemplatePath": "${CLAUDE_SKILL_DIR}/templates/pr.md",
   "bugTemplatePath": "${CLAUDE_PLUGIN_ROOT}/skills/spec/templates/bug.md",
+  "pluginRoot": "${CLAUDE_PLUGIN_ROOT}",
   "isolated": false,
   "chain": false,
   "claimId": "<from step 2b>",
@@ -59,7 +60,7 @@ Call the Workflow tool with name `devflow:next-task-engine` and this `args` obje
 }
 ```
 
-Fill `config` with the full parsed config object, and the other values from steps 1 and 2.
+Fill `config` with the full parsed config object, and the other values from steps 1 and 2. `pluginRoot` is the plugin directory: the Review stage runs `bin/devflow-scan` from it (without it every PR is risk:high, because the weakened-checks scan cannot run).
 
 ## 4. Report
 
