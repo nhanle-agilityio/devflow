@@ -495,40 +495,46 @@ function globToRegExp(glob) {
 // ---------------------------------------------------------------------------------------------
 
 // Unified diff (any context size) -> [{file, deleted, added: [{line, text}], removed: [{line, text}]}].
+// "--- " / "+++ " are file headers only between "diff --git" and the file's first "@@"; inside a hunk they are
+// removed / added content (a removed SQL comment "-- x" is the line "--- x").
 function parseDiff(text) {
   const files = []
   let cur = null
   let oldLine = 0
   let newLine = 0
+  let inHeader = false
   for (const raw of String(text || '').split('\n')) {
     const line = raw.replace(/\r$/, '')
     if (line.startsWith('diff --git ')) {
       const m = / b\/(.+)$/.exec(line)
       cur = { file: m ? m[1] : '', deleted: false, added: [], removed: [] }
       files.push(cur)
+      inHeader = true
       continue
     }
     if (!cur) continue
-    if (line.startsWith('deleted file mode')) {
+    if (inHeader && line.startsWith('deleted file mode')) {
       cur.deleted = true
       continue
     }
-    if (line.startsWith('+++ ')) {
+    if (inHeader && line.startsWith('+++ ')) {
       const m = /^\+\+\+ b\/(.+)$/.exec(line)
       if (m) cur.file = m[1]
       continue
     }
-    if (line.startsWith('--- ')) {
+    if (inHeader && line.startsWith('--- ')) {
       const m = /^--- a\/(.+)$/.exec(line)
       if (m && !cur.file) cur.file = m[1]
       continue
     }
     const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
     if (h) {
+      inHeader = false
       oldLine = Number(h[1])
       newLine = Number(h[2])
       continue
     }
+    if (inHeader) continue
     if (line.startsWith('+')) cur.added.push({ line: newLine++, text: line.slice(1) })
     else if (line.startsWith('-')) cur.removed.push({ line: oldLine++, text: line.slice(1) })
     else if (line.startsWith(' ')) {
