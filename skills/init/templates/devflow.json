@@ -53,6 +53,9 @@
     { "name": "test", "run": "npm test" },
     { "name": "lint", "run": "npm run lint" }
   ],
+  // Formatters the plugin runs after Claude edits a file (glob -> command, {file} = path from the project root).
+  // Quiet and never fails the edit. Leave it out when the project formats in its checks only.
+  "format": { "*.ts": "npx prettier -w {file}", "*.js": "npx prettier -w {file}" },
   "verify": {
     // Subset of "http" | "browser"; [] disables verification.
     "modes": ["http", "browser"],
@@ -65,8 +68,9 @@
   },
   // QA step of /devflow:spec: draft a test matrix from the acceptance criteria. qaModel is "opus" or "sonnet".
   "spec": { "testMatrix": true, "qaModel": "opus" },
+  // reviewerAgent: the subagent type Review runs as ("" = the default agent).
   // parallelQa: a QA agent writes the acceptance tests from the spec while the dev agent implements (default true).
-  "nextTask": { "defaultLimit": 3, "maxFixRounds": 2, "maxReviewRounds": 2, "parallelQa": true },
+  "nextTask": { "defaultLimit": 3, "maxFixRounds": 2, "maxReviewRounds": 2, "parallelQa": true, "reviewerAgent": "devflow:reviewer" },
   // Parallel sessions: each ticket runs in its own git worktree under dir. setup commands run once in a fresh worktree.
   "worktree": { "dir": ".claude/worktrees", "setup": ["npm ci"] },
   // /devflow:dispatch: at most maxLanes background sessions at once. pluginDir (optional) is passed as --plugin-dir
