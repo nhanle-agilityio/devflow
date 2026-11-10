@@ -3,7 +3,8 @@ name: devflow review (reusable)
 # Reusable form of skills/init/templates/github/workflows/claude-code-review.yml, called by the thin caller
 # that /devflow:init installs (skills/init/templates/github/callers/claude-code-review.yml), pinned to a devflow tag.
 # The jobs below are kept identical to the template (tests/reusable.test.cjs checks it); only the trigger differs.
-# The caller passes its secrets (secrets: inherit) and grants the permissions; concurrency lives in the caller.
+# The caller passes CLAUDE_CODE_OAUTH_TOKEN by name (not secrets: inherit, which only works inside one organization
+# or enterprise) and grants the permissions; concurrency lives in the caller.
 # A private devflow repository must allow access from the calling repositories:
 # Settings > Actions > General > Access > "Accessible from repositories owned by the user".
 

@@ -22,4 +22,6 @@ jobs:
       statuses: write
       id-token: write
     uses: nhanle-agilityio/devflow/.github/workflows/devflow-review.yml@{{DEVFLOW_REF}}
-    secrets: inherit
+    # Passed by name: inheriting all secrets only works inside one organization or enterprise.
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
