@@ -318,10 +318,11 @@ Per run it walks open PRs labelled `labels.devflow` in priority order (`priority
 
 1. not a draft; not `risk:high`; has `risk:low`; not `labels.blocked`;
 2. base is `baseBranch` (a stacked PR waits for its parent);
-3. mergeable (not yet computed → skip; conflicts → label the PR and its linked issues blocked, comment once pointing at `/devflow:sync`);
-4. not behind its base; if behind, `update-branch` and stop for this PR (CI re-runs);
-5. every `mergeGate.requiredChecks` entry is green on the head SHA (check run or commit status);
-6. no unanswered review thread (unresolved, not outdated, last comment not by the PR author).
+3. none of the PR's files (new or, for a rename, previous name) matches `risk.highPaths` or the built-in `.github/**` and `.claude/**`: the label is a claim set by an agent, the file list is re-read on every run. A match skips the PR and relabels it `risk:high` (dry run: `would skip`, nothing changed). This runs before any update-branch, so a high-path PR is never touched;
+4. mergeable (not yet computed → skip; conflicts → label the PR and its linked issues blocked, comment once pointing at `/devflow:sync`);
+5. not behind its base; if behind, `update-branch` and stop for this PR (CI re-runs);
+6. every `mergeGate.requiredChecks` entry is green on the head SHA (check run or commit status; a `devflow/review` commit status counts only when `github-actions[bot]` created it);
+7. no unanswered review thread (unresolved, not outdated, last comment not by the PR author).
 
 Then: merge with `mergeGate.method` (merge commit) pinned to the head SHA, retarget open PRs based on the merged branch to `baseBranch`, delete the head branch (same-repo, not a protected name). The run summary lists every PR with action and reason. `tests/merge-gate.test.cjs` covers each rule against a fake Octokit.
 
