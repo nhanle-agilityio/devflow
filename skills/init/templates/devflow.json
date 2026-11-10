@@ -25,7 +25,11 @@
     "devflow": "devflow",
     "riskLow": "risk:low",
     "riskHigh": "risk:high",
-    "stacked": "stacked"
+    "stacked": "stacked",
+    // triage: bugs and gaps nobody triaged yet; next-task never picks them, a human swaps it for ready.
+    "triage": "needs-triage",
+    // priority: highest first; no label = the "normal" entry. Orders next-task and the merge gate, never who merges.
+    "priority": ["priority:critical", "priority:high", "priority:normal", "priority:low"]
   },
   // Unsure means high. highPaths are globs (** * ?): a PR touching one is escalated to high before it is opened.
   "risk": {

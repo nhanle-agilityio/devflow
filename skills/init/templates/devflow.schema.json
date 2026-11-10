@@ -43,7 +43,19 @@
         "devflow": { "type": "string", "default": "devflow", "description": "Put on every PR devflow opens; /devflow:sync targets PRs with it." },
         "riskLow": { "type": "string", "default": "risk:low", "description": "Issue/PR label: eligible for the merge gate." },
         "riskHigh": { "type": "string", "default": "risk:high", "description": "Issue/PR label: waits for a human merge." },
-        "stacked": { "type": "string", "default": "stacked", "description": "PR label: the PR is based on another open devflow PR." }
+        "stacked": { "type": "string", "default": "stacked", "description": "PR label: the PR is based on another open devflow PR." },
+        "triage": {
+          "type": "string",
+          "default": "needs-triage",
+          "description": "Issue label for bugs and gaps no human has triaged yet. /devflow:next-task never picks them; only a human replaces it with the ready label."
+        },
+        "priority": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "default": ["priority:critical", "priority:high", "priority:normal", "priority:low"],
+          "description": "Priority labels, highest first. No label counts as the entry ending in \"normal\". Changes only the order of /devflow:next-task and the merge gate, never who merges."
+        }
       }
     },
     "risk": {
