@@ -1239,7 +1239,7 @@ async function runFix(issue, branch, state, why, details) {
   if (fix.status === 'blocked') return { ok: false, reason: fix.blockedReason || `The fix agent reported blocked (${why}).` }
   merge(state, fix)
   const touched = overlap(fix.filesChanged, state.qaFiles)
-  if (touched.length) return { ok: false, reason: `The fix changed QA test files ${touched.join(', ')}; QA tests are only changed by a human decision.` }
+  if (touched.length) return { ok: false, qaOverlap: true, reason: `The fix changed QA test files ${touched.join(', ')}; QA tests are only changed by a human decision.` }
   return { ok: true, result: fix }
 }
 
@@ -1474,8 +1474,12 @@ async function runIssue(issue) {
       'the fix PR needs its root cause',
       'Find the root cause of the bug this issue fixes and return rootCause (cause, introducedBy, whyMissed). Use `git log -S`, `git blame` on the lines the fix changed and the issue text. Change code only if the cause shows the fix is incomplete.',
     )
-    if (!fix.ok) return block('Implement', fix.reason)
-    if (!state.rootCause) notes.push('root cause not found; the PR says "unknown"')
+    // Only a QA-file edit blocks; a root-cause round that died or was blocked ships with "unknown".
+    if (!fix.ok && fix.qaOverlap) return block('Implement', fix.reason)
+    if (!fix.ok) {
+      log(`#${issue.number}: root cause round failed (${fix.reason.split('\n')[0]}); shipping with "unknown".`)
+      notes.push(`root cause round failed (${fix.reason.split('\n')[0]}); the PR says "unknown"`)
+    } else if (!state.rootCause) notes.push('root cause not found; the PR says "unknown"')
   }
 
   // Check
