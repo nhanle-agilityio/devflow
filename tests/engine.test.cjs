@@ -569,3 +569,110 @@ test('a root-cause round that edits a QA file still blocks', async () => {
   assert.equal(rep[0].status, 'blocked');
   assert.match(rep[0].reason, /QA test files/);
 });
+
+// --- scan coverage: config globs, more skip/suppress forms, prose files ---
+
+const scanKinds = (scan, text, globs) => scan(text, globs).map((h) => `${h.file}:${h.line} ${h.kind}`);
+
+test('package.json hits only on script and tool-config lines, whatever the checks run', async () => {
+  const { scanWeakenedChecks, checkConfigGlobs } = await helpers();
+  assert.ok(!checkConfigGlobs([{ name: 't', run: 'npm test' }]).includes('**/package.json'));
+  const kinds = (hunk) => scanKinds(scanWeakenedChecks, diffOf('web/package.json', hunk), checkConfigGlobs([{ name: 't', run: 'make test' }]));
+  assert.deepEqual(kinds('@@ -3 +3 @@\n-    "test": "jest"\n+    "test": "true"'), ['web/package.json:3 check configuration changed']);
+  assert.deepEqual(kinds('@@ -4 +3,0 @@\n-    "lint": "eslint ."'), ['web/package.json:4 check configuration changed']);
+  assert.deepEqual(kinds('@@ -0,0 +5 @@\n+  "jest": {'), ['web/package.json:5 check configuration changed']);
+  assert.deepEqual(kinds('@@ -0,0 +5,2 @@\n+    "test": "true",\n+    "lint": "true"'), ['web/package.json:5 check configuration changed']);
+  for (const hunk of [
+    '@@ -0,0 +5 @@\n+    "lodash": "^4.17.21",',
+    '@@ -0,0 +5 @@\n+    "jest": "^29.7.0"',
+    '@@ -0,0 +5 @@\n+    "lint-staged": "^15.0.0"',
+    '@@ -0,0 +5 @@\n+    "test": "^1.2.3"',
+    '@@ -0,0 +5 @@\n+    "build": "workspace:*"',
+    '@@ -0,0 +5 @@\n+    "build-tools": "github:acme/build-tools#v2"',
+  ]) {
+    assert.deepEqual(kinds(hunk), [], hunk);
+  }
+});
+
+test('checkConfigGlobs covers Makefile when any simple command runs make', async () => {
+  const { checkConfigGlobs, globToRegExp } = await helpers();
+  const globs = checkConfigGlobs([{ name: 'lint', run: 'cd web && make lint' }]);
+  const covered = (f) => globs.some((g) => globToRegExp(g).test(f));
+  assert.ok(covered('web/Makefile') && covered('Makefile'));
+  assert.ok(!checkConfigGlobs([{ name: 't', run: 'echo make' }]).some((g) => /Makefile/.test(g)));
+});
+
+test('checkConfigGlobs always covers .github scripts and actions', async () => {
+  const { checkConfigGlobs, globToRegExp } = await helpers();
+  const globs = checkConfigGlobs([]);
+  const covered = (f) => globs.some((g) => globToRegExp(g).test(f));
+  assert.ok(!covered('tests/conftest.py'));
+  assert.ok(covered('.github/scripts/check.sh') && covered('.github/actions/setup/action.yml'));
+});
+
+test('scanWeakenedChecks finds Go, JUnit, Rust, nolint, rubocop and hollow assertions', async () => {
+  const { scanWeakenedChecks } = await helpers();
+  const text = [
+    diffOf('pkg/a_test.go', '@@ -0,0 +1,2 @@\n+\tt.Skip("flaky")\n+\ttb.SkipNow()'),
+    diffOf('pkg/a.go', '@@ -0,0 +1,2 @@\n+\tt.Skip("flaky")\n+\tx := f() //nolint:errcheck'),
+    diffOf('src/test/java/FooTest.java', '@@ -0,0 +1 @@\n+    @Disabled("later")'),
+    diffOf('app/BarTests.kt', '@@ -0,0 +1 @@\n+    @Ignore'),
+    diffOf('src/lib.rs', '@@ -0,0 +1 @@\n+#[ignore]'),
+    diffOf('app/r.rb', '@@ -0,0 +1 @@\n+x = 1 # rubocop:disable Style/Foo'),
+    diffOf('tests/test_a.py', '@@ -0,0 +1,2 @@\n+    assert True\n+    assert 1  # ok'),
+    diffOf('web/a.test.ts', '@@ -0,0 +1,3 @@\n+expect(true).toBe(true)\n+expect(true).toBeTruthy()\n+assert.ok(true)'),
+    diffOf('app/a.py', '@@ -0,0 +1,2 @@\n+    assert True\n+x = 1  # noqa'),
+  ].join('');
+  const kinds = scanKinds(scanWeakenedChecks, text, []);
+  for (const want of [
+    'pkg/a_test.go:1 skipped test',
+    'pkg/a_test.go:2 skipped test',
+    'pkg/a.go:2 nolint',
+    'src/test/java/FooTest.java:1 skipped test',
+    'app/BarTests.kt:1 skipped test',
+    'src/lib.rs:1 skipped test',
+    'app/r.rb:1 rubocop:disable',
+    'tests/test_a.py:1 hollow assertion',
+    'tests/test_a.py:2 hollow assertion',
+    'web/a.test.ts:1 hollow assertion',
+    'web/a.test.ts:2 hollow assertion',
+    'web/a.test.ts:3 hollow assertion',
+    'app/a.py:2 noqa',
+  ]) {
+    assert.ok(kinds.includes(want), `missing ${want} in ${kinds.join(' | ')}`);
+  }
+  assert.ok(!kinds.includes('pkg/a.go:1 skipped test'), 'Skip outside a _test.go file is not a hit');
+  assert.ok(!kinds.some((k) => k.startsWith('app/a.py:1')), 'hollow assertion only counts in test files');
+  const nolint2 = scanWeakenedChecks(diffOf('x.go', '@@ -0,0 +1 @@\n+f() // nolint'), []);
+  assert.equal(nolint2[0].kind, 'nolint');
+});
+
+test('scanWeakenedChecks treats the new layouts as test files', async () => {
+  const { scanWeakenedChecks } = await helpers();
+  for (const f of ['src/test/java/a/B.java', 'a/FooTest.java', 'a/FooTests.java', 'a/FooTest.kt', 'spec/x_spec.rb', 'src/x_spec.rb', 'src/x_test.rs']) {
+    const hits = scanWeakenedChecks(diffOf(f, '@@ -1 +0,0 @@\n-gone', 'deleted file mode 100644\n'), []);
+    assert.deepEqual(hits.map((h) => h.kind), ['deleted test file'], f);
+  }
+});
+
+test('scanWeakenedChecks skips line patterns in prose and docs files but not config rules', async () => {
+  const { scanWeakenedChecks, checkConfigGlobs } = await helpers();
+  const line = '@@ -0,0 +1,3 @@\n+Use # noqa or eslint-disable sparingly\n+except Exception: pass\n+@pytest.mark.skip';
+  const text = ['README.md', 'notes.txt', 'a.rst', 'a.adoc', 'b.mdx', 'docs/guide.py', 'pkg/docs/x.js'].map((f) => diffOf(f, line)).join('');
+  assert.deepEqual(scanWeakenedChecks(text, []), []);
+  // the config rule still applies to prose paths, and a deleted test file still hits
+  const cfg = scanKinds(scanWeakenedChecks, diffOf('docs/Makefile', '@@ -1 +1 @@\n-a\n+b'), ['**/Makefile']);
+  assert.deepEqual(cfg, ['docs/Makefile:1 check configuration changed']);
+  const del = scanWeakenedChecks(diffOf('docs/tests/test_a.py', '@@ -1 +0,0 @@\n-x', 'deleted file mode 100644\n'), []);
+  assert.deepEqual(del.map((h) => h.kind), ['deleted test file']);
+  // a real noqa in code still hits
+  assert.deepEqual(scanKinds(scanWeakenedChecks, diffOf('app/a.py', '@@ -0,0 +1 @@\n+import os  # noqa'), []), ['app/a.py:1 noqa']);
+});
+
+test('conftest.py hits only when it ignores test collection', async () => {
+  const { scanWeakenedChecks, checkConfigGlobs } = await helpers();
+  const kinds = (hunk) => scanKinds(scanWeakenedChecks, diffOf('tests/conftest.py', hunk), checkConfigGlobs([]));
+  assert.deepEqual(kinds('@@ -0,0 +1,3 @@\n+@pytest.fixture\n+def db():\n+    return 1'), []);
+  assert.deepEqual(kinds('@@ -0,0 +1 @@\n+collect_ignore = ["test_slow.py"]'), ['tests/conftest.py:1 collection ignored']);
+  assert.deepEqual(kinds('@@ -0,0 +1 @@\n+def pytest_ignore_collect(path):'), ['tests/conftest.py:1 collection ignored']);
+});
