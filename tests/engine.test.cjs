@@ -49,6 +49,11 @@ async function run(args, opts = {}) {
       return Object.assign({ status: 'done', tests: [{ rowId: 'T1.1', test: 'test_t1_1' }], filesChanged: opts.qaFiles || [], questions: [], specRead: 'docs/specs/a.md' }, opts.qaOut || {});
     }
     if (l.startsWith('commit')) return { ok: true, commits: ['t1 test(#1): x', 'f1 feat(#1): y'], failedFirst: opts.failedFirst !== false, failureNote: '404' };
+    if (l.startsWith('fix') && opts.fixOut !== undefined) {
+      const f = pick(opts.fixOut, n);
+      if (f === null) return null;
+      return Object.assign({ status: 'done', summary: 'f', commits: [], filesChanged: [], assumptions: [], outOfScope: [], touchesUi: false, specRead: 'none' }, f);
+    }
     if (l.startsWith('implement') || l.startsWith('fix')) {
       return Object.assign(
         { status: 'done', summary: 's', commits: ['a b'], filesChanged: ['src/x.py'], assumptions: [], outOfScope: [], touchesUi: false, specRead: 'docs/specs/a.md' },
@@ -505,4 +510,20 @@ test('parseDiff: --- and +++ inside a hunk are content lines, not file headers',
   assert.deepEqual(files[0].removed, [{ line: 3, text: '-- old comment' }, { line: 4, text: 'select 1;' }]);
   assert.deepEqual(files[0].added, [{ line: 3, text: '++ new counter' }, { line: 4, text: 'select 2;' }]);
   assert.ok(scanWeakenedChecks(text, []).some((h) => h.file === 'tests/test_a.py' && /removed 1 test/.test(h.kind)));
+});
+
+test('a failed root-cause round never blocks: died or blocked ships with unknown and a note', async () => {
+  for (const fixOut of [null, { status: 'blocked', blockedReason: 'cannot tell' }]) {
+    const { rep, calls } = await run({ ...BASE, issues: [1] }, { selectLabels: () => ['type:fix'], fixOut });
+    assert.equal(rep[0].status, 'pr', JSON.stringify(fixOut));
+    assert.match(prompt(calls, 'ship'), /Root cause: unknown; Introduced by: unknown/);
+    assert.match(rep[0].notes.join(), /root cause round failed/);
+    assert.ok(!has(calls, 'blocked'));
+  }
+});
+
+test('a root-cause round that edits a QA file still blocks', async () => {
+  const { rep } = await run({ ...BASE, issues: [1] }, { ...QA, selectLabels: () => ['type:fix'], fixOut: { filesChanged: ['tests/test_a.py'] } });
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(rep[0].reason, /QA test files/);
 });
