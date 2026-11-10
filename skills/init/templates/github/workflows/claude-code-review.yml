@@ -122,6 +122,15 @@ jobs:
                row id?
             3. Scope: changes that are not needed for the linked issue's acceptance criteria.
             4. CLAUDE.md conventions (architecture, commit format, language, anything in "Never").
+            5. Weakened checks, always critical unless the linked issue itself asks for exactly that
+               change: new `# noqa`, `type: ignore`, `eslint-disable`, `@ts-ignore` / `@ts-nocheck`,
+               `pytest.mark.skip` / `xfail`, `.skip` / `.only` on tests, deleted tests or removed
+               assertions, empty `except` / `catch` blocks, and edits to files that configure the
+               project's `checks` in .claude/devflow.json (linter, type checker, test runner and CI
+               configuration, or a script a check runs).
+            6. Out of scope: an item in the PR body's "Out of scope" section that leaves behaviour
+               unmet that the linked issue's acceptance criteria (or a "must" Test cases row) require
+               is critical, even when it is written as "left as is": name the criterion.
 
             Before commenting, read the existing review threads on this PR
             (`gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments`).

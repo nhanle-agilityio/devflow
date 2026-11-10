@@ -47,6 +47,6 @@ Risk:
 
 ## Out of scope
 
-<!-- Related problems noticed but not changed. "None" if empty. -->
+<!-- Related problems noticed but not changed. "None" if empty. Never an acceptance criterion of the linked issue: those are in scope. Each real problem is filed as a follow-up issue labelled needs-triage and listed as "- <item>: #<number>"; remarks stay as plain text. -->
 
 Closes #<issue>
