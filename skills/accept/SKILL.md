@@ -59,10 +59,11 @@ Inside the worktree:
 For each `fail`:
 
 1. Search open issues for a duplicate (same spec and criterion). If one exists, link it in the table and create nothing.
-2. Otherwise draft a gap issue:
+2. Otherwise draft a gap issue from the bug template `${CLAUDE_PLUGIN_ROOT}/skills/spec/templates/bug.md` (keep every heading):
    - Title: `[<slug>] Gap: <criterion, short>`.
-   - Body, following the issue template of `/devflow:spec`: **Context** (spec link on the base branch, the criterion, the original issue and PR), **Expected**, **Actual** (the evidence), **Acceptance criteria** (the spec's criterion as a checklist item), **Risk** (`Risk: low - <reason>`; `high` when the gap touches something `risk.highWhen` or `risk.highPaths` describes; unsure means high), **Depends on** none.
-   - Labels: `labels.ready`, `labels.riskLow` or `labels.riskHigh`, plus every label in `accept.labels` (default `["type:gap"]`).
+   - **Context** (spec link on the base branch, the criterion, the original issue and PR), **Expected**, **Actual** (the evidence), **Repro**, **Introduced by** (the PR that closed the task, and the criterion id, e.g. "PR #54, AC2.5"), **Risk** (a suggestion: `low` or `high` against `risk.highWhen` / `risk.highPaths`; unsure means high), **Acceptance criteria** (the spec's criterion as a checklist item), **Scope**, **Test cases** (at least one `must` regression row), **Dependencies** None.
+   - Labels: `labels.triage` (default `needs-triage`) plus every label in `accept.labels` (default `["type:gap"]`). Not `labels.ready`, no risk or priority label: a human triages the gap.
+   - After creating it, comment on the issue: a suggested priority (one of `labels.priority`) and a suggested risk, each with a one-line reason, and that a human sets the labels and ready.
 
 Show the drafted list (title, risk, criterion) and create the issues only after the user's yes: one confirmation for the whole batch. If the user declines, create nothing and say so in the report. `not checkable` items are listed for a human; they get no issue.
 
@@ -70,6 +71,6 @@ Show the drafted list (title, risk, criterion) and create the issues only after 
 
 Find the spec's PR (the merged PR that added the spec file; `git log <remote>/<baseBranch> --diff-filter=A -- <file>` then the PR for that commit). If it is not found, use the last merged PR among the spec's issues. Post one comment starting with `<!-- devflow-accept -->` containing the table (task, criterion, result, evidence in one line), the counts (pass, fail, not checkable), the issues not yet merged that were left out, and links to the new or existing gap issues. Edit this comment in place on a re-run instead of adding another.
 
-Print the same table in the chat, then the gap issues created, the ones waiting for a human, and the comment link. Mention that `/devflow:next-task` picks up the gap issues like any other ready issue, and `/devflow:release` includes this result in the notes.
+Print the same table in the chat, then the gap issues created, the ones waiting for a human, and the comment link. Mention that the gap issues wait in `needs-triage`: once a human sets the priority and risk labels and swaps `needs-triage` for ready, `/devflow:next-task` picks them up like any other ready issue (fix issues get Root cause, Introduced by and Why it was missed in their PR), and `/devflow:release` includes this result in the notes.
 
 Never merge a PR, never push to the base branch.

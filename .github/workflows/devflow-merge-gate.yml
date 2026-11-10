@@ -1,0 +1,60 @@
+name: devflow merge gate (reusable)
+
+# Reusable form of the devflow merge gate, called by the thin caller that /devflow:init installs
+# (skills/init/templates/github/callers/devflow-merge-gate.yml), pinned to a devflow tag. It checks out the
+# calling repository (for .claude/devflow.json) and the gate script from this repository at `devflow-ref`,
+# so the script is not copied into the project.
+# The caller must live on its default branch and pass DEVFLOW_GATE_TOKEN (see the README checklist).
+# A private devflow repository must allow access from the calling repositories
+# (Settings > Actions > General > Access) and the caller must also pass DEVFLOW_READ_TOKEN, a token that can
+# read this repository, for the script checkout; a public one needs neither.
+
+on:
+  workflow_call:
+    inputs:
+      devflow-ref:
+        description: "The devflow tag the caller is pinned to (e.g. v2.7.0); the gate script is read at this ref"
+        required: true
+        type: string
+    secrets:
+      DEVFLOW_GATE_TOKEN:
+        required: true
+      DEVFLOW_READ_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v7
+
+      - name: Checkout the devflow gate script
+        uses: actions/checkout@v7
+        with:
+          repository: nhanle-agilityio/devflow
+          ref: ${{ inputs.devflow-ref }}
+          path: .devflow-plugin
+          token: ${{ secrets.DEVFLOW_READ_TOKEN || github.token }}
+          sparse-checkout: skills/init/templates/github/scripts
+
+      - name: Require DEVFLOW_GATE_TOKEN
+        env:
+          GATE_TOKEN: ${{ secrets.DEVFLOW_GATE_TOKEN }}
+        run: |
+          if [ -z "$GATE_TOKEN" ]; then
+            echo "::error::Secret DEVFLOW_GATE_TOKEN is not set. Create a fine-grained PAT (this repo only, Contents RW + Pull requests RW) and add it as a repository secret."
+            exit 1
+          fi
+
+      - name: Run the merge gate
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ secrets.DEVFLOW_GATE_TOKEN }}
+          script: |
+            const gate = require('./.devflow-plugin/skills/init/templates/github/scripts/devflow-merge-gate.cjs');
+            // The caller's event payload (and its workflow_dispatch `pr` input) is visible here as is.
+            await gate({github, context, core});

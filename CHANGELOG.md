@@ -2,6 +2,32 @@
 
 All notable changes to devflow. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/).
 
+## [2.7.0] - 2026-11-10
+
+Minor release: every new config key is optional and existing configs stay valid. Behaviour is stricter (the guard blocks more git commands, accept gaps wait for triage, weakened checks raise risk), but no setup change is required.
+
+### Added
+- Plugin hooks: `hooks/formatter.py` (PostToolUse) runs the new `format` config key's per-glob formatters on each edited file, quietly; `hooks/session_start.py` (SessionStart) gives every session the workflow rules built from `.claude/devflow.json`, and is silent without one.
+- The `devflow:reviewer` agent (`agents/reviewer.md`), used by the Review stage (`nextTask.reviewerAgent`) and for local reviews.
+- Reusable workflows `devflow-review.yml` and `devflow-merge-gate.yml` (`on: workflow_call`) and thin caller templates pinned to a tag; `/devflow:init` chooses reusable or copy mode, `--upgrade` moves the tag.
+- `bin/devflow-setup`: the allow list from `checks`, `verify`, `worktree.setup` and the remote; the minimal config (non-default keys only); the leftovers list for doctor.
+- `/devflow:doctor` check 9: project files and rules the plugin now owns (`block_git_add_all.py` and its `hook-test` check, deny rules, a maintenance `loop.md`, a project `code-reviewer` agent), reported as removable and never deleted.
+- Guard: blocks git commands that discard work (`reset --hard`, `clean -f`, `branch -D`, `checkout .`, `restore .`, `stash drop|clear`, `filter-branch`, `update-ref -d`, `reflog expire`) and staging everything (`git add -A`, `--all`, `.`). `git add -u` is allowed. Replaces the per-project `block_git_add_all.py` hook.
+- Engine: a deterministic weakened-checks scan of the diff before every review round, run by the shipped `bin/devflow-scan` script (new `noqa`, `type: ignore`, `eslint-disable`, `@ts-ignore`, skipped, focused or deleted tests, removed assertions, empty `except` / `catch`, edited check configuration). Hits are critical findings; hits the reviewer accepts as required by the issue make the PR `risk:high`.
+- Review (engine and the `claude-code-review.yml` check): an out-of-scope item that leaves an acceptance criterion unmet is critical. Ship files the remaining real out-of-scope problems as follow-up issues labelled `needs-triage` and links them in the PR.
+
+- Priority labels (`labels.priority`, default `priority:critical|high|normal|low`, no label = normal). `/devflow:next-task` orders by dependencies, then priority, then issue number, and a critical or high issue pulls its open parents forward. The merge gate tries candidates by the linked issue's priority, then PR number. No preemption, and priority never changes who merges.
+- `labels.triage` (`needs-triage`): accept gaps and Ship's follow-up issues get it instead of ready, with a comment suggesting priority and risk; next-task and dispatch never pick such issues. Only a human sets ready.
+- A shared bug issue template (`skills/spec/templates/bug.md`) and a "Filing a bug" section in the README.
+- Fix PRs (bugs, gaps, `type:fix`) carry Root cause, Introduced by and Why it was missed.
+- `/devflow:release` lists critical fixes first.
+
+### Changed
+- `/devflow:init` writes no deny rules (the guard covers them), generates the allow list, and writes only non-default keys to `devflow.json`.
+- `/devflow:accept` no longer labels gaps ready or sets their risk label: a human triages them.
+- `/devflow:doctor --fix` prints `git branch -D` for the user instead of running it (the guard blocks it).
+- Upgrade: run `/devflow:init --upgrade` in each project for the new review prompt and gate script (or to switch to reusable mode), then `/devflow:doctor` to see which project files can go.
+
 ## [2.6.0] - 2026-11-04
 
 ### Added
@@ -10,13 +36,13 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 ### Changed
 - `/devflow:sync` no longer sets `disable-model-invocation`, because a scheduled `/loop` prompt can only run a skill through the Skill tool and that flag blocked it. Its description limits invocation to a user request or a `/loop` prompt naming it. Other skills are unchanged.
 
-## [2.5.1]
+## [2.5.1] - 2026-11-03
 
 ### Fixed
 - Merge gate: the `<!-- devflow-gate-merged -->` comment is posted right after the merge, before stacked PRs are retargeted and the head branch is deleted. A failure in either step (for example a 422 when GitHub already auto-deleted the branch) no longer loses the marker, which is the only gate marker for `rebase` merges.
 - Upgrade: run `/devflow:init --upgrade` in each project to get the fixed gate script.
 
-## [2.5.0]
+## [2.5.0] - 2026-11-03
 
 ### Added
 - The merge gate marks what it merges: the merge commit message ends with `Merged-by: devflow merge gate` and the PR gets a comment starting with `<!-- devflow-gate-merged -->`.
@@ -28,7 +54,7 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 - `/devflow:release` and `/devflow:report` tell gate merges from human merges by the marker. An older PR merged by the gate token owner shows "merger unknown (gate or owner)".
 - Upgrade: run `/devflow:init --upgrade` in each project to get the new gate script.
 
-## [2.4.1]
+## [2.4.1] - 2026-11-03
 
 ### Fixed
 - Merged state is read from `pull_request_read` `merged_at` or from git ancestry, never from list results, which report `merged: false` for merged PRs. Affects doctor, accept, report, release, sync and the engine's parent check.
@@ -36,7 +62,7 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 ### Changed
 - Doctor warns about `devflowVersion` only for a major or minor difference.
 
-## [2.4.0] - wave 4
+## [2.4.0] - 2026-11-03 (wave 4)
 
 ### Added
 - Engine regression tests (`tests/engine.test.cjs`).

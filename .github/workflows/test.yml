@@ -10,7 +10,18 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Python 3.9 is the documented minimum for the hooks. ubuntu-latest (26.04) no longer has a 3.9 build in
+    # actions/python-versions, so the minimum runs on ubuntu-24.04 and a current Python on ubuntu-latest.
+    name: test (python ${{ matrix.python }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            python: '3.9'
+          - os: ubuntu-latest
+            python: '3.13'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -18,7 +29,7 @@ jobs:
           node-version: 22
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.9'
+          python-version: ${{ matrix.python }}
       - name: Node tests
         run: node --test tests/*.test.cjs
       - name: Hook tests

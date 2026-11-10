@@ -202,5 +202,191 @@ class HookProcess(unittest.TestCase):
             self.assertEqual(run_hook({"tool_name": "Read", "tool_input": {}}, tmp).returncode, 0)
 
 
+class DestructiveGit(unittest.TestCase):
+    BLOCKED = [
+        "git reset --hard",
+        "git reset --hard origin/main",
+        "git reset -q --hard HEAD~1",
+        "git clean -f",
+        "git clean -fd",
+        "git clean -dfx",
+        "git clean -xdf",
+        "git clean --force -d",
+        "git clean -d -f",
+        "git branch -D feature/old",
+        "git branch -Dr origin/x",
+        "git branch -d -f feature/old",
+        "git branch --delete --force feature/old",
+        "git branch -df feature/old",
+        "git checkout .",
+        "git checkout -- .",
+        "git checkout HEAD -- .",
+        "git checkout ./",
+        "git restore .",
+        "git restore --worktree .",
+        "git restore -SW .",
+        "git restore --source=HEAD :/",
+        "git stash drop",
+        "git stash drop stash@{1}",
+        "git stash clear",
+        "git filter-branch --tree-filter 'rm x' HEAD",
+        "git update-ref -d refs/heads/x",
+        "git update-ref --delete refs/heads/x",
+        "git reflog expire --expire=now --all",
+        # global options before the subcommand
+        "git -C /repo reset --hard",
+        'git -C "my dir" clean -fd',
+        "git -c core.quotepath=off checkout .",
+        "git --no-pager stash clear",
+        "git --git-dir=.git --work-tree=. reset --hard",
+        "git status && git reset --hard",
+        "bash -c 'git clean -fdx'",
+        "sudo -u git git reset --hard",
+        "GIT_TRACE=1 git branch -D x",
+    ]
+    ALLOWED = [
+        "git reset",
+        "git reset --soft HEAD~1",
+        "git reset HEAD file.py",
+        "git reset --mixed",
+        "git clean -n",
+        "git clean -nd",
+        "git clean --dry-run",
+        "git branch -d feature/old",
+        "git branch --delete feature/old",
+        "git checkout feature/x",
+        "git checkout -b feature/x",
+        "git checkout -- src/a.py",
+        "git checkout main -- docs/a.md",
+        "git restore src/a.py",
+        "git restore --staged .",
+        "git restore --staged -- .",
+        "git stash push -u -m devflow-red-12 -- src/x.py",
+        "git stash pop",
+        "git stash list",
+        "git stash apply abc123",
+        "git update-ref refs/heads/x HEAD",
+        "git reflog",
+        "git reflog show",
+        "git commit -m 'never git reset --hard or git clean -fdx'",
+        "echo git reset --hard",
+    ]
+
+    def test_blocked(self):
+        for command in self.BLOCKED:
+            with self.subTest(command=command):
+                self.assertTrue(reasons_on(command), command)
+
+    def test_allowed(self):
+        for command in self.ALLOWED:
+            with self.subTest(command=command):
+                self.assertEqual(reasons_on(command), [], command)
+
+    def test_reason_names_the_command(self):
+        self.assertIn("git reset --hard", reasons_on("git -C x reset --hard")[0])
+        self.assertIn("git stash clear", reasons_on("git stash clear")[0])
+
+
+class StageEverything(unittest.TestCase):
+    """Cases ported from TaskBoard's .claude/hooks/test_block_git_add_all.py."""
+
+    BLOCKED = [
+        "git add -A",
+        "git add .",
+        "git add --all",
+        "git add ./",
+        "git add :/",
+        "git add -vA",
+        "git status && git add .",
+        "cd x; git add . && git commit -m y",
+        "git status\ngit add .",
+        'git add . && git commit -m "msg"',
+        "git -C /x add -A",
+        "git add -Av",
+        "git add -An",
+        'git add "."',
+        "git add '.'",
+        'git -C "my dir" add -A',
+        "git -c core.quotepath=off add -A",
+        "git --no-pager add .",
+        "git --git-dir=.git add -A",
+        "GIT_TRACE=1 git add .",
+        "git add -- .",
+        "bash -c 'git add -A'",
+        'sh -c "cd x && git add ."',
+        "env git add .",
+        "env -i git add -A",
+        "sudo git add .",
+        "command git add .",
+        "sudo -u root git add .",
+        "sudo -uroot git add .",
+        "sudo -Eu root git add .",
+        "nice -n 5 git add -A",
+        "env -u FOO git add .",
+        "xargs -I {} git add .",
+        "sudo -u root env -u FOO git add -A",
+        "bash -lc 'git add .'",
+        "bash -e -c 'git add -A'",
+        "xargs -J % git add .",
+        "sudo -R / git add .",
+        "sudo --user root git add .",
+        "sudo -u git git add .",
+        "env -S 'git add .'",
+        "bash -c -- 'git add .'",
+        "bash -o pipefail -c 'git add -A'",
+        "sudo -s git add .",
+        "sudo -P git add .",
+        "sudo -E git add .",
+        "nice git add -A",
+        # Unparsable (apostrophe) -> crude fallback still blocks
+        "git add . && echo it's done",
+    ]
+    ALLOWED = [
+        "git add .gitignore",
+        "git add docs/a.md taskboard/services.py",
+        "git add 'my file.md'",
+        "git add -p",
+        "git add -u",
+        "git add src/*.py",
+        "git commit -m 'add . files'",
+        'git commit -q -m "chore: block git add -A and git add . with a hook"',
+        "echo git add -A is forbidden",
+        "git status",
+        "ls *",
+        "",
+        "bash -c 'git add docs/a.md'",
+        "sudo -u root git add docs/a.md",
+        "bash -lc 'git status'",
+        "bash script.sh -c 'git add .'",
+        "sudo echo 'git add .'",
+        "cat > notes.md <<'EOF'\nit's done\nEOF",
+        "echo it's fine",
+    ]
+
+    def test_blocked(self):
+        for command in self.BLOCKED:
+            with self.subTest(command=command):
+                found = reasons_on(command)
+                self.assertTrue(found, command)
+                self.assertIn("stage the files you changed by name", found[0])
+
+    def test_allowed(self):
+        for command in self.ALLOWED:
+            with self.subTest(command=command):
+                self.assertEqual(reasons_on(command), [], command)
+
+    def test_hook_process_blocks_with_message(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_hook({"tool_name": "Bash", "tool_input": {"command": "git add -A"}}, tmp)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("stage the files you changed by name", result.stderr)
+
+    def test_destructive_hook_message(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_hook({"tool_name": "Bash", "tool_input": {"command": "git reset --hard"}}, tmp)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("discards work", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

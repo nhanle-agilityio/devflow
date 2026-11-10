@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse guard for the devflow plugin: humans own merges and protected branches.
+"""PreToolUse guard for the devflow plugin: humans own merges, protected branches and lost work.
 
 Exit 2 blocks the call and sends the reason on stderr back to Claude. Blocked:
 
@@ -7,7 +7,16 @@ Exit 2 blocks the call and sends the reason on stderr back to Claude. Blocked:
 - Bash `gh pr merge`, `gh api .../merge` (unless an explicit GET) and the GraphQL merge mutations;
 - Bash `git push` that forces (`--force`, `-f`, `+refspec`; `--force-with-lease` is allowed),
   mirrors or pushes `--all`, or targets a protected branch (explicit refspec, `--delete`, or a
-  bare `git push` while the current branch is protected).
+  bare `git push` while the current branch is protected);
+- Bash git commands that discard work: `reset --hard`, `clean` with `-f`/`--force` (any flag
+  group), `branch -D` (or `-d` with `-f`), `checkout .` / `checkout -- .`, `restore .` (unless
+  only `--staged`), `stash drop` / `stash clear`, `filter-branch`, `update-ref -d`,
+  `reflog expire`;
+- Bash `git add -A`, `git add --all`, `git add .` (also `./`, `:/`, `-- .`, combined flags such
+  as `-vA`). `git add -u` is allowed: it stages only files git already tracks.
+
+Global git options (`git -C <dir>`, `-c k=v`, `--git-dir=...`, `--no-pager`) are skipped before
+the subcommand is read.
 
 Protected branches = `protectedBranches` + `baseBranch` from `.claude/devflow.json` in
 `$CLAUDE_PROJECT_DIR` (default: the hook's cwd); `main`, `master`, `develop` when the file is
@@ -51,6 +60,10 @@ PUSH_OPTIONS_WITH_VALUE = frozenset(
         "--recurse-submodules",
     }
 )
+STAGE_ALL_ARGS = frozenset({"-A", "--all", ".", "./", ":/"})
+WHOLE_TREE = frozenset({".", "./", ":/", "*"})
+STAGE_HINT = "stage the files you changed by name"
+DISCARD_HINT = "it discards work that may not be recoverable; ask the user to run it themselves if it is really needed"
 GH_MERGE_ENDPOINT = re.compile(r"(^|/)merges?(\?.*)?$")
 GRAPHQL_MERGE = re.compile(r"mergePullRequest|enablePullRequestAutoMerge")
 
@@ -125,10 +138,11 @@ def iter_commands(tokens, split):
     if head in ("git", "gh"):
         yield [head] + tokens[1:]
     elif head in WRAPPERS:
+        # Wrapper options differ per tool and platform, so every later git / gh / shell token is
+        # tried as the start of the wrapped command (`sudo -u git git add .` included).
         for i in range(1, len(tokens)):
             if base_name(tokens[i]) in ("git", "gh") or base_name(tokens[i]) in SHELLS:
                 yield from iter_commands(tokens[i:], split)
-                break
             if head == "env" and tokens[i - 1] in ("-S", "--split-string"):
                 for seg in split(tokens[i]):
                     yield from iter_commands(seg, split)
@@ -201,8 +215,107 @@ def is_protected(name, protected):
     )
 
 
+def short_flags(args):
+    """The letters of every short option group in `args` (`-dfx` -> d, f, x), before `--`."""
+    letters = set()
+    for arg in args:
+        if arg == "--":
+            break
+        if arg.startswith("-") and not arg.startswith("--") and len(arg) > 1:
+            letters.update(arg[1:])
+    return letters
+
+
+def long_flags(args):
+    names = set()
+    for arg in args:
+        if arg == "--":
+            break
+        if arg.startswith("--"):
+            names.add(arg.split("=", 1)[0])
+    return names
+
+
+def operands_of(args):
+    """Non-option arguments; everything after `--` counts."""
+    out, rest = [], False
+    for arg in args:
+        if rest:
+            out.append(arg)
+        elif arg == "--":
+            rest = True
+        elif not arg.startswith("-"):
+            out.append(arg)
+    return out
+
+
+def check_add(args):
+    for arg in args:
+        if arg in STAGE_ALL_ARGS:
+            return "'git add %s' stages everything; %s" % (arg, STAGE_HINT)
+        if arg.startswith("-") and not arg.startswith("--") and "A" in arg[1:]:
+            return "'git add %s' stages everything; %s" % (arg, STAGE_HINT)
+    return None
+
+
+def check_destructive(sub, args):
+    """Reason string if the git subcommand `sub` with `args` discards work, else None."""
+    short, long_, ops = short_flags(args), long_flags(args), operands_of(args)
+    found = None
+    if sub == "reset" and "--hard" in long_:
+        found = "git reset --hard"
+    elif sub == "clean" and ("f" in short or "--force" in long_):
+        found = "git clean -f"
+    elif sub == "branch":
+        deleting = "d" in short or "--delete" in long_
+        if "D" in short or (deleting and ("f" in short or "--force" in long_)):
+            found = "git branch -D"
+    elif sub == "checkout" and any(op in WHOLE_TREE for op in ops):
+        found = "git checkout ."
+    elif sub == "restore" and any(op in WHOLE_TREE for op in ops):
+        staged_only = ("S" in short or "--staged" in long_) and not (
+            "W" in short or "--worktree" in long_
+        )
+        if not staged_only:
+            found = "git restore ."
+    elif sub == "stash" and ops[:1] in (["drop"], ["clear"]):
+        found = "git stash %s" % ops[0]
+    elif sub == "filter-branch":
+        found = "git filter-branch"
+    elif sub == "update-ref" and ("d" in short or "--delete" in long_):
+        found = "git update-ref -d"
+    elif sub == "reflog" and ops[:1] == ["expire"]:
+        found = "git reflog expire"
+    if found:
+        return "'%s' %s" % (found, DISCARD_HINT)
+    return None
+
+
+def check_git(tokens, protected, branch_of):
+    """Reason string if the `git` call is not allowed, else None."""
+    i, _ = strip_options(tokens, GIT_OPTIONS_WITH_VALUE)
+    if i >= len(tokens):
+        return None
+    sub, args = tokens[i], tokens[i + 1 :]
+    if sub == "push":
+        return check_push(tokens, protected, branch_of)
+    if sub == "add":
+        return check_add(args)
+    return check_destructive(sub, args)
+
+
+PUSH_HINT = "Humans own merges and protected branches (%s); push your own feature branch instead"
+
+
 def check_push(tokens, protected, branch_of):
     """Reason string if the `git push` call is not allowed, else None."""
+    reason = push_reason(tokens, protected, branch_of)
+    if reason:
+        return "%s. %s" % (reason, PUSH_HINT % ", ".join(sorted(protected)))
+    return None
+
+
+def push_reason(tokens, protected, branch_of):
     i, directory = strip_options(tokens, GIT_OPTIONS_WITH_VALUE)
     if i >= len(tokens) or tokens[i] != "push":
         return None
@@ -275,12 +388,13 @@ def reasons(command, protected, branch_of):
     found = []
     for seg in parsed:
         for tokens in iter_commands(seg, split):
-            reason = (
-                check_gh(tokens)
-                if tokens[0] == "gh"
-                else check_push(tokens, protected, branch_of)
-            )
-            if reason:
+            if tokens[0] == "gh":
+                reason = check_gh(tokens)
+                if reason:
+                    reason = "%s. Humans own merges" % reason
+            else:
+                reason = check_git(tokens, protected, branch_of)
+            if reason and reason not in found:
                 found.append(reason)
     return found
 
@@ -310,12 +424,7 @@ def main():
 
     found = reasons(command, protected, branch_of)
     if found:
-        print(
-            "Blocked by the devflow guard: %s. Humans own merges and protected branches (%s); "
-            "push your own feature branch instead."
-            % (found[0], ", ".join(sorted(protected))),
-            file=sys.stderr,
-        )
+        print("Blocked by the devflow guard: %s." % found[0], file=sys.stderr)
         return 2
     return 0
 

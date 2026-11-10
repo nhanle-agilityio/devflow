@@ -51,6 +51,8 @@ Call the Workflow tool with name `devflow:next-task-engine` and this `args` obje
   "issues": [],
   "startBranch": "<the current branch, \"\" when isolated>",
   "prTemplatePath": "${CLAUDE_SKILL_DIR}/templates/pr.md",
+  "bugTemplatePath": "${CLAUDE_PLUGIN_ROOT}/skills/spec/templates/bug.md",
+  "pluginRoot": "${CLAUDE_PLUGIN_ROOT}",
   "isolated": false,
   "chain": false,
   "claimId": "<from step 2b>",
@@ -58,13 +60,15 @@ Call the Workflow tool with name `devflow:next-task-engine` and this `args` obje
 }
 ```
 
-Fill `config` with the full parsed config object, and the other values from steps 1 and 2.
+Fill `config` with the full parsed config object, and the other values from steps 1 and 2. `pluginRoot` is the plugin directory: the Review stage runs `bin/devflow-scan` from it (without it every PR is risk:high, because the weakened-checks scan cannot run).
 
 ## 4. Report
 
 Isolated mode first: if the worktree has no uncommitted changes (`git status --porcelain` empty) and every branch the run created is pushed, call ExitWorktree, then `git worktree remove <path>`. Otherwise call ExitWorktree and keep the worktree; tell the user its path and why.
 
 Then print a table from the workflow result, one row per entry, using only its fields: issue, status, PR link with `risk` and `stackedOn` (a list, empty when not stacked), or the `reason` for blocked and skipped (including `already claimed` / `claimed by <id>`: another session works on that issue), and a Notes column with the entry's `notes` joined by "; " exactly as returned. Do not add your own account of what happened in between (timing, why something was or was not stacked): the notes already state it, and anything else is a guess. Mention that blocked issues have a comment explaining what a human must decide. An issue blocked with questions (the comment starts with `<!-- devflow-questions -->`, numbered and tagged [BA], [QA] or [Dev]) is unblocked with `/devflow:answer #<n>`, which records the answers in the spec and the issue and sets the issue ready again. If an entry says "GitHub MCP unavailable", say the run stopped there, that the issue keeps its in-progress label and claim, and that `/devflow:doctor --fix` cleans that up once GitHub is reachable again.
+
+Issues labelled `labels.triage` (default `needs-triage`) are never picked up; a human triages them and sets the ready label. The run order is dependencies first, then `labels.priority` (no label = normal), then issue number; priority never changes who merges.
 
 Explain who merges: `risk:low` PRs are merged by the merge gate GitHub Action when it is enabled (`mergeGate.enabled`) and its required checks are green; `risk:high` PRs (and PRs without a risk label) wait for a human. A PR stacked on one or more other PRs is merged by the gate only after every dependency is closed; `risk:high` still waits for a human. `/devflow:sync` handles conflicts, retargeting of stacked PRs and review comments.
 

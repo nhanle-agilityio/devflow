@@ -43,7 +43,19 @@
         "devflow": { "type": "string", "default": "devflow", "description": "Put on every PR devflow opens; /devflow:sync targets PRs with it." },
         "riskLow": { "type": "string", "default": "risk:low", "description": "Issue/PR label: eligible for the merge gate." },
         "riskHigh": { "type": "string", "default": "risk:high", "description": "Issue/PR label: waits for a human merge." },
-        "stacked": { "type": "string", "default": "stacked", "description": "PR label: the PR is based on another open devflow PR." }
+        "stacked": { "type": "string", "default": "stacked", "description": "PR label: the PR is based on another open devflow PR." },
+        "triage": {
+          "type": "string",
+          "default": "needs-triage",
+          "description": "Issue label for bugs and gaps no human has triaged yet. /devflow:next-task never picks them; only a human replaces it with the ready label."
+        },
+        "priority": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "default": ["priority:critical", "priority:high", "priority:normal", "priority:low"],
+          "description": "Priority labels, highest first. No label counts as the entry ending in \"normal\". Changes only the order of /devflow:next-task and the merge gate, never who merges."
+        }
       }
     },
     "risk": {
@@ -112,6 +124,12 @@
         }
       }
     },
+    "format": {
+      "type": "object",
+      "default": {},
+      "additionalProperties": { "type": "string" },
+      "description": "Formatters the plugin runs after Claude writes or edits a file: glob -> shell command; {file} is the shell-quoted path relative to the project root (appended when missing). A glob without \"/\" matches the file name in any directory. Quiet; never fails the edit. Example: {\"*.py\": \".venv/bin/ruff format {file}\"}."
+    },
     "verify": {
       "type": "object",
       "additionalProperties": false,
@@ -160,7 +178,8 @@
         "defaultLimit": { "type": "integer", "minimum": 1, "default": 3 },
         "maxFixRounds": { "type": "integer", "minimum": 0, "default": 2 },
         "maxReviewRounds": { "type": "integer", "minimum": 0, "default": 2 },
-        "parallelQa": { "type": "boolean", "default": true, "description": "Implement runs a QA agent (acceptance tests from the spec and issue only) in parallel with the dev agent when the plan names test files for the issue's Test cases rows. false: one agent writes the test first, then the implementation." }
+        "parallelQa": { "type": "boolean", "default": true, "description": "Implement runs a QA agent (acceptance tests from the spec and issue only) in parallel with the dev agent when the plan names test files for the issue's Test cases rows. false: one agent writes the test first, then the implementation." },
+        "reviewerAgent": { "type": "string", "default": "devflow:reviewer", "description": "Subagent type the Review stage runs as (the plugin ships devflow:reviewer). Empty string: the default workflow agent. Falls back to the default agent when the type cannot be started." }
       }
     },
     "worktree": {

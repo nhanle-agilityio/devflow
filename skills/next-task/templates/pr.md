@@ -19,6 +19,20 @@ Risk:
 
 <!-- Only when the PR is stacked on other open PRs, one line listing every parent. One parent: "Stacked on #<pr> (<branch>); it retargets to <base> when that PR merges." Several parents: "Stacked on #<pr> (<branch>) and #<pr> (<branch>); merged into this branch at <short sha>. The merge gate waits until every dependency is closed." Otherwise delete this comment. -->
 
+<!-- Only for a fix (a bug, a gap from /devflow:accept, or a type:fix issue); otherwise delete these three sections. -->
+
+## Root cause
+
+<!-- Why the bug happened, in one or two sentences. -->
+
+## Introduced by
+
+<!-- The PR, commit or acceptance criterion that introduced it (e.g. "PR #54, AC2.5"), or "unknown". -->
+
+## Why it was missed
+
+<!-- Why tests, review or acceptance did not catch it, and what now does (the regression test). -->
+
 ## Tests
 
 <!-- Test name: what it proves. State which tests were committed first and failed for the right reason. When the issue has a Test cases table, start each line with the row id it covers (e.g. "T1.2 test_name: ..."), and list any "must" row without a test. -->
@@ -47,6 +61,6 @@ Risk:
 
 ## Out of scope
 
-<!-- Related problems noticed but not changed. "None" if empty. -->
+<!-- Related problems noticed but not changed. "None" if empty. Never an acceptance criterion of the linked issue: those are in scope. Each real problem is filed as a follow-up issue labelled needs-triage and listed as "- <item>: #<number>"; remarks stay as plain text. -->
 
 Closes #<issue>

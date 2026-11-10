@@ -17,6 +17,10 @@ export const meta = {
 // Config. Everything stack-specific comes from args.config; nothing is hardcoded here.
 // ---------------------------------------------------------------------------------------------
 
+// Test hook: the pure helpers below are function declarations (hoisted), so tests get them without a run.
+// They take every input as a parameter and never touch the run state.
+if (args && args.exports === true) return { parseDiff, scanWeakenedChecks, checkConfigGlobs, globToRegExp, priorityRank, orderIssues, isFixIssue }
+
 // Run through /devflow:next-task only: it does the preflight and builds args. Calling this workflow
 // directly (e.g. /devflow:next-task-engine) arrives without args, so stop with a clear message.
 const missing = ['config'].filter((k) => !args || !args[k])
@@ -46,12 +50,15 @@ const labels = Object.assign(
     riskLow: 'risk:low',
     riskHigh: 'risk:high',
     stacked: 'stacked',
+    triage: 'needs-triage',
+    priority: ['priority:critical', 'priority:high', 'priority:normal', 'priority:low'],
   },
   cfg.labels,
 )
+const priorityList = Array.isArray(labels.priority) ? labels.priority : []
 const riskCfg = Object.assign({ highPaths: [] }, cfg.risk)
 const testingCfg = Object.assign({ e2eFramework: false }, cfg.testing)
-const nt = Object.assign({ defaultLimit: 3, maxFixRounds: 2, maxReviewRounds: 2, parallelQa: true }, cfg.nextTask)
+const nt = Object.assign({ defaultLimit: 3, maxFixRounds: 2, maxReviewRounds: 2, parallelQa: true, reviewerAgent: 'devflow:reviewer' }, cfg.nextTask)
 const verifyCfg = Object.assign({ modes: [], browserTool: 'playwright', lock: true }, cfg.verify)
 const branchPattern = cfg.branchPattern || '{type}/{issue}-{slug}'
 const startBranch = args.startBranch
@@ -189,6 +196,21 @@ const IMPLEMENT_SCHEMA = {
     filesChanged: { type: 'array', items: { type: 'string' } },
     assumptions: { type: 'array', items: { type: 'string' } },
     outOfScope: { type: 'array', items: { type: 'string' } },
+    rootCause: {
+      type: 'object',
+      description: 'Fix issues only: why the bug happened',
+      properties: {
+        cause: { type: 'string', description: 'The root cause in one or two sentences' },
+        introducedBy: { type: 'string', description: 'The PR, commit or acceptance criterion that introduced it ("unknown" if not found)' },
+        whyMissed: { type: 'string', description: 'Why tests, review or acceptance did not catch it' },
+      },
+      required: ['cause', 'introducedBy', 'whyMissed'],
+    },
+    outOfScopeDone: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Fix rounds: items of the earlier out-of-scope list that this fix implemented, copied exactly',
+    },
     touchesUi: { type: 'boolean', description: 'True when the diff against the base branch changes user-facing UI' },
     blockedReason: { type: 'string' },
     specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
@@ -287,10 +309,37 @@ const VERIFY_SCHEMA = {
   required: ['ran', 'mode', 'steps', 'notes'],
 }
 
+const SCAN_SCHEMA = {
+  type: 'object',
+  properties: {
+    scanned: { type: 'boolean', description: 'The "scanned" field of the script output' },
+    hits: {
+      type: 'array',
+      description: 'The "hits" of the script output, copied exactly',
+      items: {
+        type: 'object',
+        properties: { file: { type: 'string' }, line: { type: 'integer' }, kind: { type: 'string' }, text: { type: 'string' } },
+        required: ['file', 'line', 'kind', 'text'],
+      },
+    },
+    error: { type: 'string', description: 'The "error" field when scanned is false, or the reason the script did not run' },
+  },
+  required: ['scanned', 'hits'],
+}
+
 const REVIEW_SCHEMA = {
   type: 'object',
   properties: {
     verdict: { enum: ['pass', 'changes'] },
+    acceptedWeakenings: {
+      type: 'array',
+      description: 'Scan hits (weakened checks) that are justified by the issue itself; each stays in the PR and makes it risk:high',
+      items: {
+        type: 'object',
+        properties: { file: { type: 'string' }, line: { type: 'integer' }, reason: { type: 'string' } },
+        required: ['file', 'line', 'reason'],
+      },
+    },
     findings: {
       type: 'array',
       items: {
@@ -316,6 +365,15 @@ const SHIP_SCHEMA = {
     prNumber: { type: 'integer' },
     url: { type: 'string' },
     unstacked: { type: 'boolean', description: 'true when the parent PR was already merged and the PR targets the base' },
+    followUps: {
+      type: 'array',
+      description: 'Issues created (or found open) for the out-of-scope items',
+      items: {
+        type: 'object',
+        properties: { number: { type: 'integer' }, title: { type: 'string' }, existing: { type: 'boolean' } },
+        required: ['number', 'title'],
+      },
+    },
     problem: { type: 'string' },
   },
   required: ['ok', 'prNumber', 'url'],
@@ -336,6 +394,9 @@ const RESTORE_SCHEMA = {
 // ---------------------------------------------------------------------------------------------
 // Prompt builders. One small function per stage.
 // ---------------------------------------------------------------------------------------------
+
+// Set once when the configured reviewer agent type cannot be started; later reviews use the default agent.
+let reviewerMissing = ''
 
 // Integration commit per issue number (multi-stack only), set by the Integrate stage.
 const integration = {}
@@ -451,6 +512,229 @@ function globToRegExp(glob) {
   return new RegExp(`^${re}$`)
 }
 
+// ---------------------------------------------------------------------------------------------
+// Weakened checks (pure). A deterministic scan of the diff for changes that make checks pass by
+// weakening them instead of fixing the cause. Hits go to Review as critical findings; the ones the
+// reviewer accepts as justified stay in the PR and raise its risk to high at Ship.
+// ---------------------------------------------------------------------------------------------
+
+// Unified diff (any context size) -> [{file, deleted, added: [{line, text}], removed: [{line, text}]}].
+// "--- " / "+++ " are file headers only between "diff --git" and the file's first "@@"; inside a hunk they are
+// removed / added content (a removed SQL comment "-- x" is the line "--- x").
+function parseDiff(text) {
+  const files = []
+  let cur = null
+  let oldLine = 0
+  let newLine = 0
+  let inHeader = false
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.replace(/\r$/, '')
+    if (line.startsWith('diff --git ')) {
+      const m = / b\/(.+)$/.exec(line)
+      cur = { file: m ? m[1] : '', deleted: false, added: [], removed: [] }
+      files.push(cur)
+      inHeader = true
+      continue
+    }
+    if (!cur) continue
+    if (inHeader && line.startsWith('deleted file mode')) {
+      cur.deleted = true
+      continue
+    }
+    if (inHeader && line.startsWith('+++ ')) {
+      const m = /^\+\+\+ b\/(.+)$/.exec(line)
+      if (m) cur.file = m[1]
+      continue
+    }
+    if (inHeader && line.startsWith('--- ')) {
+      const m = /^--- a\/(.+)$/.exec(line)
+      if (m && !cur.file) cur.file = m[1]
+      continue
+    }
+    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
+    if (h) {
+      inHeader = false
+      oldLine = Number(h[1])
+      newLine = Number(h[2])
+      continue
+    }
+    if (inHeader) continue
+    if (line.startsWith('+')) cur.added.push({ line: newLine++, text: line.slice(1) })
+    else if (line.startsWith('-')) cur.removed.push({ line: oldLine++, text: line.slice(1) })
+    else if (line.startsWith(' ')) {
+      oldLine++
+      newLine++
+    }
+  }
+  return files
+}
+
+// Files that configure the project's checks: linters, type checkers, test runners, CI, devflow itself,
+// and any script path named in a check command. Globs, matched with globToRegExp.
+function checkConfigGlobs(checks) {
+  const globs = [
+    '.claude/devflow.json',
+    '**/pyproject.toml',
+    '**/setup.cfg',
+    '**/tox.ini',
+    '**/.flake8',
+    '**/ruff.toml',
+    '**/.ruff.toml',
+    '**/mypy.ini',
+    '**/.mypy.ini',
+    '**/pytest.ini',
+    '**/.coveragerc',
+    '**/.eslintrc*',
+    '**/eslint.config.*',
+    '**/.prettierrc*',
+    '**/tsconfig*.json',
+    '**/jest.config.*',
+    '**/vitest.config.*',
+    '**/playwright.config.*',
+    '**/.golangci.y*ml',
+    '.pre-commit-config.yaml',
+    '.github/workflows/*',
+  ]
+  for (const c of Array.isArray(checks) ? checks : []) {
+    const words = String((c && c.run) || '').split(/\s+/).filter(Boolean)
+    if (/^make$/.test(words[0] || '')) globs.push('Makefile')
+    for (const w of words) {
+      // A script path in the command (scripts/lint.sh, ./bin/check): a word with a slash and no flag or URL.
+      if (/^(\.\/)?[\w.-]+(\/[\w.-]+)+$/.test(w) && !/^(\.\/)?(\.venv|venv|node_modules)\//.test(w)) {
+        globs.push(w.replace(/^\.\//, ''))
+      }
+    }
+  }
+  return Array.from(new Set(globs))
+}
+
+// hits: [{file, line, kind, text}]. diffText is `git diff` output; configGlobs from checkConfigGlobs.
+function scanWeakenedChecks(diffText, configGlobs) {
+  const isTestFile = (f) =>
+    /(^|\/)(tests?|__tests__|spec|specs)\//.test(f) ||
+    /(^|\/)(test_[^/]*\.py|[^/]*_test\.(py|go)|[^/]*\.(test|spec)\.[cm]?[jt]sx?)$/.test(f)
+  const ADDED = [
+    { kind: 'noqa', re: /#\s*noqa\b/i },
+    { kind: 'type: ignore', re: /#\s*type:\s*ignore\b/ },
+    { kind: 'pyright/pylint disable', re: /#\s*(pyright:\s*ignore|pylint:\s*disable)\b/ },
+    { kind: 'skipped test', re: /@?pytest\.mark\.(skip|skipif|xfail)\b|@unittest\.(skip|skipIf|skipUnless|expectedFailure)\b|\bpytest\.(skip|xfail)\(/ },
+    { kind: 'skipped or focused test', re: /\b(it|test|describe|context|suite)\.(skip|only|todo)\b|\b(xit|xdescribe|xtest|fit|fdescribe)\(/ },
+    { kind: 'eslint-disable', re: /eslint-disable/ },
+    { kind: 'ts-ignore', re: /@ts-(ignore|nocheck|expect-error)\b/ },
+    { kind: 'empty except', re: /^\s*except\b[^:]*:\s*(pass|\.\.\.)\s*(#.*)?$/ },
+    { kind: 'empty catch', re: /\bcatch\s*(\([^)]*\))?\s*\{\s*\}/ },
+  ]
+  const TEST_DEF = /^\s*(async\s+)?def\s+test\w*\s*\(|^\s*(it|test)\s*\(|^\s*func\s+Test\w+\s*\(/
+  const ASSERT = /\bassert\b|\bself\.assert\w+\(|\bexpect\s*\(|\bassert\w*\s*\(|\bt\.(Error|Fatal)f?\(/
+  const configRes = (Array.isArray(configGlobs) ? configGlobs : []).map(globToRegExp)
+  const hits = []
+  for (const f of parseDiff(diffText)) {
+    if (!f.file) continue
+    if (f.deleted && isTestFile(f.file)) {
+      hits.push({ file: f.file, line: 0, kind: 'deleted test file', text: '' })
+      continue
+    }
+    if (configRes.some((re) => re.test(f.file)) && (f.added.length || f.removed.length || f.deleted)) {
+      const first = f.added[0] || f.removed[0] || { line: 0, text: '' }
+      hits.push({ file: f.file, line: first.line, kind: 'check configuration changed', text: first.text.trim() })
+    }
+    for (let i = 0; i < f.added.length; i++) {
+      const a = f.added[i]
+      for (const p of ADDED) {
+        if (p.re.test(a.text)) hits.push({ file: f.file, line: a.line, kind: p.kind, text: a.text.trim() })
+      }
+      // "except ...:" with "pass" on the next added line
+      const next = f.added[i + 1]
+      if (/^\s*except\b[^:]*:\s*(#.*)?$/.test(a.text) && next && next.line === a.line + 1 && /^\s*(pass|\.\.\.)\s*(#.*)?$/.test(next.text)) {
+        hits.push({ file: f.file, line: a.line, kind: 'empty except', text: `${a.text.trim()} ${next.text.trim()}` })
+      }
+    }
+    if (isTestFile(f.file)) {
+      const count = (lines, re) => lines.filter((l) => re.test(l.text)).length
+      const lostTests = count(f.removed, TEST_DEF) - count(f.added, TEST_DEF)
+      if (lostTests > 0) {
+        const first = f.removed.find((l) => TEST_DEF.test(l.text))
+        hits.push({ file: f.file, line: first.line, kind: `removed ${lostTests} test(s)`, text: first.text.trim() })
+      }
+      const lostAsserts = count(f.removed, ASSERT) - count(f.added, ASSERT)
+      if (lostAsserts > 0) {
+        const first = f.removed.find((l) => ASSERT.test(l.text))
+        hits.push({ file: f.file, line: first.line, kind: `removed ${lostAsserts} assertion(s)`, text: first.text.trim() })
+      }
+    }
+  }
+  return hits
+}
+
+// ---------------------------------------------------------------------------------------------
+// Priority and fix issues (pure)
+// ---------------------------------------------------------------------------------------------
+
+// Index of the first label of `list` the issue has. No priority label counts as the "normal" entry (the first
+// whose name ends in "normal"), or after every listed priority when the list has none.
+function priorityRank(names, list) {
+  const order = Array.isArray(list) ? list : []
+  const has = new Set(names || [])
+  const hit = order.findIndex((l) => has.has(l))
+  if (hit !== -1) return hit
+  const normal = order.findIndex((l) => /normal$/i.test(l))
+  return normal !== -1 ? normal : order.length
+}
+
+// Dependencies first (inside the set), then priority, then issue number. A child pulls its open parents
+// forward: a parent's effective rank is the best rank among itself and everything that depends on it.
+// A cycle does not drop issues: the best remaining one is placed and the walk goes on.
+function orderIssues(issues, list) {
+  const items = Array.isArray(issues) ? issues : []
+  const byNum = new Map(items.map((i) => [i.number, i]))
+  const depsOf = (i) => {
+    const out = new Set()
+    for (const d of Array.isArray(i.dependsOn) ? i.dependsOn : []) out.add(Number(d))
+    for (const p of Array.isArray(i.parents) ? i.parents : []) out.add(Number(p.issue))
+    out.delete(i.number)
+    return Array.from(out).filter((d) => byNum.has(d))
+  }
+  const deps = new Map(items.map((i) => [i.number, depsOf(i)]))
+  const children = new Map(items.map((i) => [i.number, []]))
+  for (const [n, ds] of deps) for (const d of ds) children.get(d).push(n)
+  // Effective rank: the best rank among the issue and every issue that depends on it, transitively (cycle-safe).
+  const eff = new Map()
+  for (const i of items) {
+    let best = priorityRank(i.labels, list)
+    const seen = new Set([i.number])
+    const todo = children.get(i.number).slice()
+    while (todo.length) {
+      const c = todo.pop()
+      if (seen.has(c)) continue
+      seen.add(c)
+      best = Math.min(best, priorityRank(byNum.get(c).labels, list))
+      todo.push(...children.get(c))
+    }
+    eff.set(i.number, best)
+  }
+  const better = (a, b) => eff.get(a) - eff.get(b) || a - b
+  const placed = new Set()
+  const out = []
+  while (out.length < items.length) {
+    const left = items.map((i) => i.number).filter((n) => !placed.has(n))
+    const ready = left.filter((n) => deps.get(n).every((d) => placed.has(d)))
+    const next = (ready.length ? ready : left).sort(better)[0]
+    placed.add(next)
+    out.push(byNum.get(next))
+  }
+  return out
+}
+
+// A bug fix: a fix or bug type label, a gap label from /devflow:accept, a gap title, or a bug-template body.
+function isFixIssue(issue, config) {
+  const names = (issue && issue.labels) || []
+  const gapLabels = (config && config.accept && Array.isArray(config.accept.labels) ? config.accept.labels : ['type:gap'])
+  if (names.some((l) => ['type:fix', 'type:bug', 'bug', 'fix'].indexOf(l) !== -1 || gapLabels.indexOf(l) !== -1)) return true
+  const title = String((issue && issue.title) || '')
+  if (/\bGap:/.test(title) || /^fix(\(|:|\b)/i.test(title)) return true
+  return /^##\s+Introduced by\b/m.test(String((issue && issue.body) || ''))
+}
+
 // Deterministic risk: the issue's label, then escalation by touched paths. Unlabelled counts as high.
 function issueRisk(issue) {
   if (issue.labels.indexOf(labels.riskHigh) !== -1) return 'high'
@@ -488,7 +772,7 @@ function issueBlock(issue) {
 function selectPrompt() {
   const explicit = explicitIssues.length
     ? `Explicit issues requested by the user: ${explicitIssues.map((n) => '#' + n).join(', ')}. Use exactly these (still skip, with a reason, any that is closed or already has an open PR referencing it). Do not apply the label filter to them.${chain ? ` These issues are a lane to run in exactly this order: return them in the order given and do not reorder them. Lane order is handled by the engine, so an earlier issue of the same list is NOT a parent by itself: add it to parents (inRun true, as below) only when this issue has a real \"Depends on\" line for it. Do not skip an issue only because an earlier issue of the same list is still open without a PR.` : ''}`
-    : `No explicit issues. Select open issues labelled "${labels.ready}" that are NOT labelled "${labels.inProgress}" or "${labels.blocked}".`
+    : `No explicit issues. Select open issues labelled "${labels.ready}" that are NOT labelled "${labels.inProgress}", "${labels.blocked}" or "${labels.triage}".`
   return `You are selecting GitHub issues for ${gh.owner}/${gh.repo}. ${MCP_NOTE}
 
 devflow config:
@@ -504,8 +788,9 @@ Rules:
   - or it has no open PR but is itself in your selection (it will be worked on earlier in this run): {issue: <dep>, prNumber: 0, branch: "", inRun: true}. The workflow fills in the PR once the parent ships.
 - If any open dependency has neither an open PR nor a place in your selection, the issue goes in "skipped" with the reason (name that dependency).
 - Always return "parents" for every selected issue (an empty array when there is none).
-- Order: ${chain && explicitIssues.length ? 'the order of the explicit issues' : 'parents before children, then oldest first (lowest number)'}.
-- Return at most ${limit * 3} eligible issues in "issues" (the workflow applies the limit of ${limit}, because a child whose parent does not ship is not worked on and does not count). Everything beyond that goes in "skipped" with reason "over limit".
+- Never select an issue labelled "${labels.triage}" (a human has not triaged it yet); if one is requested explicitly, put it in "skipped" with reason "${labels.triage}: a human sets it ready first".
+- Order: ${chain && explicitIssues.length ? 'the order of the explicit issues' : `parents before children, then by priority label in this order: ${priorityList.join(', ')} (an issue without one counts as ${priorityList.find((l) => /normal$/i.test(l)) || 'the lowest'}), then oldest first (lowest number). The workflow re-sorts the list the same way.`}
+- Return at most ${limit * 3} eligible issues in "issues" (the workflow applies the limit of ${limit}, because a child whose parent does not ship is not worked on and does not count). When there are more, keep the highest priority ones and the in-selection parents they depend on. Everything beyond that goes in "skipped" with reason "over limit".
 - For each selected issue return its full body verbatim, its label names, and the dependency numbers from its "Depends on" lines.
 This is read-only: do not change anything on GitHub or in the checkout.`
 }
@@ -632,11 +917,17 @@ Instructions:
    If the issue has a "Test cases" table (rows of the spec's test matrix), write a test for every row with priority "must" and make each traceable to its row id. ${TEST_NAMING} "should" rows are optional. If the issue has only a test plan, follow it.
    ${e2eRule(false)}
 4. Stage files by name only; never stage everything at once. Make small commits. Add no Co-Authored-By or AI attribution unless CLAUDE.md says otherwise.
-   ${MANUAL_RULE}${resumeNote(issue)}
+   ${MANUAL_RULE}${resumeNote(issue)}${rootCauseNote(issue)}
 5. Stay inside the issue's scope. Anything else you notice goes into "outOfScope", unchanged in the code.
 6. If a requirement is ambiguous in a way that changes behaviour or a contract and the spec does not answer it, do NOT guess: return status "blocked" with blockedReason stating the question. For minor ambiguity, decide, and record the decision in "assumptions".
 7. Do not push, open a PR, or touch GitHub labels.
 Return: status, a short summary, the commits you made ("<sha> <message>"), files changed, assumptions, outOfScope, touchesUi (true when the diff against ${parentRef} changes user-facing UI), specRead (${specPath ? `the spec path ${specPath}, exactly as you read it` : '"none"'}), and manualChecks ([] when there are no such rows).`}`
+}
+
+// Fix issues: the PR must say why the bug happened.
+function rootCauseNote(issue) {
+  if (!isFixIssue(issue, cfg)) return ''
+  return `\n   This issue is a fix. Find the root cause before changing code, and return rootCause: cause (one or two sentences), introducedBy (the PR, commit or acceptance criterion that introduced it; check \`git log -S\` / \`git blame\` on the faulty lines and the issue's "Introduced by" section; "unknown" if not found) and whyMissed (why tests, review or acceptance did not catch it). The failing test first must reproduce the bug.`
 }
 
 // A branch resumed from an earlier blocked run: the agent continues from those commits.
@@ -663,7 +954,7 @@ Instructions:
 3. Write the implementation in the files the plan gives to dev: ${JSON.stringify(own.devFiles)}. If you need another file, use it and say so in "assumptions", but never create, edit or delete any of the QA files above. Extra tests of your own are fine in files that are not QA files.
 4. Do NOT commit, stage or stash anything: the workflow commits the QA tests first and your change after them. Do not run git commands that change the working tree or the index.
 5. You may run the project's checks to see your own work, but do not edit anything to make a QA test pass; the QA tests may still be incomplete while you work.
-6. Stay inside the issue's scope. Anything else you notice goes into "outOfScope", unchanged in the code. ${MANUAL_RULE}
+6. Stay inside the issue's scope. Anything else you notice goes into "outOfScope", unchanged in the code. ${MANUAL_RULE}${rootCauseNote(issue)}
 7. If a requirement is ambiguous in a way that changes behaviour or a contract and the spec and Decisions do not answer it, do NOT guess: return status "blocked" with blockedReason stating the question. For minor ambiguity, decide, and record the decision in "assumptions".
 8. Do not push, open a PR, or touch GitHub labels.
 Return: status, a short summary, commits = [], every file you changed, assumptions, outOfScope, touchesUi (true when your change, compared with ${parentRef}, changes user-facing UI), specRead (${specPath ? `the spec path ${specPath}, exactly as you read it` : '"none"'}), and manualChecks ([] when there are no such rows).`
@@ -740,6 +1031,7 @@ Instructions:
 - Stay inside the issue's scope. Record unrelated problems in "outOfScope" without changing them.${qaRule}
 - Commit with Conventional Commits in English, scope "${scopeFor(issue)}", staging files by name. Never rewrite existing commits. Do not push.
 - If you cannot fix it without a decision the spec does not make, return status "blocked" with blockedReason. ${DECISIONS_NOTE}
+When a problem says an out-of-scope item is required by the acceptance criteria, implement it (test first) and copy that item exactly into "outOfScopeDone".
 Return the same structure as the implement stage; "commits" lists only the commits you made now. In "specRead" put the spec path if you read the spec (for example with \`git show ${baseRef}:<path>\`), otherwise "none".`
 }
 
@@ -772,7 +1064,27 @@ ${verifyCfg.lock !== false ? `0. Take the verify lock first, so parallel session
 If you cannot run verification at all (server never started, tool unavailable), return ran=false with the reason in notes; a failure of the code under test is ran=true with pass=false steps.`
 }
 
-function reviewPrompt(issue, branch, state, round) {
+// The scan runs as a shipped script (bin/devflow-scan) in the checkout, so only the hits travel through the agent.
+const pluginRoot = String((args && args.pluginRoot) || '').replace(/\/+$/, '')
+const CONFIG_PATH = '.claude/devflow.json'
+
+function scanPrompt(issue, branch) {
+  return `Run the weakened-checks scan for branch ${branch} (issue #${issue.number}). Read-only: change nothing.
+
+Run exactly: \`node "${pluginRoot}/bin/devflow-scan" ${parentRefFor(issue)} ${CONFIG_PATH}\`
+It prints one JSON object {scanned, hits, error?}. Return scanned and hits exactly as printed (every hit, unchanged) and error when present. If the command cannot be run at all, return scanned=false, hits=[] and the reason in error. Do not produce or print the diff yourself and do not judge the hits.`
+}
+
+// Hits the reviewer accepted as justified (same file and line).
+function acceptedHit(hit, accepted) {
+  return (accepted || []).some((a) => a && a.file === hit.file && Number(a.line) === Number(hit.line))
+}
+
+function hitLine(h) {
+  return `${h.file}${h.line ? ':' + h.line : ''} ${h.kind}${h.text ? ' (' + h.text.slice(0, 80) + ')' : ''}`
+}
+
+function reviewPrompt(issue, branch, state, round, hits) {
   const parentRef = parentRefFor(issue)
   const parents = parentsOf(issue)
   const specPath = specPathFor(issue)
@@ -798,10 +1110,14 @@ Review, in this order:
 2. Tests: does each behaviour change have a test that would fail without it? Were tests weakened? If the issue has a "Test cases" table, every row with priority "must" needs a test traceable to its row id; a missing one is a warning that names the row. If the issue, the spec or the plan states a naming pattern for these tests, a test that does not follow it exactly is a warning too (it is cheap to rename now, not later). ${e2eRule(true)}
 3. Scope creep: changes not needed for the acceptance criteria.
 4. CLAUDE.md conventions and its "Never" list.
+5. Out of scope: an item in the out-of-scope list below that leaves behaviour unmet that the issue's acceptance criteria (or a "must" Test cases row) require is NOT out of scope: report it as critical, naming the criterion (for example "AC2.5 requires X; the out-of-scope note leaves it as is"). Only problems the criteria do not cover may stay out of scope.
+6. Weakened checks: a deterministic scan of the diff found the hits below (new noqa / type: ignore / eslint-disable / ts-ignore, skipped, focused or deleted tests, removed assertions, empty except or catch, edited check configuration). Each one is critical unless the issue itself asks for exactly that change. For each hit either report it as a critical finding (same file and line) or, only when the issue requires it, list it in acceptedWeakenings with the reason; an accepted hit stays in the PR and makes it risk:high. Also report as critical any other weakening of a check that the scan missed.
+Scan hits: ${hits && hits.length ? JSON.stringify(hits) : 'none'}
 Severity: critical = wrong behaviour / data loss / security / rule violation; warning = likely bug, missing test, scope creep; suggestion = optional improvement. Only report real problems with a file and line. verdict "pass" means no critical or warning findings.
 
 Implementation summary: ${state.summary}
 Assumptions recorded so far: ${JSON.stringify(state.assumptions)}
+Out of scope recorded so far: ${JSON.stringify(state.outOfScope)}
 Manual checks (rows checked by hand): ${JSON.stringify(state.manualChecks)}. A "must" Test cases row that is neither covered by a test nor in this list with result pass is a warning that names the row; a manual check with result fail is a warning too.`
 }
 
@@ -839,13 +1155,15 @@ Data:
 - Manual checks (put them in the Tests section as a table: row, result, evidence): ${JSON.stringify(state.manualChecks)}
 - Review notes (suggestions that were NOT applied): ${JSON.stringify(state.suggestions)}
 - Assumptions: ${JSON.stringify(state.assumptions)}
-- Out of scope: ${JSON.stringify(state.outOfScope)}
+- Out of scope: ${JSON.stringify(state.outOfScope)} (review already confirmed none of these is required by the acceptance criteria)${isFixIssue(issue, cfg) ? `
+- Root cause: ${(state.rootCause && state.rootCause.cause) || 'unknown'}; Introduced by: ${(state.rootCause && state.rootCause.introducedBy) || 'unknown'}; Why it was missed: ${(state.rootCause && state.rootCause.whyMissed) || 'unknown'}` : ''}
 - ${riskLine}
 ${stacked ? `- Stacked on ${parentList(issue)}.\n` : ''}
 Steps:
 1. \`git push -u ${remote} ${branch}\`. Never push to ${base} or any protected branch; never force-push.${parents.length === 1 ? `
 1b. Read PR #${parents[0].prNumber} with pull_request_read; it may have been merged (and its branch deleted) while this issue was built. Merged (\`merged_at\` is not null in that result): its changes are in ${base}, so in steps 2 and 3 use base ${base}, leave out the stack line and do not add the "${labels.stacked}" label, and return unstacked=true. Closed without merging: stop and return ok=false with the problem.` : ''}
-2. Open a PR with head ${branch} and base ${prBase} in ${gh.owner}/${gh.repo}. Title: Conventional Commits style summary with scope "${scopeFor(issue)}", English, under 72 characters. Body as described, with a "Risk" section holding exactly this line: "${riskLine}"${stacked ? `, and the line "${stackLine}"` : ''}, ending with the line "Closes #${issue.number}". The body must not contain any at-sign mention of a bot or user, and no AI attribution.
+2. Open a PR with head ${branch} and base ${prBase} in ${gh.owner}/${gh.repo}. Title: Conventional Commits style summary with scope "${scopeFor(issue)}", English, under 72 characters. Body as described,${isFixIssue(issue, cfg) ? ' with the sections "Root cause", "Introduced by" and "Why it was missed" filled from the Root cause data (this is a fix; write "unknown" where the data says so),' : ''} with a "Risk" section holding exactly this line: "${riskLine}"${stacked ? `, and the line "${stackLine}"` : ''}, ending with the line "Closes #${issue.number}". The body must not contain any at-sign mention of a bot or user, and no AI attribution.
+2b. Out of scope: for each out-of-scope item that describes a real problem in the product (not a note about style or a remark), search open issues in ${gh.owner}/${gh.repo} for one that already covers it; if there is none, create an issue titled "[follow-up #${issue.number}] <short summary>" with labels "${labels.triage}" only (never "${labels.ready}": a human triages it) and a body ${args.bugTemplatePath ? `from the bug template at ${args.bugTemplatePath} (keep its headings, "unknown" or "None" where you have nothing)` : 'with the sections Context, Expected, Actual, Repro, Introduced by, Risk, Acceptance criteria, Scope, Test cases and Dependencies'}; Context says it was found while working on #${issue.number}. Then comment on the new issue: suggest a priority (one of ${priorityList.join(', ')}) and a risk (${labels.riskLow} or ${labels.riskHigh}, judged against risk.highWhen and risk.highPaths; unsure means high), each with a one-line reason, and say that a human sets the labels and "${labels.ready}". Do not set those labels yourself. List every such issue in the PR body's "Out of scope" section as "- <item>: #<number>", and return them in followUps (existing=true for one that was already open). Items that are only remarks stay in the section as text.
 3. Label the new PR (a PR is an issue: use issue_write with the PR number; read its labels first, keep existing ones): ${prLabels.map((l) => '"' + l + '"').join(', ')}.
 4. On issue #${issue.number} add the label "${labels.review}" and remove "${labels.inProgress}" (keep other labels).${risk.escalation ? ` Also add "${labels.riskHigh}" to the issue and remove "${labels.riskLow}" (the change was escalated to high).` : ''}
 5. ${isolated ? 'Stay on the branch (this checkout is a dedicated worktree; do not switch branches).' : `\`git switch ${startBranch}\`.`}
@@ -924,7 +1242,7 @@ async function runFix(issue, branch, state, why, details) {
   if (fix.status === 'blocked') return { ok: false, reason: fix.blockedReason || `The fix agent reported blocked (${why}).` }
   merge(state, fix)
   const touched = overlap(fix.filesChanged, state.qaFiles)
-  if (touched.length) return { ok: false, reason: `The fix changed QA test files ${touched.join(', ')}; QA tests are only changed by a human decision.` }
+  if (touched.length) return { ok: false, qaOverlap: true, reason: `The fix changed QA test files ${touched.join(', ')}; QA tests are only changed by a human decision.` }
   return { ok: true, result: fix }
 }
 
@@ -935,8 +1253,10 @@ function merge(state, result) {
   state.commits = state.commits.concat(result.commits)
   state.filesChanged = Array.from(new Set(state.filesChanged.concat(result.filesChanged)))
   state.assumptions = state.assumptions.concat(result.assumptions)
-  state.outOfScope = state.outOfScope.concat(result.outOfScope)
+  const done = new Set((Array.isArray(result.outOfScopeDone) ? result.outOfScopeDone : []).map((x) => String(x).trim()))
+  state.outOfScope = state.outOfScope.concat(result.outOfScope || []).filter((x) => !done.has(String(x).trim()))
   state.touchesUi = state.touchesUi || result.touchesUi
+  if (result.rootCause && result.rootCause.cause) state.rootCause = result.rootCause
   // A later check of the same row (after a fix) replaces the earlier one.
   for (const m of Array.isArray(result.manualChecks) ? result.manualChecks : []) {
     state.manualChecks = state.manualChecks.filter((x) => x.rowId !== m.rowId).concat([m])
@@ -960,6 +1280,9 @@ async function runIssue(issue) {
     verification: null,
     qaFiles: [],
     manualChecks: [],
+    weakened: [],
+    scanProblem: '',
+    rootCause: null,
   }
   let branch = ''
   // Facts the final report states as they happened (the skill prints them, nothing is inferred later).
@@ -1145,6 +1468,23 @@ async function runIssue(issue) {
     if (!readSpec(fix.result, specPath)) return block('Implement', `Implement did not read the spec ${specPath}`)
   }
 
+  // Fix issues need a root cause for the PR: one round to supply it, then ship with "unknown".
+  if (isFixIssue(issue, cfg) && !state.rootCause) {
+    const fix = await runFix(
+      issue,
+      branch,
+      state,
+      'the fix PR needs its root cause',
+      'Find the root cause of the bug this issue fixes and return rootCause (cause, introducedBy, whyMissed). Use `git log -S`, `git blame` on the lines the fix changed and the issue text. Change code only if the cause shows the fix is incomplete.',
+    )
+    // Only a QA-file edit blocks; a root-cause round that died or was blocked ships with "unknown".
+    if (!fix.ok && fix.qaOverlap) return block('Implement', fix.reason)
+    if (!fix.ok) {
+      log(`#${issue.number}: root cause round failed (${fix.reason.split('\n')[0]}); shipping with "unknown".`)
+      notes.push(`root cause round failed (${fix.reason.split('\n')[0]}); the PR says "unknown"`)
+    } else if (!state.rootCause) notes.push('root cause not found; the PR says "unknown"')
+  }
+
   // Check
   const checked = await checkLoop(issue, branch, state)
   if (!checked.ok) return block('Check', checked.reason)
@@ -1179,19 +1519,56 @@ async function runIssue(issue) {
     }
   }
 
-  // Review
+  // Review. Before each round a deterministic scan of the diff (bin/devflow-scan) looks for weakened checks.
   for (let round = 0; round <= nt.maxReviewRounds; round++) {
     phase('Review')
-    const review = await agent(reviewPrompt(issue, branch, state, round), {
-      label: `review #${issue.number} (round ${round + 1})`,
-      phase: 'Review',
-      schema: REVIEW_SCHEMA,
-      model: 'opus',
-    })
+    const scan = pluginRoot
+      ? await agent(scanPrompt(issue, branch), {
+          label: `scan #${issue.number}${round ? ` (round ${round + 1})` : ''}`,
+          phase: 'Review',
+          schema: SCAN_SCHEMA,
+          model: 'haiku',
+        })
+      : null
+    let hits = []
+    if (!pluginRoot) state.scanProblem = 'the weakened-checks scan could not run: no pluginRoot was passed to the engine'
+    else if (!scan) state.scanProblem = 'the weakened-checks scan could not run (the scan agent died)'
+    else if (!scan.scanned) state.scanProblem = `the weakened-checks scan could not run: ${scan.error || 'no reason given'}`
+    else {
+      state.scanProblem = ''
+      hits = (Array.isArray(scan.hits) ? scan.hits : [])
+        .filter((h) => h && h.file)
+        .map((h) => ({ file: String(h.file), line: Number(h.line) || 0, kind: String(h.kind || ''), text: String(h.text || '') }))
+    }
+    if (hits.length) log(`#${issue.number}: weakened-checks scan: ${hits.map(hitLine).join('; ')}`)
+    // The plugin's reviewer agent (agents/reviewer.md) when available; the default subagent otherwise.
+    const reviewOpts = { label: `review #${issue.number} (round ${round + 1})`, phase: 'Review', schema: REVIEW_SCHEMA, model: 'opus' }
+    let review
+    if (nt.reviewerAgent && !reviewerMissing) {
+      try {
+        review = await agent(reviewPrompt(issue, branch, state, round, hits), Object.assign({ agentType: nt.reviewerAgent }, reviewOpts))
+      } catch (e) {
+        reviewerMissing = `reviewer agent ${nt.reviewerAgent} unavailable (${e && e.message ? e.message : e}); reviewed with the default agent`
+        log(`#${issue.number}: ${reviewerMissing}`)
+        notes.push(reviewerMissing)
+      }
+    }
+    if (review === undefined) review = await agent(reviewPrompt(issue, branch, state, round, hits), reviewOpts)
     if (!review) return block('Review', 'The review agent died.')
+    // Every hit is critical unless the reviewer accepted it; an accepted hit makes the PR risk:high at Ship.
+    const accepted = Array.isArray(review.acceptedWeakenings) ? review.acceptedWeakenings : []
+    let injected = 0
+    for (const h of hits) {
+      if (acceptedHit(h, accepted)) continue
+      if (review.findings.some((f) => f.severity === 'critical' && f.file === h.file && Number(f.line) === Number(h.line))) continue
+      injected++
+      review.findings.push({ severity: 'critical', file: h.file, line: h.line, problem: `Weakened check (${h.kind}): ${h.text || h.file}`, fix: 'Remove it and fix the cause instead; keep it only if the issue itself requires it.' })
+    }
+    state.weakened = hits.filter((h) => acceptedHit(h, accepted)).map((h) => Object.assign({}, h, { reason: (accepted.find((a) => a.file === h.file && Number(a.line) === Number(h.line)) || {}).reason || '' }))
     const blocking = review.findings.filter((f) => f.severity !== 'suggestion')
     state.suggestions = review.findings.filter((f) => f.severity === 'suggestion')
-    if (review.verdict === 'pass' || blocking.length === 0) break
+    // A pass verdict does not override a scan hit the reviewer neither reported nor accepted.
+    if ((review.verdict === 'pass' && !injected) || blocking.length === 0) break
     const details = blocking
       .map((f) => `- [${f.severity}] ${f.file}:${f.line}: ${f.problem}\n  Suggested fix: ${f.fix}`)
       .join('\n')
@@ -1214,6 +1591,20 @@ async function runIssue(issue) {
     risk.escalation = escalation
     log(`#${issue.number}: risk escalated to high: ${escalation}`)
   }
+  // Weakened checks that remain after review (accepted as justified), or a scan that could not see the whole diff.
+  const weakReason = (state.weakened || []).length
+    ? `weakened checks kept after review: ${state.weakened.map(hitLine).join('; ')}`
+    : state.scanProblem || ''
+  if (weakReason) {
+    if (risk.level !== 'high') {
+      risk.level = 'high'
+      risk.escalation = risk.escalation ? `${risk.escalation}; ${weakReason}` : weakReason
+    } else {
+      risk.reason = risk.reason ? `${risk.reason}; ${weakReason}` : weakReason
+    }
+    log(`#${issue.number}: risk high: ${weakReason}`)
+    notes.push(`risk high: ${weakReason}`)
+  }
   if (parentsOf(issue).length) log(`#${issue.number}: stacked on ${parentList(issue)}; PR base is ${prBaseFor(issue)}.`)
 
   // Ship
@@ -1229,6 +1620,8 @@ async function runIssue(issue) {
     log(`#${issue.number}: parent PR merged while this issue was built; PR #${ship.prNumber} targets ${base}, not stacked.`)
     notes.push(`parent PR #${parentsOf(issue)[0].prNumber} was merged while this issue was built; the PR targets ${base}, not stacked`)
   }
+  const followUps = Array.isArray(ship.followUps) ? ship.followUps : []
+  if (followUps.length) notes.push(`out-of-scope follow-ups (${labels.triage}): ${followUps.map((f) => '#' + f.number).join(', ')}`)
   const missingManual = state.manualChecks.filter((m) => m.result !== 'pass').map((m) => `${m.rowId} ${m.result}`)
   if (missingManual.length) notes.push(`manual checks not passing: ${missingManual.join(', ')}`)
   return done({
@@ -1261,7 +1654,15 @@ for (const s of selected.skipped) {
   log(`Skipped #${s.number}: ${s.reason}`)
   report.push({ issue: s.number, status: 'skipped', reason: s.reason })
 }
-const queue = selected.issues
+// Deterministic on top of the Select prompt: needs-triage is never worked on; then dependencies, priority, number.
+const queue = []
+for (const i of selected.issues) {
+  if ((i.labels || []).indexOf(labels.triage) !== -1) {
+    log(`Skipped #${i.number}: ${labels.triage}`)
+    report.push({ issue: i.number, status: 'skipped', reason: `${labels.triage}: a human sets it ready first` })
+  } else queue.push(i)
+}
+if (!(chain && explicitIssues.length)) queue.splice(0, queue.length, ...orderIssues(queue, priorityList))
 log(queue.length ? `Candidates: ${queue.map((i) => '#' + i.number).join(', ')}; working on at most ${limit}, sequentially${chain ? ' as a lane (each stacked on the previous one)' : ''}.` : 'No eligible issues.')
 
 // Parents that shipped in this run: issue number -> {prNumber, branch}. Children stack on them.
