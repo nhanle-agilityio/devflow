@@ -385,3 +385,14 @@ test('follow-up issues from Ship are noted', async () => {
   const { rep } = await run({ ...BASE, issues: [1] }, { ship: { followUps: [{ number: 77, title: '[follow-up #1] x' }] } });
   assert.match(rep[0].notes.join(), /out-of-scope follow-ups \(needs-triage\): #77/);
 });
+
+test('parseDiff: --- and +++ inside a hunk are content lines, not file headers', async () => {
+  const { parseDiff, scanWeakenedChecks } = await helpers();
+  const text = 'diff --git a/db/schema.sql b/db/schema.sql\nindex 1..2 100644\n--- a/db/schema.sql\n+++ b/db/schema.sql\n@@ -3,2 +3,2 @@\n--- old comment\n-select 1;\n+++ new counter\n+select 2;\n' +
+    diffOf('tests/test_a.py', '@@ -1,2 +1,1 @@\n-def test_x():\n-    assert 1\n+x = 1');
+  const files = parseDiff(text);
+  assert.deepEqual(files.map((f) => f.file), ['db/schema.sql', 'tests/test_a.py']);
+  assert.deepEqual(files[0].removed, [{ line: 3, text: '-- old comment' }, { line: 4, text: 'select 1;' }]);
+  assert.deepEqual(files[0].added, [{ line: 3, text: '++ new counter' }, { line: 4, text: 'select 2;' }]);
+  assert.ok(scanWeakenedChecks(text, []).some((h) => h.file === 'tests/test_a.py' && /removed 1 test/.test(h.kind)));
+});
