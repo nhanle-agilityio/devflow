@@ -594,10 +594,18 @@ function checkConfigGlobs(checks) {
     '**/.golangci.y*ml',
     '.pre-commit-config.yaml',
     '.github/workflows/*',
+    '.github/scripts/**',
+    '.github/actions/**',
+    '**/conftest.py',
   ]
   for (const c of Array.isArray(checks) ? checks : []) {
     const words = String((c && c.run) || '').split(/\s+/).filter(Boolean)
-    if (/^make$/.test(words[0] || '')) globs.push('Makefile')
+    // Simple commands of the check: split at && || ; |
+    const starts = String((c && c.run) || '')
+      .split(/&&|\|\||;|\|/)
+      .map((part) => part.trim().split(/\s+/)[0] || '')
+    if (starts.some((w) => /^(npm|pnpm|yarn|bun|npx|pnpx|bunx)$/.test(w))) globs.push('**/package.json')
+    if (starts.some((w) => w === 'make')) globs.push('Makefile', '**/Makefile')
     for (const w of words) {
       // A script path in the command (scripts/lint.sh, ./bin/check): a word with a slash and no flag or URL.
       if (/^(\.\/)?[\w.-]+(\/[\w.-]+)+$/.test(w) && !/^(\.\/)?(\.venv|venv|node_modules)\//.test(w)) {
@@ -612,7 +620,9 @@ function checkConfigGlobs(checks) {
 function scanWeakenedChecks(diffText, configGlobs) {
   const isTestFile = (f) =>
     /(^|\/)(tests?|__tests__|spec|specs)\//.test(f) ||
-    /(^|\/)(test_[^/]*\.py|[^/]*_test\.(py|go)|[^/]*\.(test|spec)\.[cm]?[jt]sx?)$/.test(f)
+    /(^|\/)(test_[^/]*\.py|[^/]*_test\.(py|go|rs)|[^/]*\.(test|spec)\.[cm]?[jt]sx?|[^/]*Tests?\.(java|kt)|[^/]*_spec\.rb)$/.test(f) ||
+    /(^|\/)src\/test\//.test(f)
+  const isProse = (f) => /\.(md|mdx|txt|rst|adoc)$/i.test(f) || /(^|\/)docs\//.test(f)
   const ADDED = [
     { kind: 'noqa', re: /#\s*noqa\b/i },
     { kind: 'type: ignore', re: /#\s*type:\s*ignore\b/ },
@@ -622,8 +632,13 @@ function scanWeakenedChecks(diffText, configGlobs) {
     { kind: 'eslint-disable', re: /eslint-disable/ },
     { kind: 'ts-ignore', re: /@ts-(ignore|nocheck|expect-error)\b/ },
     { kind: 'empty except', re: /^\s*except\b[^:]*:\s*(pass|\.\.\.)\s*(#.*)?$/ },
+    { kind: 'nolint', re: /\/\/\s*nolint\b/ },
+    { kind: 'rubocop:disable', re: /#\s*rubocop:disable\b/ },
+    { kind: 'skipped test', re: /@(Disabled|Ignore)\b|#\[ignore\b/ },
     { kind: 'empty catch', re: /\bcatch\s*(\([^)]*\))?\s*\{\s*\}/ },
   ]
+  const GO_SKIP = /\b\w+\.Skip(f|Now)?\(/
+  const HOLLOW = /^\s*assert\s+(True|1)\s*(,.*)?(#.*)?$|expect\(true\)\.(toBe\(true\)|toBeTruthy\(\))|\bassert(\.ok)?\(true\)/
   const TEST_DEF = /^\s*(async\s+)?def\s+test\w*\s*\(|^\s*(it|test)\s*\(|^\s*func\s+Test\w+\s*\(/
   const ASSERT = /\bassert\b|\bself\.assert\w+\(|\bexpect\s*\(|\bassert\w*\s*\(|\bt\.(Error|Fatal)f?\(/
   const configRes = (Array.isArray(configGlobs) ? configGlobs : []).map(globToRegExp)
@@ -638,11 +653,13 @@ function scanWeakenedChecks(diffText, configGlobs) {
       const first = f.added[0] || f.removed[0] || { line: 0, text: '' }
       hits.push({ file: f.file, line: first.line, kind: 'check configuration changed', text: first.text.trim() })
     }
-    for (let i = 0; i < f.added.length; i++) {
+    for (let i = 0; i < f.added.length && !isProse(f.file); i++) {
       const a = f.added[i]
       for (const p of ADDED) {
         if (p.re.test(a.text)) hits.push({ file: f.file, line: a.line, kind: p.kind, text: a.text.trim() })
       }
+      if (/_test\.go$/.test(f.file) && GO_SKIP.test(a.text)) hits.push({ file: f.file, line: a.line, kind: 'skipped test', text: a.text.trim() })
+      if (isTestFile(f.file) && HOLLOW.test(a.text)) hits.push({ file: f.file, line: a.line, kind: 'hollow assertion', text: a.text.trim() })
       // "except ...:" with "pass" on the next added line
       const next = f.added[i + 1]
       if (/^\s*except\b[^:]*:\s*(#.*)?$/.test(a.text) && next && next.line === a.line + 1 && /^\s*(pass|\.\.\.)\s*(#.*)?$/.test(next.text)) {
