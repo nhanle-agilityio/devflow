@@ -1282,6 +1282,7 @@ async function runIssue(issue) {
     manualChecks: [],
     weakened: [],
     scanProblem: '',
+    verifyProblem: '',
     rootCause: null,
   }
   let branch = ''
@@ -1505,9 +1506,12 @@ async function runIssue(issue) {
       if (!v) return block('Verify', 'The verify agent died.')
       state.verification = v
       if (!v.ran) {
+        const why = String(v.notes || '').split('\n')[0].trim() || 'no reason given'
+        state.verifyProblem = `verification was required but could not run: ${why}`
         log(`#${issue.number}: verification could not run (${v.notes}); continuing without it.`)
         break
       }
+      state.verifyProblem = ''
       const bad = failedSteps(v)
       if (bad.length === 0) break
       const details = bad.map((s) => `- ${s.action}: expected ${s.expected}; actual ${s.actual}`).join('\n')
@@ -1592,9 +1596,15 @@ async function runIssue(issue) {
     log(`#${issue.number}: risk escalated to high: ${escalation}`)
   }
   // Weakened checks that remain after review (accepted as justified), or a scan that could not see the whole diff.
-  const weakReason = (state.weakened || []).length
-    ? `weakened checks kept after review: ${state.weakened.map(hitLine).join('; ')}`
-    : state.scanProblem || ''
+  // A verification that was required but could not run counts the same way.
+  const weakReason = [
+    (state.weakened || []).length
+      ? `weakened checks kept after review: ${state.weakened.map(hitLine).join('; ')}`
+      : state.scanProblem || '',
+    state.verifyProblem || '',
+  ]
+    .filter(Boolean)
+    .join('; ')
   if (weakReason) {
     if (risk.level !== 'high') {
       risk.level = 'high'

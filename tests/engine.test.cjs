@@ -62,7 +62,7 @@ async function run(args, opts = {}) {
       );
     }
     if (l.startsWith('check')) return { passed: true, failures: [] };
-    if (l.startsWith('verify')) return { ran: true, mode: 'http', steps: [], notes: '' };
+    if (l.startsWith('verify')) return Object.assign({ ran: true, mode: 'http', steps: [], notes: '' }, pick(opts.verify, n) || {});
     // The scan agent runs bin/devflow-scan and returns its hits; the stub scans opts.diff with the same helpers.
     if (l.startsWith('scan')) {
       const text = pick(opts.diff, n);
@@ -377,6 +377,33 @@ test('a scan that cannot run makes the PR risk high with the reason', async () =
   r = await run({ ...BASE, pluginRoot: '', issues: [1] });
   assert.ok(!has(r.calls, 'scan'));
   assert.match(prompt(r.calls, 'ship'), /scan could not run: no pluginRoot/);
+});
+
+const VERIFY_CFG = { ...CFG, verify: { modes: ['http'], devServer: { run: 'make run', url: 'http://127.0.0.1:5050' } } };
+const VERIFY_LABELS = ['needs-e2e', 'risk:low'];
+
+test('verification that could not run makes a risk:low PR high with the reason', async () => {
+  const { rep, calls } = await run({ ...BASE, config: VERIFY_CFG, issues: [1] }, { labels: VERIFY_LABELS, verify: { ran: false, notes: 'verify lock busy\nsecond line' } });
+  assert.equal(rep[0].status, 'pr');
+  assert.equal(rep[0].risk, 'high');
+  const ship = prompt(calls, 'ship');
+  assert.match(ship, /escalated from the issue label: verification was required but could not run: verify lock busy/);
+  assert.match(ship, /- Risk: .*verify lock busy\n/);
+  assert.match(ship, /Also add "risk:high" to the issue/);
+  assert.match(rep[0].notes.join(), /risk high: verification was required but could not run: verify lock busy/);
+});
+
+test('verification that runs and passes keeps a risk:low PR low', async () => {
+  const { rep, calls } = await run({ ...BASE, config: VERIFY_CFG, issues: [1] }, { labels: VERIFY_LABELS });
+  assert.equal(rep[0].risk, 'low');
+  assert.doesNotMatch(prompt(calls, 'ship'), /could not run/);
+});
+
+test('a verify problem and a scan problem both appear in the risk reason', async () => {
+  const { rep, calls } = await run({ ...BASE, config: VERIFY_CFG, issues: [1] }, { labels: VERIFY_LABELS, verify: { ran: false, notes: 'verify lock busy' }, scanFails: true });
+  assert.equal(rep[0].risk, 'high');
+  assert.match(prompt(calls, 'ship'), /the weakened-checks scan could not run: fatal: bad revision; verification was required but could not run: verify lock busy/);
+  assert.match(rep[0].notes.join(), /verification was required but could not run: verify lock busy/);
 });
 
 test('the scan agent runs the shipped script, not a diff relay', async () => {
