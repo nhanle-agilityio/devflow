@@ -547,16 +547,23 @@ test('a root-cause round that edits a QA file still blocks', async () => {
 
 const scanKinds = (scan, text, globs) => scan(text, globs).map((h) => `${h.file}:${h.line} ${h.kind}`);
 
-test('checkConfigGlobs covers package.json for npm-style checks in any simple command', async () => {
-  const { checkConfigGlobs, globToRegExp } = await helpers();
-  for (const run of ['npm test', 'pnpm lint', 'yarn test', 'bun test', 'npx jest', 'pnpx tsc', 'bunx vitest', 'cd web && npm run lint', 'echo hi; yarn test', 'a | npx x']) {
-    assert.ok(checkConfigGlobs([{ name: 't', run }]).includes('**/package.json'), run);
+test('package.json hits only on script and tool-config lines, whatever the checks run', async () => {
+  const { scanWeakenedChecks, checkConfigGlobs } = await helpers();
+  assert.ok(!checkConfigGlobs([{ name: 't', run: 'npm test' }]).includes('**/package.json'));
+  const kinds = (hunk) => scanKinds(scanWeakenedChecks, diffOf('web/package.json', hunk), checkConfigGlobs([{ name: 't', run: 'make test' }]));
+  assert.deepEqual(kinds('@@ -3 +3 @@\n-    "test": "jest"\n+    "test": "true"'), ['web/package.json:3 check configuration changed']);
+  assert.deepEqual(kinds('@@ -4 +3,0 @@\n-    "lint": "eslint ."'), ['web/package.json:4 check configuration changed']);
+  assert.deepEqual(kinds('@@ -0,0 +5 @@\n+  "jest": {'), ['web/package.json:5 check configuration changed']);
+  assert.deepEqual(kinds('@@ -0,0 +5,2 @@\n+    "test": "true",\n+    "lint": "true"'), ['web/package.json:5 check configuration changed']);
+  for (const hunk of [
+    '@@ -0,0 +5 @@\n+    "lodash": "^4.17.21",',
+    '@@ -0,0 +5 @@\n+    "jest": "^29.7.0"',
+    '@@ -0,0 +5 @@\n+    "lint-staged": "^15.0.0"',
+    '@@ -0,0 +5 @@\n+    "test": "^1.2.3"',
+    '@@ -0,0 +5 @@\n+    "build": "workspace:*"',
+  ]) {
+    assert.deepEqual(kinds(hunk), [], hunk);
   }
-  assert.ok(!checkConfigGlobs([{ name: 't', run: '.venv/bin/pytest -q' }]).includes('**/package.json'));
-  assert.ok(!checkConfigGlobs([{ name: 't', run: 'echo npm' }]).includes('**/package.json'));
-  const text = diffOf('package.json', '@@ -3 +3 @@\n-    "test": "jest"\n+    "test": "true"');
-  const { scanWeakenedChecks } = await helpers();
-  assert.ok(scanKinds(scanWeakenedChecks, text, checkConfigGlobs([{ name: 't', run: 'npm test' }])).includes('package.json:3 check configuration changed'));
 });
 
 test('checkConfigGlobs covers Makefile when any simple command runs make', async () => {
@@ -567,11 +574,11 @@ test('checkConfigGlobs covers Makefile when any simple command runs make', async
   assert.ok(!checkConfigGlobs([{ name: 't', run: 'echo make' }]).some((g) => /Makefile/.test(g)));
 });
 
-test('checkConfigGlobs always covers conftest.py and .github scripts and actions', async () => {
+test('checkConfigGlobs always covers .github scripts and actions', async () => {
   const { checkConfigGlobs, globToRegExp } = await helpers();
   const globs = checkConfigGlobs([]);
   const covered = (f) => globs.some((g) => globToRegExp(g).test(f));
-  assert.ok(covered('tests/conftest.py') && covered('conftest.py'));
+  assert.ok(!covered('tests/conftest.py'));
   assert.ok(covered('.github/scripts/check.sh') && covered('.github/actions/setup/action.yml'));
 });
 
@@ -632,4 +639,12 @@ test('scanWeakenedChecks skips line patterns in prose and docs files but not con
   assert.deepEqual(del.map((h) => h.kind), ['deleted test file']);
   // a real noqa in code still hits
   assert.deepEqual(scanKinds(scanWeakenedChecks, diffOf('app/a.py', '@@ -0,0 +1 @@\n+import os  # noqa'), []), ['app/a.py:1 noqa']);
+});
+
+test('conftest.py hits only when it ignores test collection', async () => {
+  const { scanWeakenedChecks, checkConfigGlobs } = await helpers();
+  const kinds = (hunk) => scanKinds(scanWeakenedChecks, diffOf('tests/conftest.py', hunk), checkConfigGlobs([]));
+  assert.deepEqual(kinds('@@ -0,0 +1,3 @@\n+@pytest.fixture\n+def db():\n+    return 1'), []);
+  assert.deepEqual(kinds('@@ -0,0 +1 @@\n+collect_ignore = ["test_slow.py"]'), ['tests/conftest.py:1 collection ignored']);
+  assert.deepEqual(kinds('@@ -0,0 +1 @@\n+def pytest_ignore_collect(path):'), ['tests/conftest.py:1 collection ignored']);
 });
