@@ -28,7 +28,7 @@ async function run(args, opts = {}) {
     const n = Number((/#(\d+)/.exec(l) || [])[1]);
     if (l === 'select issues') {
       return {
-        issues: (args.issues || []).map((i) => ({ number: i, title: 't' + i, labels: [], body: 'spec docs/specs/a.md', dependsOn: [], parents: [] })),
+        issues: (args.issues || []).map((i) => ({ number: i, title: 't' + i, labels: opts.labels || [], body: 'spec docs/specs/a.md', dependsOn: [], parents: [] })),
         skipped: [],
       };
     }
@@ -57,7 +57,11 @@ async function run(args, opts = {}) {
     }
     if (l.startsWith('check')) return { passed: true, failures: [] };
     if (l.startsWith('verify')) return { ran: true, mode: 'http', steps: [], notes: '' };
-    if (l.startsWith('review')) return { verdict: 'pass', findings: [] };
+    if (l.startsWith('diff')) return pick(opts.diff, n) === null ? null : { diff: pick(opts.diff, n) || '', truncated: !!opts.truncated };
+    if (l.startsWith('review')) {
+      const r = pick(opts.review, n);
+      return r ? JSON.parse(JSON.stringify(r)) : { verdict: 'pass', findings: [] };
+    }
     if (l.startsWith('ship')) return Object.assign({ ok: true, prNumber: 100 + n, url: 'u' + n }, pick(opts.ship, n) || {});
     if (l.startsWith('blocked')) return { ok: true, pushed: false };
     if (l.startsWith('restore')) return { ok: true };
@@ -67,6 +71,10 @@ async function run(args, opts = {}) {
   const fn = new AsyncFunction('args', 'agent', 'phase', 'log', 'parallel', SRC);
   const rep = await fn(args, agent, () => {}, (m) => logs.push(m), parallel);
   return { rep, calls, logs };
+}
+async function helpers() {
+  const fn = new AsyncFunction('args', 'agent', 'phase', 'log', 'parallel', SRC);
+  return fn({ exports: true }, null, () => {}, () => {}, null);
 }
 const labels = (calls) => calls.map((c) => c.l.split(' ')[0]);
 const prompt = (calls, label) => (calls.find((c) => c.l.startsWith(label)) || {}).prompt || '';
@@ -81,7 +89,7 @@ test('runs without args stops with a message', async () => {
 test('one issue goes through every stage in order', async () => {
   const { rep, calls } = await run({ ...BASE, issues: [1] });
   assert.equal(rep[0].status, 'pr');
-  assert.deepEqual(labels(calls), ['select', 'claim', 'branch', 'plan', 'implement', 'check', 'review', 'ship', 'restore']);
+  assert.deepEqual(labels(calls), ['select', 'claim', 'branch', 'plan', 'implement', 'check', 'diff', 'review', 'ship', 'restore']);
   assert.match(prompt(calls, 'implement'), /PLAN1/);
   assert.equal(calls.find((c) => c.l.startsWith('review')).model, 'opus');
 });
@@ -238,4 +246,142 @@ test('verify takes the lock unless verify.lock is false', async () => {
   r = await run({ ...BASE, config: { ...cfg, verify: { ...cfg.verify, lock: false } }, issues: [1] }, { devOut: { touchesUi: true } });
   assert.ok(has(r.calls, 'verify'));
   assert.doesNotMatch(prompt(r.calls, 'verify'), /devflow-verify\.lock/);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Weakened checks (D1) and out-of-scope items (D2)
+// ---------------------------------------------------------------------------------------------
+
+const diffOf = (file, hunk, extra = '') =>
+  `diff --git a/${file} b/${file}\n${extra}--- a/${file}\n+++ b/${file}\n${hunk}\n`;
+
+test('parseDiff reads files, line numbers and deletions', async () => {
+  const { parseDiff } = await helpers();
+  const text = diffOf('src/a.py', '@@ -10,2 +12,3 @@\n-old\n+new1\n+new2') + diffOf('tests/test_b.py', '@@ -1,3 +0,0 @@\n-def test_x():\n-    assert 1', 'deleted file mode 100644\n');
+  const files = parseDiff(text);
+  assert.equal(files.length, 2);
+  assert.deepEqual(files[0].added, [{ line: 12, text: 'new1' }, { line: 13, text: 'new2' }]);
+  assert.deepEqual(files[0].removed, [{ line: 10, text: 'old' }]);
+  assert.equal(files[1].deleted, true);
+});
+
+test('scanWeakenedChecks finds every kind of weakened check', async () => {
+  const { scanWeakenedChecks, checkConfigGlobs } = await helpers();
+  const globs = checkConfigGlobs([{ name: 'lint', run: '.venv/bin/ruff check .' }, { name: 'test', run: 'make test' }, { name: 'e2e', run: 'scripts/e2e.sh' }]);
+  const text = [
+    diffOf('src/a.py', '@@ -0,0 +1,6 @@\n+import os  # noqa: F401\n+x = f()  # type: ignore\n+try:\n+    g()\n+except Exception:\n+    pass'),
+    diffOf('tests/test_a.py', '@@ -3,4 +3,1 @@\n-def test_one():\n-    assert a == 1\n-    assert b == 2\n+@pytest.mark.skip(reason="flaky")'),
+    diffOf('web/a.test.ts', '@@ -0,0 +1,4 @@\n+it.only("x", () => {})\n+// eslint-disable-next-line\n+// @ts-ignore\n+try { f() } catch (e) {}'),
+    diffOf('tests/test_old.py', '@@ -1,2 +0,0 @@\n-def test_gone():\n-    assert True', 'deleted file mode 100644\n'),
+    diffOf('pyproject.toml', '@@ -5 +5 @@\n-select = ["E", "F"]\n+select = ["E"]'),
+    diffOf('Makefile', '@@ -1 +1 @@\n-test:\n+test: # x'),
+    diffOf('scripts/e2e.sh', '@@ -1 +1 @@\n-run all\n+run some'),
+  ].join('');
+  const kinds = scanWeakenedChecks(text, globs).map((h) => `${h.file}:${h.line} ${h.kind}`);
+  for (const want of [
+    'src/a.py:1 noqa',
+    'src/a.py:2 type: ignore',
+    'src/a.py:5 empty except',
+    'tests/test_a.py:3 skipped test',
+    'tests/test_a.py:3 removed 1 test(s)',
+    'tests/test_a.py:4 removed 2 assertion(s)',
+    'web/a.test.ts:1 skipped or focused test',
+    'web/a.test.ts:2 eslint-disable',
+    'web/a.test.ts:3 ts-ignore',
+    'web/a.test.ts:4 empty catch',
+    'tests/test_old.py:0 deleted test file',
+    'pyproject.toml:5 check configuration changed',
+    'Makefile:1 check configuration changed',
+    'scripts/e2e.sh:1 check configuration changed',
+  ]) {
+    assert.ok(kinds.includes(want), `missing ${want} in ${kinds.join(' | ')}`);
+  }
+});
+
+test('scanWeakenedChecks ignores clean changes and moved assertions', async () => {
+  const { scanWeakenedChecks, checkConfigGlobs } = await helpers();
+  const text = [
+    diffOf('src/a.py', '@@ -1 +1,2 @@\n-x = 1\n+x = 2\n+# a comment about noqa-free code is fine'),
+    diffOf('tests/test_a.py', '@@ -3,2 +3,3 @@\n-    assert a == 1\n+    assert a == 2\n+    assert b == 3'),
+    diffOf('src/b.ts', '@@ -0,0 +1 @@\n+try { f() } catch (e) { log(e) }'),
+  ].join('');
+  assert.deepEqual(scanWeakenedChecks(text, checkConfigGlobs([{ name: 't', run: 'npm test' }])), []);
+});
+
+test('checkConfigGlobs adds Makefile for make checks and script paths, not tool binaries', async () => {
+  const { checkConfigGlobs } = await helpers();
+  const globs = checkConfigGlobs([{ name: 'a', run: 'make lint' }, { name: 'b', run: './bin/check --all' }, { name: 'c', run: '.venv/bin/pytest -q' }]);
+  assert.ok(globs.includes('Makefile') && globs.includes('bin/check') && globs.includes('.claude/devflow.json'));
+  assert.ok(!globs.some((g) => g.includes('.venv')));
+});
+
+const NOQA = diffOf('src/x.py', '@@ -0,0 +1 @@\n+import os  # noqa');
+
+test('scan hits reach review and become critical findings that a fix round must address', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { diff: NOQA });
+  assert.match(prompt(calls, 'review'), /Scan hits: \[.*"kind":"noqa"/);
+  assert.ok(has(calls, 'fix'));
+  assert.match(prompt(calls, 'fix'), /\[critical\] src\/x\.py:1: Weakened check \(noqa\)/);
+  // the stub keeps returning the same diff, so the review never passes
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(rep[0].reason, /^Review:/);
+});
+
+test('a hit gone after the fix ships with the issue risk', async () => {
+  const calls_seen = { n: 0 };
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { diff: () => (calls_seen.n++ === 0 ? NOQA : '') });
+  assert.equal(rep[0].status, 'pr');
+  assert.match(prompt(calls, 'ship'), /Risk: high \(the issue has no risk label/);
+  assert.doesNotMatch(prompt(calls, 'ship'), /weakened checks kept/);
+});
+
+test('a hit the reviewer accepts ships as risk high with the reason', async () => {
+  const review = { verdict: 'pass', findings: [], acceptedWeakenings: [{ file: 'src/x.py', line: 1, reason: 'the issue asks for it' }] };
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { diff: NOQA, review });
+  assert.equal(rep[0].status, 'pr');
+  assert.ok(!has(calls, 'fix'));
+  assert.equal(rep[0].risk, 'high');
+  assert.match(prompt(calls, 'ship'), /weakened checks kept after review: src\/x\.py:1 noqa/);
+  assert.match(rep[0].notes.join(), /risk high: weakened checks kept/);
+});
+
+test('an accepted hit escalates a risk:low issue to high and relabels the issue', async () => {
+  const review = { verdict: 'pass', findings: [], acceptedWeakenings: [{ file: 'src/x.py', line: 1, reason: 'needed' }] };
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { diff: NOQA, review, labels: ['risk:low'] });
+  assert.equal(rep[0].risk, 'high');
+  const ship = prompt(calls, 'ship');
+  assert.match(ship, /escalated from the issue label: weakened checks kept after review/);
+  assert.match(ship, /Also add "risk:high" to the issue/);
+});
+
+test('a scan that cannot run or is truncated makes the PR risk high', async () => {
+  let r = await run({ ...BASE, issues: [1] }, { diff: null });
+  assert.equal(r.rep[0].status, 'pr');
+  assert.match(prompt(r.calls, 'ship'), /scan could not run/);
+  r = await run({ ...BASE, issues: [1] }, { truncated: true });
+  assert.match(prompt(r.calls, 'ship'), /saw only the first 5000 diff lines/);
+});
+
+test('review gets the out-of-scope list and the rule that a criterion is never out of scope', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] }, { devOut: { outOfScope: ['AC2.5 sort order: left as is'] } });
+  const p = prompt(calls, 'review');
+  assert.match(p, /Out of scope recorded so far: \["AC2\.5 sort order: left as is"\]/);
+  assert.match(p, /is NOT out of scope: report it as critical/);
+});
+
+test('a fix that implements an out-of-scope item removes it before Ship', async () => {
+  const calls_round = { n: 0, dev: 0 };
+  const review = (n) => (calls_round.n++ === 0 ? { verdict: 'changes', findings: [{ severity: 'critical', file: 'src/x.py', line: 1, problem: 'AC2.5 required', fix: 'do it' }] } : null);
+  const devOut = (n) => (calls_round.dev++ === 0 ? { outOfScope: ['AC2.5 sort order: left as is', 'typo in README'] } : { outOfScopeDone: ['AC2.5 sort order: left as is'] });
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { review, devOut });
+  assert.equal(rep[0].status, 'pr');
+  const ship = prompt(calls, 'ship');
+  assert.match(ship, /Out of scope: \["typo in README"\]/);
+  assert.match(ship, /\[follow-up #1\]/);
+  assert.match(ship, /labels "needs-triage" only/);
+});
+
+test('follow-up issues from Ship are noted', async () => {
+  const { rep } = await run({ ...BASE, issues: [1] }, { ship: { followUps: [{ number: 77, title: '[follow-up #1] x' }] } });
+  assert.match(rep[0].notes.join(), /out-of-scope follow-ups \(needs-triage\): #77/);
 });
