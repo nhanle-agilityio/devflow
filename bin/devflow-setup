@@ -32,39 +32,125 @@ function simpleCommands(run) {
     .filter(Boolean);
 }
 
-// A prefix rule for one simple command: drop trailing path-like or flag arguments that change per call
-// ("." or "src"), keep the program and its subcommand words.
+// Programs that run other code: never a bare rule for them.
+const RUNNERS = new Set(['python', 'node', 'bash', 'sh', 'zsh', 'npx', 'uv', 'uvx', 'poetry', 'pipx', 'pnpx', 'bun', 'bunx', 'deno', 'ruby', 'perl', 'php']);
+// Programs that wrap an arbitrary command: no safe prefix at all.
+const WRAPPERS = new Set(['env', 'sudo', 'time', 'nice', 'nohup', 'xargs', 'exec', 'command', 'doas']);
+// Words of a runner that come before the real tool (uv run pytest, pnpm dlx x, pipx run y).
+const RUNNER_SUBCOMMANDS = new Set(['run', 'exec', 'dlx', 'x', 'tool']);
+// Flags that run inline code: nothing after them can be pinned.
+const INLINE_CODE = new Set(['-c', '-e', '--eval', '-p', '--print', '--command']);
+// Runner flags whose value names the tool (python -m pytest).
+const VALUE_FLAGS = new Set(['-m']);
+// A runner rule with flags only is specific enough for these.
+const SAFE_FLAG_ONLY = new Set(['--test']);
+
+const baseName = (w) => w.split('/').pop();
+const isRunner = (w) => RUNNERS.has(baseName(w)) || /^python[\d.]+$/.test(baseName(w));
+const hasQuote = (w) => /["'`$]/.test(w);
+const isGlob = (w) => /[*?[\]{}]/.test(w) || w === '.' || w === './' || w === ':/';
+const isPath = (w) => w.includes('/') || /\.[A-Za-z0-9]+$/.test(w) || w.startsWith('.');
+
+// {rule} for one simple command, or {rule: null, reason} when no safe specific prefix exists.
+// Plain tools keep up to two subcommand words (make test, npm run lint, .venv/bin/ruff check). Runners keep their
+// flags and the tool they run, up to the first path or glob (python3 -m pytest, node --test, npx --yes prettier,
+// uv run pytest); a concrete script operand is kept (bash scripts/check.sh). The rule is always a real prefix of
+// the command, so it matches what actually runs.
 function prefixOf(cmd) {
-  const words = cmd.split(/\s+/);
-  const keep = [words[0]];
-  for (const w of words.slice(1)) {
-    if (w === '.' || w.startsWith('-') || w.includes('{') || w.includes('=') || w.includes('"') || w.includes("'")) break;
-    keep.push(w);
-    if (keep.length >= 3) break;
+  const words = cmd.trim().split(/\s+/);
+  const prog = words[0];
+  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(prog)) return { rule: null, reason: 'starts with a variable assignment' };
+  if (WRAPPERS.has(baseName(prog))) return { rule: null, reason: `${baseName(prog)} wraps another command` };
+  if (!isRunner(prog)) {
+    const keep = [prog];
+    for (const w of words.slice(1)) {
+      if (w.startsWith('-') || isGlob(w) || hasQuote(w) || w.includes('=')) break;
+      keep.push(w);
+      if (keep.length >= 3) break;
+    }
+    return { rule: keep.join(' ') };
   }
-  return keep.join(' ');
+  const keep = [prog];
+  let tool = '';
+  let flags = 0;
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i];
+    if (INLINE_CODE.has(w)) return { rule: null, reason: `${baseName(prog)} ${w} runs inline code` };
+    if (hasQuote(w) || isGlob(w)) break;
+    if (w.startsWith('-')) {
+      keep.push(w);
+      flags++;
+      if (VALUE_FLAGS.has(w) && words[i + 1] && !hasQuote(words[i + 1])) {
+        keep.push(words[++i]);
+        tool = words[i];
+        if (!isRunner(tool)) break;
+      }
+      continue;
+    }
+    if (isPath(w)) {
+      if (!tool) {
+        keep.push(w); // a concrete script (bash scripts/check.sh, python manage.py) is specific
+        tool = w;
+      }
+      break;
+    }
+    keep.push(w);
+    if (RUNNER_SUBCOMMANDS.has(w) && !tool) continue;
+    tool = w;
+    if (!isRunner(w)) break;
+  }
+  if (tool && !isRunner(tool)) return { rule: keep.join(' ') };
+  if (!tool && flags && keep.slice(1).every((w) => SAFE_FLAG_ONLY.has(w))) return { rule: keep.join(' ') };
+  return { rule: null, reason: `no specific prefix for ${baseName(prog)}` };
 }
 
-function allowRules(config, opts = {}) {
+// The origin (scheme://host[:port]) of a URL, or '' when it does not parse.
+function originOf(url) {
+  const m = /^(https?:\/\/[^/\s?#]+)/i.exec(String(url || ''));
+  return m ? m[1] : '';
+}
+
+// Never emitted, whatever the config says.
+const FORBIDDEN = /merge_pull_request|gh pr merge|--force|git push:\*|git push -u:\*/;
+
+// {allow, manual}: manual lists commands with no safe specific prefix, for the user to allow by hand.
+function allowPlan(config, opts = {}) {
   const c = config || {};
   const remote = (c.github && c.github.remote) || 'origin';
   const rules = new Set(GIT_RULES.map((g) => `Bash(${g}:*)`));
+  const manual = [];
   rules.add(`Bash(git push -u ${remote}:*)`);
   rules.add(`Bash(git push ${remote}:*)`);
   const commands = []
     .concat((Array.isArray(c.checks) ? c.checks : []).map((x) => x && x.run))
     .concat(c.verify && c.verify.devServer ? [c.verify.devServer.run] : [])
     .concat(c.worktree && Array.isArray(c.worktree.setup) ? c.worktree.setup : []);
-  for (const run of commands) for (const cmd of simpleCommands(run)) rules.add(`Bash(${prefixOf(cmd)}:*)`);
+  for (const run of commands) {
+    for (const cmd of simpleCommands(run)) {
+      const p = prefixOf(cmd);
+      if (p.rule) rules.add(`Bash(${p.rule}:*)`);
+      else if (!manual.some((m) => m.command === cmd)) manual.push({ command: cmd, reason: p.reason });
+    }
+  }
   const verify = c.verify || {};
   const modes = Array.isArray(verify.modes) ? verify.modes : [];
-  if (modes.includes('http')) rules.add('Bash(curl:*)');
+  if (modes.includes('http')) {
+    const origin = originOf(verify.devServer && verify.devServer.url);
+    if (origin) {
+      rules.add(`Bash(curl ${origin}/*)`);
+      rules.add(`Bash(curl * ${origin}/*)`);
+    } else {
+      rules.add('Bash(curl:*)');
+    }
+  }
   if (modes.includes('browser')) rules.add(verify.browserTool === 'chrome' ? 'mcp__claude-in-chrome__*' : 'mcp__playwright__*');
   rules.add(opts.githubMcp || 'mcp__github__*');
-  for (const r of rules) {
-    if (/merge_pull_request|gh pr merge|--force|git push:\*|git push -u:\*/.test(r)) rules.delete(r);
-  }
-  return [...rules].sort();
+  for (const r of rules) if (FORBIDDEN.test(r)) rules.delete(r);
+  return { allow: [...rules].sort(), manual };
+}
+
+function allowRules(config, opts = {}) {
+  return allowPlan(config, opts).allow;
 }
 
 function deepEqual(a, b) {
@@ -149,7 +235,7 @@ function ownedLeftovers({ settings, config, files } = {}) {
 }
 
 if (require.main !== module) {
-  module.exports = { allowRules, minimalConfig, ownedLeftovers, simpleCommands, prefixOf };
+  module.exports = { allowRules, allowPlan, minimalConfig, ownedLeftovers, simpleCommands, prefixOf, originOf };
 } else {
   const argv = process.argv.slice(2);
   if (!argv.length || argv.some((a) => a === '--help' || a === '-h')) {
@@ -165,7 +251,9 @@ if (require.main !== module) {
       let out;
       if (argv[0] === 'allow') {
         const i = argv.indexOf('--github-mcp');
-        out = { permissions: { allow: allowRules(input, { githubMcp: i !== -1 ? argv[i + 1] : undefined }) } };
+        const plan = allowPlan(input, { githubMcp: i !== -1 ? argv[i + 1] : undefined });
+        // manual: commands with no safe specific prefix; the user allows them by hand.
+        out = { permissions: { allow: plan.allow }, manual: plan.manual };
       } else if (argv[0] === 'minimal') {
         if (!argv[1]) throw new Error('minimal needs the schema path');
         out = minimalConfig(input, JSON.parse(require('fs').readFileSync(argv[1], 'utf8')));
