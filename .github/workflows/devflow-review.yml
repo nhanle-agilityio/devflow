@@ -1,0 +1,198 @@
+name: devflow review (reusable)
+
+# Reusable form of skills/init/templates/github/workflows/claude-code-review.yml, called by the thin caller
+# that /devflow:init installs (skills/init/templates/github/callers/claude-code-review.yml), pinned to a devflow tag.
+# The jobs below are kept identical to the template (tests/reusable.test.cjs checks it); only the trigger differs.
+# The caller passes its secrets (secrets: inherit) and grants the permissions; concurrency lives in the caller.
+# A private devflow repository must allow access from the calling repositories:
+# Settings > Actions > General > Access > "Accessible from repositories owned by the user".
+
+on:
+  workflow_call:
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      statuses: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Set devflow/review to pending
+        uses: actions/github-script@v9
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              ...context.repo,
+              sha: context.payload.pull_request.head.sha,
+              state: 'pending',
+              context: 'devflow/review',
+              description: 'Review in progress',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });
+
+      - name: Carry over the previous result when only the base was merged
+        id: carry
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const headSha = pr.head.sha;
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              ...context.repo, pull_number: pr.number, per_page: 100,
+            });
+            // Oldest first. Walk back from the commit before the head.
+            const isBaseMerge = (c) =>
+              c.parents.length === 2 &&
+              (c.committer?.login === 'web-flow' || c.commit?.committer?.name === 'GitHub');
+            let previous = null;
+            let index = commits.length - 2;
+            for (; index >= 0 && commits.length - index <= 31; index--) {
+              const sha = commits[index].sha;
+              const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+                ...context.repo, ref: sha, per_page: 100,
+              });
+              // Newest first: the first devflow/review entry is the latest one for this commit.
+              const latest = statuses.find((s) => s.context === 'devflow/review' && s.state !== 'pending');
+              if (latest && ['success', 'failure'].includes(latest.state) &&
+                  latest.creator?.login === 'github-actions[bot]') {
+                previous = { sha, state: latest.state, description: latest.description || '' };
+                break;
+              }
+              // A status-less commit in between is fine only if it is itself a base merge.
+              if (!isBaseMerge(commits[index])) break;
+            }
+            // Only a real review verdict is carried over: a pass, or findings ("N critical, M warning").
+            // A failure without a verdict (e.g. "No verdict ...") is an infrastructure problem: review again.
+            const findings = previous && /\d+ critical, \d+ warning/.exec(previous.description);
+            const verdict = previous && (previous.state === 'success' || findings);
+            // A change to this workflow in the merged commits also needs a fresh review.
+            let workflowChanged = false;
+            if (verdict) {
+              const cmp = await github.rest.repos.compareCommitsWithBasehead({
+                ...context.repo, basehead: `${previous.sha}...${headSha}`,
+              });
+              workflowChanged = (cmp.data.files || []).some((f) => f.filename === '.github/workflows/claude-code-review.yml');
+            }
+            let skip = false;
+            if (verdict && !workflowChanged && commits.slice(index + 1).every(isBaseMerge)) {
+              skip = true;
+              const what = previous.state === 'success' ? 'review passed' : findings[0];
+              await github.rest.repos.createCommitStatus({
+                ...context.repo,
+                sha: headSha,
+                state: previous.state,
+                context: 'devflow/review',
+                description: `Carried over from ${previous.sha.slice(0, 7)} (${what}): only base merges since`,
+                target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              });
+            }
+            core.setOutput('skip', String(skip));
+
+      - name: Review the PR
+        if: steps.carry.outputs.skip != 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this pull request. Read CLAUDE.md and .claude/devflow.json first; the conventions
+            and "Never" rules in CLAUDE.md are the review rules. If the PR body has a "Closes #<n>"
+            line, read that issue: its acceptance criteria and its Test cases table are what the change
+            must satisfy. Check for:
+
+            1. Correctness: bugs and missed edge cases in the changed code.
+            2. Tests: does each behaviour change have a test that would fail without it? Is every
+               "must" row of the issue's Test cases table covered by a test that is traceable by its
+               row id?
+            3. Scope: changes that are not needed for the linked issue's acceptance criteria.
+            4. CLAUDE.md conventions (architecture, commit format, language, anything in "Never").
+            5. Weakened checks, always critical unless the linked issue itself asks for exactly that
+               change: new `# noqa`, `type: ignore`, `eslint-disable`, `@ts-ignore` / `@ts-nocheck`,
+               `pytest.mark.skip` / `xfail`, `.skip` / `.only` on tests, deleted tests or removed
+               assertions, empty `except` / `catch` blocks, and edits to files that configure the
+               project's `checks` in .claude/devflow.json (linter, type checker, test runner and CI
+               configuration, or a script a check runs).
+            6. Out of scope: an item in the PR body's "Out of scope" section that leaves behaviour
+               unmet that the linked issue's acceptance criteria (or a "must" Test cases row) require
+               is critical, even when it is written as "left as is": name the criterion.
+
+            Before commenting, read the existing review threads on this PR
+            (`gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments`).
+            Do not repeat a point that is already raised, fixed, or answered as "won't fix"; only
+            report new problems.
+
+            Use inline comments for specific lines. Only report real problems. Do not approve or
+            request changes.
+
+            Always post one summary comment, including when there are no issues ("No issues found").
+            Your final answer is not shown on the PR; only what you post is. Keep a single summary by
+            editing your previous one:
+            `gh pr comment ${{ github.event.pull_request.number }} --edit-last --create-if-none --body "..."`
+
+            The summary comment must END with exactly one marker line, as its last line:
+            `<!-- devflow-verdict {"sha":"${{ github.event.pull_request.head.sha }}","verdict":"pass"|"changes","critical":<int>,"warning":<int>} -->`
+            verdict is "changes" when critical + warning > 0, otherwise "pass". The merge gate reads this
+            line, so update it on every run, also when you edit the previous summary.
+          claude_args: |
+            --model opus
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh issue view:*),Bash(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments:*)"
+
+      - name: Publish devflow/review status
+        if: always() && steps.carry.outputs.skip != 'true'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const headSha = pr.head.sha;
+            const OPEN = '<!-- devflow-verdict ';
+            let state = 'failure';
+            let description = `No verdict for ${headSha.slice(0, 7)}`;
+            try {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                ...context.repo, issue_number: pr.number, per_page: 100,
+              });
+              const marked = comments.filter((c) => (c.body || '').includes(OPEN));
+              // Only the review bot's own comment counts; a person cannot set the verdict by pasting a marker.
+              const pool = marked.filter((c) => c.user?.type === 'Bot');
+              pool.sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+              const body = pool[0]?.body || '';
+              const start = body.lastIndexOf(OPEN);
+              const end = start < 0 ? -1 : body.indexOf(' -->', start);
+              if (end > start) {
+                const v = JSON.parse(body.slice(start + OPEN.length, end));
+                const critical = Number(v.critical) || 0;
+                const warning = Number(v.warning) || 0;
+                if (v.sha === headSha) {
+                  if (v.verdict === 'pass') {
+                    state = 'success';
+                    description = 'Review passed';
+                  } else if (v.verdict === 'changes') {
+                    description = `${critical} critical, ${warning} warning`;
+                  }
+                }
+              }
+            } catch (e) {
+              core.warning(`Could not read verdict: ${e.message}`);
+            }
+            await github.rest.repos.createCommitStatus({
+              ...context.repo,
+              sha: headSha,
+              state,
+              context: 'devflow/review',
+              description: description.slice(0, 140),
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });

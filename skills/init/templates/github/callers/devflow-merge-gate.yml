@@ -1,0 +1,38 @@
+name: Devflow Merge Gate
+
+# Thin caller installed by /devflow:init (reusable mode). The only thing that merges devflow PRs, and only
+# `devflow` + `risk:low` PRs whose required checks are green; Claude never merges. The gate logic lives in the
+# devflow repository, pinned to the tag below (/devflow:init --upgrade moves it). Controlled by `mergeGate` in
+# .claude/devflow.json.
+#
+# MUST live on the repository DEFAULT branch: `workflow_run` and `status` triggers only run from there.
+# Secret DEVFLOW_GATE_TOKEN = fine-grained PAT, scoped to this repository only, with Contents: read/write and
+# Pull requests: read/write (pushes and merges made with GITHUB_TOKEN do not trigger CI).
+# If devflow is a private repository: its owner must allow access from this repository (devflow Settings >
+# Actions > General > Access), and add a DEVFLOW_READ_TOKEN secret that can read the devflow repository.
+# /devflow:init fills the workflow_run list below.
+
+on:
+  workflow_run:
+    # Every workflow that produces a mergeGate.requiredChecks entry, including the review workflow.
+    workflows: ["CI", "Claude Code Review"]
+    types: [completed]
+  status:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Only evaluate this PR number (optional)"
+        required: false
+
+concurrency:
+  group: devflow-merge-gate
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    permissions:
+      contents: read
+    uses: nhanle-agilityio/devflow/.github/workflows/devflow-merge-gate.yml@{{DEVFLOW_REF}}
+    with:
+      devflow-ref: "{{DEVFLOW_REF}}"
+    secrets: inherit
