@@ -35,5 +35,21 @@ test('callers are pinned through the DEVFLOW_REF placeholder and keep the trigge
   assert.match(gate, /uses: nhanle-agilityio\/devflow\/\.github\/workflows\/devflow-merge-gate\.yml@\{\{DEVFLOW_REF\}\}/);
   assert.match(gate, /devflow-ref: "\{\{DEVFLOW_REF\}\}"/);
   assert.match(gate, /workflows: \["CI", "Claude Code Review"\]/);
-  for (const t of [review, gate]) assert.match(t, /secrets: inherit/);
+  // secrets: inherit is only guaranteed inside one organization or enterprise; these repositories are user-owned.
+  for (const t of [review, gate]) assert.doesNotMatch(t, /secrets: inherit/);
+  assert.match(review, /secrets:\n      CLAUDE_CODE_OAUTH_TOKEN: \$\{\{ secrets\.CLAUDE_CODE_OAUTH_TOKEN \}\}/);
+  assert.match(gate, /secrets:\n      DEVFLOW_GATE_TOKEN: \$\{\{ secrets\.DEVFLOW_GATE_TOKEN \}\}\n      DEVFLOW_READ_TOKEN: \$\{\{ secrets\.DEVFLOW_READ_TOKEN \}\}/);
+});
+
+test('every secret a caller passes is declared by the reusable workflow it calls', () => {
+  const pairs = [
+    ['skills/init/templates/github/callers/claude-code-review.yml', '.github/workflows/devflow-review.yml'],
+    ['skills/init/templates/github/callers/devflow-merge-gate.yml', '.github/workflows/devflow-merge-gate.yml'],
+  ];
+  for (const [caller, called] of pairs) {
+    const passed = [...read(caller).matchAll(/^      ([A-Z_]+): \$\{\{ secrets\./gm)].map((m) => m[1]);
+    const declared = read(called);
+    assert.ok(passed.length, caller);
+    for (const name of passed) assert.match(declared, new RegExp(`\\n      ${name}:\\n        required:`), `${name} in ${called}`);
+  }
 });
