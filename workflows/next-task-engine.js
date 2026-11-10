@@ -639,7 +639,7 @@ function scanWeakenedChecks(diffText, configGlobs) {
   const GO_SKIP = /\b\w+\.Skip(f|Now)?\(/
   const HOLLOW = /^\s*assert\s+(True|1)\s*(,.*)?(#.*)?$|expect\(true\)\.(toBe\(true\)|toBeTruthy\(\))|\bassert(\.ok)?\(true\)/
   const PKG_SCRIPT_KEY = /^(pre|post)?(test|lint|check|typecheck|type-check|tsc|format|build|ci|e2e|verify)([:._-][\w:.-]*)?$/
-  const PKG_DEP_VALUE = /^([\^~<>=v]*\d|\*$|latest$|next$|workspace:|npm:|file:|link:|git[+:]|git$|https?:)/
+  const PKG_DEP_VALUE = /^([\^~<>=v]*\d|\*$|latest$|next$|workspace:|npm:|file:|link:|git[+:]|git$|github:|gitlab:|bitbucket:|https?:)/
   const PKG_TOOL_OPEN = /^\s*"(jest|eslintConfig|prettier|mocha|vitest|ava|nyc|c8|lint-staged|husky|scripts)"\s*:\s*\{/
   const isPkgCheckLine = (text) => {
     if (PKG_TOOL_OPEN.test(text)) return true
