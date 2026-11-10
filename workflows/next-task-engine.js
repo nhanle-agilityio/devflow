@@ -596,7 +596,6 @@ function checkConfigGlobs(checks) {
     '.github/workflows/*',
     '.github/scripts/**',
     '.github/actions/**',
-    '**/conftest.py',
   ]
   for (const c of Array.isArray(checks) ? checks : []) {
     const words = String((c && c.run) || '').split(/\s+/).filter(Boolean)
@@ -604,7 +603,6 @@ function checkConfigGlobs(checks) {
     const starts = String((c && c.run) || '')
       .split(/&&|\|\||;|\|/)
       .map((part) => part.trim().split(/\s+/)[0] || '')
-    if (starts.some((w) => /^(npm|pnpm|yarn|bun|npx|pnpx|bunx)$/.test(w))) globs.push('**/package.json')
     if (starts.some((w) => w === 'make')) globs.push('Makefile', '**/Makefile')
     for (const w of words) {
       // A script path in the command (scripts/lint.sh, ./bin/check): a word with a slash and no flag or URL.
@@ -632,6 +630,7 @@ function scanWeakenedChecks(diffText, configGlobs) {
     { kind: 'eslint-disable', re: /eslint-disable/ },
     { kind: 'ts-ignore', re: /@ts-(ignore|nocheck|expect-error)\b/ },
     { kind: 'empty except', re: /^\s*except\b[^:]*:\s*(pass|\.\.\.)\s*(#.*)?$/ },
+    { kind: 'collection ignored', re: /\bcollect_ignore(_glob)?\b|\bpytest_ignore_collect\b/ },
     { kind: 'nolint', re: /\/\/\s*nolint\b/ },
     { kind: 'rubocop:disable', re: /#\s*rubocop:disable\b/ },
     { kind: 'skipped test', re: /@(Disabled|Ignore)\b|#\[ignore\b/ },
@@ -639,6 +638,14 @@ function scanWeakenedChecks(diffText, configGlobs) {
   ]
   const GO_SKIP = /\b\w+\.Skip(f|Now)?\(/
   const HOLLOW = /^\s*assert\s+(True|1)\s*(,.*)?(#.*)?$|expect\(true\)\.(toBe\(true\)|toBeTruthy\(\))|\bassert(\.ok)?\(true\)/
+  const PKG_SCRIPT_KEY = /^(pre|post)?(test|lint|check|typecheck|type-check|tsc|format|build|ci|e2e|verify)([:._-][\w:.-]*)?$/
+  const PKG_DEP_VALUE = /^([\^~<>=v]*\d|\*$|latest$|next$|workspace:|npm:|file:|link:|git[+:]|git$|https?:)/
+  const PKG_TOOL_OPEN = /^\s*"(jest|eslintConfig|prettier|mocha|vitest|ava|nyc|c8|lint-staged|husky|scripts)"\s*:\s*\{/
+  const isPkgCheckLine = (text) => {
+    if (PKG_TOOL_OPEN.test(text)) return true
+    const m = /^\s*"([^"]+)"\s*:\s*(.*?),?\s*$/.exec(text)
+    return !!m && PKG_SCRIPT_KEY.test(m[1]) && !PKG_DEP_VALUE.test(m[2].replace(/^"|"$/g, ''))
+  }
   const TEST_DEF = /^\s*(async\s+)?def\s+test\w*\s*\(|^\s*(it|test)\s*\(|^\s*func\s+Test\w+\s*\(/
   const ASSERT = /\bassert\b|\bself\.assert\w+\(|\bexpect\s*\(|\bassert\w*\s*\(|\bt\.(Error|Fatal)f?\(/
   const configRes = (Array.isArray(configGlobs) ? configGlobs : []).map(globToRegExp)
@@ -652,6 +659,10 @@ function scanWeakenedChecks(diffText, configGlobs) {
     if (configRes.some((re) => re.test(f.file)) && (f.added.length || f.removed.length || f.deleted)) {
       const first = f.added[0] || f.removed[0] || { line: 0, text: '' }
       hits.push({ file: f.file, line: first.line, kind: 'check configuration changed', text: first.text.trim() })
+    }
+    if (/(^|\/)package\.json$/.test(f.file) && !configRes.some((re) => re.test(f.file))) {
+      const first = f.added.find((l) => isPkgCheckLine(l.text)) || f.removed.find((l) => isPkgCheckLine(l.text))
+      if (first) hits.push({ file: f.file, line: first.line, kind: 'check configuration changed', text: first.text.trim() })
     }
     for (let i = 0; i < f.added.length && !isProse(f.file); i++) {
       const a = f.added[i]
