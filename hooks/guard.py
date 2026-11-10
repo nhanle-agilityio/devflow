@@ -28,6 +28,9 @@ Exit 2 blocks the call and sends the reason on stderr back to Claude. Blocked:
 - Bash `git checkout -f/--force` and `git switch -f/--force/--discard-changes` (they discard
   local changes). `git clean` with `-n`/`--dry-run` is a dry run and is allowed even with `-f`.
 
+Fails closed: an unexpected error (including unparsable stdin) blocks with exit 2 instead of
+silently disabling the guard.
+
 Global git options (`git -C <dir>`, `-c k=v`, `--git-dir=...`, `--no-pager`) are skipped before
 the subcommand is read.
 
@@ -549,7 +552,7 @@ def mcp_write_reason(branch, protected):
     return None
 
 
-def main():
+def run():
     payload = json.load(sys.stdin)
     tool = payload.get("tool_name", "")
     if tool.endswith("merge_pull_request"):
@@ -585,6 +588,20 @@ def main():
         print("Blocked by the devflow guard: %s." % found[0], file=sys.stderr)
         return 2
     return 0
+
+
+def main():
+    """Entry point. Fails closed: any unexpected error blocks (exit 2) instead of exiting 1,
+    which Claude Code treats as a non-blocking error and would silently disable the guard."""
+    try:
+        return run()
+    except Exception as exc:  # noqa: BLE001 - every failure must block
+        print(
+            "Blocked by the devflow guard: internal error (%s: %s); fix or report the guard, "
+            "or ask the user to run the command." % (type(exc).__name__, exc),
+            file=sys.stderr,
+        )
+        return 2
 
 
 if __name__ == "__main__":
