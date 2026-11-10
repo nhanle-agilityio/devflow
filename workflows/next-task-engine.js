@@ -309,13 +309,22 @@ const VERIFY_SCHEMA = {
   required: ['ran', 'mode', 'steps', 'notes'],
 }
 
-const DIFF_SCHEMA = {
+const SCAN_SCHEMA = {
   type: 'object',
   properties: {
-    diff: { type: 'string', description: 'The command output, verbatim' },
-    truncated: { type: 'boolean', description: 'True when the output was cut at the line limit' },
+    scanned: { type: 'boolean', description: 'The "scanned" field of the script output' },
+    hits: {
+      type: 'array',
+      description: 'The "hits" of the script output, copied exactly',
+      items: {
+        type: 'object',
+        properties: { file: { type: 'string' }, line: { type: 'integer' }, kind: { type: 'string' }, text: { type: 'string' } },
+        required: ['file', 'line', 'kind', 'text'],
+      },
+    },
+    error: { type: 'string', description: 'The "error" field when scanned is false, or the reason the script did not run' },
   },
-  required: ['diff', 'truncated'],
+  required: ['scanned', 'hits'],
 }
 
 const REVIEW_SCHEMA = {
@@ -507,40 +516,46 @@ function globToRegExp(glob) {
 // ---------------------------------------------------------------------------------------------
 
 // Unified diff (any context size) -> [{file, deleted, added: [{line, text}], removed: [{line, text}]}].
+// "--- " / "+++ " are file headers only between "diff --git" and the file's first "@@"; inside a hunk they are
+// removed / added content (a removed SQL comment "-- x" is the line "--- x").
 function parseDiff(text) {
   const files = []
   let cur = null
   let oldLine = 0
   let newLine = 0
+  let inHeader = false
   for (const raw of String(text || '').split('\n')) {
     const line = raw.replace(/\r$/, '')
     if (line.startsWith('diff --git ')) {
       const m = / b\/(.+)$/.exec(line)
       cur = { file: m ? m[1] : '', deleted: false, added: [], removed: [] }
       files.push(cur)
+      inHeader = true
       continue
     }
     if (!cur) continue
-    if (line.startsWith('deleted file mode')) {
+    if (inHeader && line.startsWith('deleted file mode')) {
       cur.deleted = true
       continue
     }
-    if (line.startsWith('+++ ')) {
+    if (inHeader && line.startsWith('+++ ')) {
       const m = /^\+\+\+ b\/(.+)$/.exec(line)
       if (m) cur.file = m[1]
       continue
     }
-    if (line.startsWith('--- ')) {
+    if (inHeader && line.startsWith('--- ')) {
       const m = /^--- a\/(.+)$/.exec(line)
       if (m && !cur.file) cur.file = m[1]
       continue
     }
     const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
     if (h) {
+      inHeader = false
       oldLine = Number(h[1])
       newLine = Number(h[2])
       continue
     }
+    if (inHeader) continue
     if (line.startsWith('+')) cur.added.push({ line: newLine++, text: line.slice(1) })
     else if (line.startsWith('-')) cur.removed.push({ line: oldLine++, text: line.slice(1) })
     else if (line.startsWith(' ')) {
@@ -1046,13 +1061,15 @@ ${verifyCfg.lock !== false ? `0. Take the verify lock first, so parallel session
 If you cannot run verification at all (server never started, tool unavailable), return ran=false with the reason in notes; a failure of the code under test is ran=true with pass=false steps.`
 }
 
-const DIFF_LINE_LIMIT = 5000
+// The scan runs as a shipped script (bin/devflow-scan) in the checkout, so only the hits travel through the agent.
+const pluginRoot = String((args && args.pluginRoot) || '').replace(/\/+$/, '')
+const CONFIG_PATH = '.claude/devflow.json'
 
-function diffPrompt(issue, branch) {
-  return `Print the change of branch ${branch} (issue #${issue.number}) for a scan. Read-only: change nothing.
+function scanPrompt(issue, branch) {
+  return `Run the weakened-checks scan for branch ${branch} (issue #${issue.number}). Read-only: change nothing.
 
-Run exactly: \`git diff --unified=0 --no-color --no-ext-diff ${parentRefFor(issue)}...HEAD\`
-Return its output verbatim in "diff" (do not summarise, reformat or drop lines). If it is longer than ${DIFF_LINE_LIMIT} lines, return the first ${DIFF_LINE_LIMIT} lines and truncated=true; otherwise truncated=false.`
+Run exactly: \`node "${pluginRoot}/bin/devflow-scan" ${parentRefFor(issue)} ${CONFIG_PATH}\`
+It prints one JSON object {scanned, hits, error?}. Return scanned and hits exactly as printed (every hit, unchanged) and error when present. If the command cannot be run at all, return scanned=false, hits=[] and the reason in error. Do not produce or print the diff yourself and do not judge the hits.`
 }
 
 // Hits the reviewer accepted as justified (same file and line).
@@ -1495,18 +1512,27 @@ async function runIssue(issue) {
     }
   }
 
-  // Review. Before each round a deterministic scan of the diff looks for weakened checks.
-  const configGlobs = checkConfigGlobs(cfg.checks)
+  // Review. Before each round a deterministic scan of the diff (bin/devflow-scan) looks for weakened checks.
   for (let round = 0; round <= nt.maxReviewRounds; round++) {
     phase('Review')
-    const diff = await agent(diffPrompt(issue, branch), {
-      label: `diff #${issue.number}${round ? ` (round ${round + 1})` : ''}`,
-      phase: 'Review',
-      schema: DIFF_SCHEMA,
-      model: 'haiku',
-    })
-    const hits = diff ? scanWeakenedChecks(diff.diff, configGlobs) : []
-    state.scanProblem = !diff ? 'the weakened-checks scan could not run (the diff agent died)' : diff.truncated ? `the weakened-checks scan saw only the first ${DIFF_LINE_LIMIT} diff lines` : ''
+    const scan = pluginRoot
+      ? await agent(scanPrompt(issue, branch), {
+          label: `scan #${issue.number}${round ? ` (round ${round + 1})` : ''}`,
+          phase: 'Review',
+          schema: SCAN_SCHEMA,
+          model: 'haiku',
+        })
+      : null
+    let hits = []
+    if (!pluginRoot) state.scanProblem = 'the weakened-checks scan could not run: no pluginRoot was passed to the engine'
+    else if (!scan) state.scanProblem = 'the weakened-checks scan could not run (the scan agent died)'
+    else if (!scan.scanned) state.scanProblem = `the weakened-checks scan could not run: ${scan.error || 'no reason given'}`
+    else {
+      state.scanProblem = ''
+      hits = (Array.isArray(scan.hits) ? scan.hits : [])
+        .filter((h) => h && h.file)
+        .map((h) => ({ file: String(h.file), line: Number(h.line) || 0, kind: String(h.kind || ''), text: String(h.text || '') }))
+    }
     if (hits.length) log(`#${issue.number}: weakened-checks scan: ${hits.map(hitLine).join('; ')}`)
     const review = await agent(reviewPrompt(issue, branch, state, round, hits), {
       label: `review #${issue.number} (round ${round + 1})`,

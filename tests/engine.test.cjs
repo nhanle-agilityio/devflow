@@ -14,7 +14,7 @@ const CFG = {
   checks: [{ name: 'test', run: 'make test' }],
   specDir: 'docs/specs',
 };
-const BASE = { config: CFG, limit: 3, startBranch: 'main', prTemplatePath: '', claimId: 'C-me' };
+const BASE = { config: CFG, limit: 3, startBranch: 'main', prTemplatePath: '', claimId: 'C-me', pluginRoot: '/plugin' };
 const QA = { qaFiles: ['tests/test_a.py'], devFiles: ['src/x.py'] };
 
 // opts: per-stage overrides, each a function of the issue number or a plain value.
@@ -57,7 +57,14 @@ async function run(args, opts = {}) {
     }
     if (l.startsWith('check')) return { passed: true, failures: [] };
     if (l.startsWith('verify')) return { ran: true, mode: 'http', steps: [], notes: '' };
-    if (l.startsWith('diff')) return pick(opts.diff, n) === null ? null : { diff: pick(opts.diff, n) || '', truncated: !!opts.truncated };
+    // The scan agent runs bin/devflow-scan and returns its hits; the stub scans opts.diff with the same helpers.
+    if (l.startsWith('scan')) {
+      const text = pick(opts.diff, n);
+      if (text === null) return null;
+      if (opts.scanFails) return { scanned: false, hits: [], error: 'fatal: bad revision' };
+      const h = await helpers();
+      return { scanned: true, hits: h.scanWeakenedChecks(text || '', h.checkConfigGlobs(args.config.checks)) };
+    }
     if (l.startsWith('review')) {
       const r = pick(opts.review, n);
       return r ? JSON.parse(JSON.stringify(r)) : { verdict: 'pass', findings: [] };
@@ -89,7 +96,7 @@ test('runs without args stops with a message', async () => {
 test('one issue goes through every stage in order', async () => {
   const { rep, calls } = await run({ ...BASE, issues: [1] });
   assert.equal(rep[0].status, 'pr');
-  assert.deepEqual(labels(calls), ['select', 'claim', 'branch', 'plan', 'implement', 'check', 'diff', 'review', 'ship', 'restore']);
+  assert.deepEqual(labels(calls), ['select', 'claim', 'branch', 'plan', 'implement', 'check', 'scan', 'review', 'ship', 'restore']);
   assert.match(prompt(calls, 'implement'), /PLAN1/);
   assert.equal(calls.find((c) => c.l.startsWith('review')).model, 'opus');
 });
@@ -354,12 +361,23 @@ test('an accepted hit escalates a risk:low issue to high and relabels the issue'
   assert.match(ship, /Also add "risk:high" to the issue/);
 });
 
-test('a scan that cannot run or is truncated makes the PR risk high', async () => {
+test('a scan that cannot run makes the PR risk high with the reason', async () => {
   let r = await run({ ...BASE, issues: [1] }, { diff: null });
   assert.equal(r.rep[0].status, 'pr');
-  assert.match(prompt(r.calls, 'ship'), /scan could not run/);
-  r = await run({ ...BASE, issues: [1] }, { truncated: true });
-  assert.match(prompt(r.calls, 'ship'), /saw only the first 5000 diff lines/);
+  assert.equal(r.rep[0].risk, 'high');
+  assert.match(prompt(r.calls, 'ship'), /scan could not run \(the scan agent died\)/);
+  r = await run({ ...BASE, issues: [1] }, { scanFails: true });
+  assert.match(prompt(r.calls, 'ship'), /scan could not run: fatal: bad revision/);
+  r = await run({ ...BASE, pluginRoot: '', issues: [1] });
+  assert.ok(!has(r.calls, 'scan'));
+  assert.match(prompt(r.calls, 'ship'), /scan could not run: no pluginRoot/);
+});
+
+test('the scan agent runs the shipped script, not a diff relay', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] });
+  const p = prompt(calls, 'scan');
+  assert.match(p, /node "\/plugin\/bin\/devflow-scan" origin\/main \.claude\/devflow\.json/);
+  assert.doesNotMatch(p, /git diff/);
 });
 
 test('review gets the out-of-scope list and the rule that a criterion is never out of scope', async () => {
@@ -476,4 +494,15 @@ test('Ship files follow-ups with the bug template and a triage suggestion commen
   const ship = prompt(calls, 'ship');
   assert.match(ship, /\/p\/skills\/spec\/templates\/bug\.md/);
   assert.match(ship, /suggest a priority .* and a risk/);
+});
+
+test('parseDiff: --- and +++ inside a hunk are content lines, not file headers', async () => {
+  const { parseDiff, scanWeakenedChecks } = await helpers();
+  const text = 'diff --git a/db/schema.sql b/db/schema.sql\nindex 1..2 100644\n--- a/db/schema.sql\n+++ b/db/schema.sql\n@@ -3,2 +3,2 @@\n--- old comment\n-select 1;\n+++ new counter\n+select 2;\n' +
+    diffOf('tests/test_a.py', '@@ -1,2 +1,1 @@\n-def test_x():\n-    assert 1\n+x = 1');
+  const files = parseDiff(text);
+  assert.deepEqual(files.map((f) => f.file), ['db/schema.sql', 'tests/test_a.py']);
+  assert.deepEqual(files[0].removed, [{ line: 3, text: '-- old comment' }, { line: 4, text: 'select 1;' }]);
+  assert.deepEqual(files[0].added, [{ line: 3, text: '++ new counter' }, { line: 4, text: 'select 2;' }]);
+  assert.ok(scanWeakenedChecks(text, []).some((h) => h.file === 'tests/test_a.py' && /removed 1 test/.test(h.kind)));
 });
