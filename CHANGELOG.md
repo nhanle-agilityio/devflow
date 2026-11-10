@@ -9,7 +9,14 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 - Engine: a deterministic weakened-checks scan of the diff before every review round (new `noqa`, `type: ignore`, `eslint-disable`, `@ts-ignore`, skipped, focused or deleted tests, removed assertions, empty `except` / `catch`, edited check configuration). Hits are critical findings; hits the reviewer accepts as required by the issue make the PR `risk:high`.
 - Review (engine and the `claude-code-review.yml` check): an out-of-scope item that leaves an acceptance criterion unmet is critical. Ship files the remaining real out-of-scope problems as follow-up issues labelled `needs-triage` and links them in the PR.
 
+- Priority labels (`labels.priority`, default `priority:critical|high|normal|low`, no label = normal). `/devflow:next-task` orders by dependencies, then priority, then issue number, and a critical or high issue pulls its open parents forward. The merge gate tries candidates by the linked issue's priority, then PR number. No preemption, and priority never changes who merges.
+- `labels.triage` (`needs-triage`): accept gaps and Ship's follow-up issues get it instead of ready, with a comment suggesting priority and risk; next-task and dispatch never pick such issues. Only a human sets ready.
+- A shared bug issue template (`skills/spec/templates/bug.md`) and a "Filing a bug" section in the README.
+- Fix PRs (bugs, gaps, `type:fix`) carry Root cause, Introduced by and Why it was missed.
+- `/devflow:release` lists critical fixes first.
+
 ### Changed
+- `/devflow:accept` no longer labels gaps ready or sets their risk label: a human triages them.
 - `/devflow:doctor --fix` prints `git branch -D` for the user instead of running it (the guard blocks it).
 - Upgrade: run `/devflow:init --upgrade` to get the new review prompt.
 
