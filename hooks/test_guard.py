@@ -3,6 +3,8 @@
 python3 -m unittest discover -s hooks -p 'test_*.py' -v
 """
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -10,6 +12,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import guard
 
@@ -252,6 +255,47 @@ class McpBranchWrites(unittest.TestCase):
         for tool in ("Bash", "mcp__github__merge_pull_request") + self.TOOLS:
             self.assertTrue(re.fullmatch(matcher, tool), tool)
         self.assertFalse(re.fullmatch(matcher, "Read"))
+
+
+class FailClosed(unittest.TestCase):
+    def run_main(self, stdin_text, **patches):
+        stderr = io.StringIO()
+        with mock.patch("sys.stdin", io.StringIO(stdin_text)), mock.patch("sys.stderr", stderr):
+            with contextlib.ExitStack() as stack:
+                for name, effect in patches.items():
+                    stack.enter_context(mock.patch.object(guard, name, side_effect=effect))
+                code = guard.main()
+        return code, stderr.getvalue()
+
+    def test_internal_error_blocks(self):
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git status"}})
+        code, err = self.run_main(payload, reasons=RuntimeError("boom"))
+        self.assertEqual(code, 2)
+        self.assertIn("Blocked by the devflow guard: internal error (RuntimeError: boom)", err)
+        self.assertIn("ask the user to run the command", err)
+
+    def test_error_loading_config_blocks_mcp_write(self):
+        payload = json.dumps({"tool_name": "mcp__x__push_files", "tool_input": {"branch": "feat/x"}})
+        code, err = self.run_main(payload, load_protected=OSError("disk"))
+        self.assertEqual(code, 2)
+        self.assertIn("internal error (OSError: disk)", err)
+
+    def test_unparsable_stdin_blocks(self):
+        for text in ("", "not json", "[1, 2]"):
+            with self.subTest(text=text):
+                code, err = self.run_main(text)
+                self.assertEqual(code, 2)
+                self.assertIn("internal error", err)
+
+    def test_unparsable_stdin_blocks_in_a_process(self):
+        result = subprocess.run(
+            ["python3", str(HOOK)], check=False, input="{", capture_output=True, text=True
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("internal error", result.stderr)
+
+    def test_normal_calls_are_unchanged(self):
+        self.assertEqual(self.run_main(json.dumps({"tool_name": "Read", "tool_input": {}}))[0], 0)
 
 
 class DestructiveGit(unittest.TestCase):
