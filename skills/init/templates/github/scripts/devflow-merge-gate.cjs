@@ -11,6 +11,10 @@ const CONFIG_PATH = '.claude/devflow.json';
 const CONFLICT_MARKER = '<!-- devflow-gate:conflict -->';
 const GATE_MERGED_MARKER = '<!-- devflow-gate-merged -->';
 const ALWAYS_PROTECTED = ['main', 'master', 'develop', 'trunk', 'production'];
+// Paths that are always high risk, whatever the label says: CI and the agent's own configuration.
+const ALWAYS_HIGH_PATHS = ['.github/**', '.claude/**'];
+const REVIEW_CONTEXT = 'devflow/review';
+const REVIEW_BOT = 'github-actions[bot]';
 
 const DEFAULTS = {
   baseBranch: 'main',
@@ -27,8 +31,50 @@ function withDefaults(raw) {
     ...c,
     baseBranch: c.baseBranch || DEFAULTS.baseBranch,
     labels: { ...DEFAULTS.labels, ...(c.labels || {}) },
+    risk: { ...(c.risk || {}) },
     mergeGate: { ...DEFAULTS.mergeGate, ...(c.mergeGate || {}) },
   };
+}
+
+// Glob to anchored RegExp: ** crosses "/", * and ? do not. "**/" also matches zero directories.
+// Copy of globToRegExp in workflows/next-task-engine.js (the gate cannot import it); tests keep them equal.
+function globToRegExp(glob) {
+  let re = '';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === '*') {
+      if (glob[i + 1] === '*') {
+        if (glob[i + 2] === '/') {
+          re += '(?:.*/)?';
+          i += 2;
+        } else {
+          re += '.*';
+          i += 1;
+        }
+      } else {
+        re += '[^/]*';
+      }
+    } else if (c === '?') {
+      re += '[^/]';
+    } else {
+      re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+    }
+  }
+  return new RegExp(`^${re}$`);
+}
+
+// The first changed file (new or, for a rename, previous name) that matches a high-risk glob, or null.
+function highRiskHit(files, config) {
+  const globs = [...(Array.isArray(config.risk?.highPaths) ? config.risk.highPaths : []), ...ALWAYS_HIGH_PATHS];
+  const compiled = globs.filter((g) => typeof g === 'string' && g).map((g) => [g, globToRegExp(g)]);
+  for (const f of files) {
+    for (const name of [f.filename, f.previous_filename]) {
+      if (!name) continue;
+      const hit = compiled.find(([, re]) => re.test(name));
+      if (hit) return { file: name, glob: hit[0] };
+    }
+  }
+  return null;
 }
 
 // Workspace file first (default branch), then the same file at baseBranch, which is the source of truth.
@@ -125,7 +171,11 @@ async function checksGreen({ github, context }, sha, names) {
       .filter((r) => r.name === name)
       .sort((a, b) => String(b.started_at || '').localeCompare(String(a.started_at || '')) || b.id - a.id);
     const latestRun = mine[0];
-    const latestStatus = statuses.find((s) => s.context === name); // newest first
+    // Newest first. Anyone with write access can create a commit status, so the review verdict only
+    // counts when the review workflow's own token created it.
+    const latestStatus = statuses.find(
+      (s) => s.context === name && (name !== REVIEW_CONTEXT || s.creator?.login === REVIEW_BOT),
+    );
     const runOk = latestRun && latestRun.status === 'completed' && latestRun.conclusion === 'success';
     const statusOk = latestStatus && latestStatus.state === 'success';
     if (runOk || statusOk) continue;
@@ -158,6 +208,17 @@ async function unresolvedThreads({ github, context }, pr) {
     const last = n.comments?.nodes?.[0]?.author?.login;
     return !(author && last === author);
   }).length;
+}
+
+// Best effort: failing to relabel must not stop the gate from skipping the PR.
+async function relabelHigh({ github, context, core }, config, pr) {
+  const { owner, repo } = context.repo;
+  try {
+    await github.rest.issues.addLabels({ owner, repo, issue_number: pr.number, labels: [config.labels.riskHigh] });
+    await github.rest.issues.removeLabel({ owner, repo, issue_number: pr.number, name: config.labels.riskLow });
+  } catch (e) {
+    core.warning(`#${pr.number}: could not relabel as ${config.labels.riskHigh}: ${e.message}`);
+  }
 }
 
 async function blockOnConflict({ github, context }, config, pr, dryRun) {
@@ -249,6 +310,19 @@ async function evaluate(ctx, config, listed, state) {
   }
 
   const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: listed.number });
+  // The risk label is a claim; the files are the evidence. Checked before anything that touches the branch.
+  const files = await github.paginate(github.rest.pulls.listFiles, {
+    owner, repo, pull_number: pr.number, per_page: 100,
+  });
+  const hit = highRiskHit(files, config);
+  if (hit) {
+    if (!dryRun) await relabelHigh(ctx, config, pr);
+    return {
+      action: dryRun ? 'would skip' : 'skipped',
+      reason: `touches ${hit.file} (${hit.glob}): waits for a human`,
+    };
+  }
+
   if (pr.mergeable === null || pr.mergeable === undefined) {
     return { action: 'skipped', reason: 'mergeability not computed yet' };
   }
@@ -330,6 +404,7 @@ module.exports = async function gate({ github, context, core, config }) {
 };
 
 module.exports.withDefaults = withDefaults;
+module.exports.globToRegExp = globToRegExp;
 module.exports.priorityRank = priorityRank;
 module.exports.orderCandidates = orderCandidates;
 module.exports.GATE_MERGED_MARKER = GATE_MERGED_MARKER;
