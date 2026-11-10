@@ -22,9 +22,9 @@ Exit 2 blocks the call and sends the reason on stderr back to Claude. Blocked:
 - Bash `gh api` writes (an explicit non-GET method, or `-f`/`-F`/`--field`/`--raw-field`/`--input`,
   which make gh POST) to `git/refs/heads/<protected>` or to `.../statuses/<sha>` (forging a
   commit status such as devflow/review);
-- Bash `gh pr edit` / `gh issue edit` that adds `labels.riskLow` or removes `labels.riskHigh`
-  (from `.claude/devflow.json`, default `risk:low` / `risk:high`): a human or the workflow sets
-  the risk label;
+- Bash `gh pr edit` / `gh issue edit` that removes `labels.riskHigh` (from
+  `.claude/devflow.json`, default `risk:high`): that downgrades the risk, a human does it.
+  Adding `risk:low` is allowed: the workflows' gh fallback does exactly that;
 - Bash `git checkout -f/--force` and `git switch -f/--force/--discard-changes` (they discard
   local changes). `git clean` with `-n`/`--dry-run` is a dry run and is allowed even with `-f`.
 
@@ -83,6 +83,7 @@ DISCARD_HINT = "it discards work that may not be recoverable; ask the user to ru
 MCP_BRANCH_WRITES = ("push_files", "create_or_update_file", "delete_file")
 DEFAULT_RISK_LABELS = ("risk:low", "risk:high")
 COMMIT_SHORT_WITH_VALUE = frozenset("mFCct")
+COMMIT_SHORT_ATTACHED = frozenset("uS")  # optional value, only when attached (-uno, -S<keyid>)
 COMMIT_LONG_WITH_VALUE = frozenset(
     {
         "--message",
@@ -290,11 +291,9 @@ def check_gh(tokens, protected=DEFAULT_PROTECTED, labels=DEFAULT_RISK_LABELS):
                         "devflow/review)"
                     )
     if words[:2] in (["pr", "edit"], ["issue", "edit"]):
-        low, high = labels
-        if low.casefold() in option_values(tokens, "--add-label"):
-            return "adding the label '%s'; a human or the workflow sets the risk label" % low
+        high = labels[1]
         if high.casefold() in option_values(tokens, "--remove-label"):
-            return "removing the label '%s'; a human or the workflow sets the risk label" % high
+            return "removing the label '%s' downgrades the risk; a human does that" % high
     return None
 
 
@@ -350,7 +349,7 @@ def operands_of(args):
     return out
 
 
-def scan_flags(args, short_with_value, long_with_value):
+def scan_flags(args, short_with_value, long_with_value, short_attached=frozenset()):
     """(short letters, long names) of `args`, skipping the values of options that take one."""
     shorts, longs, i = set(), set(), 0
     while i < len(args):
@@ -366,6 +365,8 @@ def scan_flags(args, short_with_value, long_with_value):
         elif arg.startswith("-") and len(arg) > 1:
             for k, letter in enumerate(arg[1:], 1):
                 shorts.add(letter)
+                if letter in short_attached:
+                    break  # the rest of the group is the value; the next argument is not
                 if letter in short_with_value:
                     if k == len(arg) - 1:
                         i += 1  # the value is the next argument
@@ -427,7 +428,9 @@ def check_git(tokens, protected, branch_of):
         return None
     sub, args = tokens[i], tokens[i + 1 :]
     if sub == "commit":
-        shorts, longs = scan_flags(args, COMMIT_SHORT_WITH_VALUE, COMMIT_LONG_WITH_VALUE)
+        shorts, longs = scan_flags(
+            args, COMMIT_SHORT_WITH_VALUE, COMMIT_LONG_WITH_VALUE, COMMIT_SHORT_ATTACHED
+        )
         if "n" in shorts or "--no-verify" in longs:
             return NO_VERIFY_REASON
     if sub == "push":
