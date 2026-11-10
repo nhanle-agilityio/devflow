@@ -59,7 +59,7 @@ skills/report/SKILL.md              /devflow:report (+ templates/trace.html, dat
 skills/doctor/SKILL.md              /devflow:doctor
 bin/devflow-lanes                   node, stdlib only: lane planner (JSON on stdin and stdout); called as ${CLAUDE_PLUGIN_ROOT}/bin/devflow-lanes
 workflows/next-task-engine.js       meta.name "next-task-engine" → /devflow:next-task-engine (internal; users run /devflow:next-task)
-hooks/hooks.json                    PreToolUse guard (Bash|mcp__.*merge_pull_request), PostToolUse formatter (Write|Edit|MultiEdit|NotebookEdit), SessionStart rules
+hooks/hooks.json                    PreToolUse guard (Bash|mcp__.*(merge_pull_request|push_files|create_or_update_file|delete_file)), PostToolUse formatter (Write|Edit|MultiEdit|NotebookEdit), SessionStart rules
 hooks/guard.py                      python3 (3.9+, stdlib only)
 hooks/formatter.py                  PostToolUse: runs the `format` commands on the edited file; quiet, always exit 0
 hooks/session_start.py              SessionStart: workflow rules from devflow.json as hookSpecificOutput.additionalContext (stdout)
@@ -330,16 +330,19 @@ Then: merge with `mergeGate.method` (merge commit) pinned to the head SHA, retar
 
 ## Guard hook (`hooks/guard.py`)
 
-PreToolUse, matcher `Bash|mcp__.*merge_pull_request`. Exit 2 with a reason on stderr to block:
+PreToolUse, matcher `Bash|mcp__.*(merge_pull_request|push_files|create_or_update_file|delete_file)`. Exit 2 with a reason on stderr to block:
 
 - any MCP tool whose name ends with `merge_pull_request`;
+- MCP tools ending with `push_files`, `create_or_update_file` or `delete_file` when `tool_input.branch` is protected (globs included) or missing/empty (the API then writes to the default branch);
 - Bash: `gh pr merge`, `gh api ... /merge` (PUT; an explicit GET is allowed), the GraphQL merge mutations (`mergePullRequest`, `enablePullRequestAutoMerge`), `git push` that targets a protected branch (explicit refspec `:main`, `HEAD:main`, `main`, or pushing while the current branch is protected), `git push --force`/`-f`/`+refspec` (allow `--force-with-lease`), `git push --mirror`/`--all`/`--delete` of a protected branch;
 - Bash, git commands that discard work: `reset --hard`, `clean` with `-f`/`--force` in any flag group, `branch -D` (or `-d` with `-f`), `checkout .` / `checkout -- .` (also `./`, `:/`), `restore .` (unless only `--staged`, which just unstages), `stash drop` / `stash clear`, `filter-branch`, `update-ref -d`, `reflog expire`. The message tells Claude to ask the user to run it themselves;
-- Bash, staging everything: `git add -A`, `--all`, `.`, `./`, `:/`, `-- .`, combined flags such as `-vA`. `git add -u` stays allowed: it stages only tracked files (how a merge resolution or a rename is staged) and never picks up untracked files. This replaces the per-project `block_git_add_all.py` hook (its cases are in `test_guard.py`).
+- Bash, skipping hooks: `git commit` with `--no-verify` or `-n` (also in a flag group such as `-nm`; values like `-m "-n"` are not flags) and `git push --no-verify`; `git push -n` is a dry run and stays allowed. `git checkout -f/--force` and `git switch -f/--force/--discard-changes` discard local changes; `git clean` with `-n`/`--dry-run` is a dry run and is allowed even with `-f`;
+- Bash, `gh api` writes (explicit non-GET, or `-f`/`-F`/`--field`/`--raw-field`/`--input`) to `git/refs/heads/<protected>` or `.../statuses/<sha>` (forging `devflow/review`); `gh pr edit` / `gh issue edit` removing `labels.riskHigh` (a risk downgrade is a human decision; adding `risk:low` stays allowed because the workflows' gh fallback does it);
+- Bash, staging everything: `git add -A`, `--all`, `.`, `./`, `:/`, `*`, `-- .`, combined flags such as `-vA`. `git add -u` stays allowed: it stages only tracked files (how a merge resolution or a rename is staged) and never picks up untracked files. This replaces the per-project `block_git_add_all.py` hook (its cases are in `test_guard.py`).
 
 Global git options before the subcommand (`-C <dir>`, `-c k=v`, `--git-dir=...`, `--no-pager`) are skipped. A wrapper (`sudo`, `env`, `xargs`, ...) is looked through by trying every later `git` / shell token as the start of the wrapped command, so `sudo -u git git add .` is caught without knowing each wrapper's options.
 
-Protected branches = `protectedBranches` + `baseBranch` from `.claude/devflow.json` in the project (`$CLAUDE_PROJECT_DIR`), defaulting to `main`, `master`, `develop` when the file is missing. Parse commands with `shlex` like the TaskBoard `block_git_add_all.py` hook (look through `env`/`sudo`/`bash -c` wrappers; regex fallback when shlex fails). Stdlib only, Python 3.9. Ship `test_guard.py` (unittest) covering blocked and allowed cases, including that `update_pull_request` and `update_pull_request_branch` stay allowed (`/devflow:sync` needs them). The merge gate Action is outside the hook's reach by design: it is the one place merges happen, and it runs with its own token.
+Protected branches = `protectedBranches` + `baseBranch` from `.claude/devflow.json` in the project (`$CLAUDE_PROJECT_DIR`), defaulting to `main`, `master`, `develop` when the file is missing. Parse commands with `shlex` like the TaskBoard `block_git_add_all.py` hook (look through `env`/`sudo`/`bash -c` wrappers; regex fallback when shlex fails). Stdlib only, Python 3.9. Fail closed: any unexpected exception (including unparsable stdin) exits 2 with an "internal error" reason, because any other non-zero exit is a non-blocking error; `/devflow:doctor` check 10 runs the hook to prove it works on the machine. Ship `test_guard.py` (unittest) covering blocked and allowed cases, including that `update_pull_request` and `update_pull_request_branch` stay allowed (`/devflow:sync` needs them). The merge gate Action is outside the hook's reach by design: it is the one place merges happen, and it runs with its own token.
 
 ## Formatter and session start hooks
 

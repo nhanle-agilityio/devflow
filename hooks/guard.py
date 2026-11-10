@@ -4,6 +4,9 @@
 Exit 2 blocks the call and sends the reason on stderr back to Claude. Blocked:
 
 - any MCP tool whose name ends with `merge_pull_request`;
+- MCP tools that write straight to a branch (names ending with `push_files`,
+  `create_or_update_file`, `delete_file`) when `tool_input.branch` is protected or missing/empty
+  (the API then writes to the default branch);
 - Bash `gh pr merge`, `gh api .../merge` (unless an explicit GET) and the GraphQL merge mutations;
 - Bash `git push` that forces (`--force`, `-f`, `+refspec`; `--force-with-lease` is allowed),
   mirrors or pushes `--all`, or targets a protected branch (explicit refspec, `--delete`, or a
@@ -12,8 +15,21 @@ Exit 2 blocks the call and sends the reason on stderr back to Claude. Blocked:
   group), `branch -D` (or `-d` with `-f`), `checkout .` / `checkout -- .`, `restore .` (unless
   only `--staged`), `stash drop` / `stash clear`, `filter-branch`, `update-ref -d`,
   `reflog expire`;
-- Bash `git add -A`, `git add --all`, `git add .` (also `./`, `:/`, `-- .`, combined flags such
-  as `-vA`). `git add -u` is allowed: it stages only files git already tracks.
+- Bash `git add -A`, `git add --all`, `git add .` (also `./`, `:/`, `*`, `-- .`, combined flags
+  such as `-vA`). `git add -u` is allowed: it stages only files git already tracks;
+- Bash `git commit` / `git push` with `--no-verify` (and `git commit -n`, also inside a flag
+  group such as `-nm`); a value such as `-m "-n"` is not read as a flag, `git push -n` is a dry run;
+- Bash `gh api` writes (an explicit non-GET method, or `-f`/`-F`/`--field`/`--raw-field`/`--input`,
+  which make gh POST) to `git/refs/heads/<protected>` or to `.../statuses/<sha>` (forging a
+  commit status such as devflow/review);
+- Bash `gh pr edit` / `gh issue edit` that removes `labels.riskHigh` (from
+  `.claude/devflow.json`, default `risk:high`): that downgrades the risk, a human does it.
+  Adding `risk:low` is allowed: the workflows' gh fallback does exactly that;
+- Bash `git checkout -f/--force` and `git switch -f/--force/--discard-changes` (they discard
+  local changes). `git clean` with `-n`/`--dry-run` is a dry run and is allowed even with `-f`.
+
+Fails closed: an unexpected error (including unparsable stdin) blocks with exit 2 instead of
+silently disabling the guard.
 
 Global git options (`git -C <dir>`, `-c k=v`, `--git-dir=...`, `--no-pager`) are skipped before
 the subcommand is read.
@@ -60,10 +76,33 @@ PUSH_OPTIONS_WITH_VALUE = frozenset(
         "--recurse-submodules",
     }
 )
-STAGE_ALL_ARGS = frozenset({"-A", "--all", ".", "./", ":/"})
+STAGE_ALL_ARGS = frozenset({"-A", "--all", ".", "./", ":/", "*"})
 WHOLE_TREE = frozenset({".", "./", ":/", "*"})
 STAGE_HINT = "stage the files you changed by name"
 DISCARD_HINT = "it discards work that may not be recoverable; ask the user to run it themselves if it is really needed"
+MCP_BRANCH_WRITES = ("push_files", "create_or_update_file", "delete_file")
+DEFAULT_RISK_LABELS = ("risk:low", "risk:high")
+COMMIT_SHORT_WITH_VALUE = frozenset("mFCct")
+COMMIT_SHORT_ATTACHED = frozenset("uS")  # optional value, only when attached (-uno, -S<keyid>)
+COMMIT_LONG_WITH_VALUE = frozenset(
+    {
+        "--message",
+        "--file",
+        "--author",
+        "--date",
+        "--reuse-message",
+        "--reedit-message",
+        "--fixup",
+        "--squash",
+        "--template",
+        "--cleanup",
+        "--trailer",
+        "--pathspec-from-file",
+    }
+)
+GH_FIELD_FLAGS = frozenset({"--field", "--raw-field", "--input"})
+GH_REF_ENDPOINT = re.compile(r"(?:^|/)git/refs/heads/([^?#]*)")
+GH_STATUS_ENDPOINT = re.compile(r"(?:^|/)statuses/[^/?#]+/?(?:[?#].*)?$")
 GH_MERGE_ENDPOINT = re.compile(r"(^|/)merges?(\?.*)?$")
 GRAPHQL_MERGE = re.compile(r"mergePullRequest|enablePullRequestAutoMerge")
 
@@ -87,6 +126,22 @@ def load_protected(project_dir):
     except (OSError, ValueError, AttributeError):
         names.update(DEFAULT_PROTECTED)
     return names
+
+
+def load_risk_labels(project_dir):
+    """Return (riskLow, riskHigh) label names from `.claude/devflow.json`, with defaults."""
+    low, high = DEFAULT_RISK_LABELS
+    try:
+        with open(
+            os.path.join(project_dir, ".claude", "devflow.json"), encoding="utf-8"
+        ) as fh:
+            labels = json.load(fh).get("labels")
+        if isinstance(labels, dict):
+            low = str(labels.get("riskLow") or low)
+            high = str(labels.get("riskHigh") or high)
+    except (OSError, ValueError, AttributeError):
+        pass
+    return low, high
 
 
 def current_branch(directory):
@@ -168,10 +223,45 @@ def strip_options(tokens, with_value):
     return i, directory
 
 
-def check_gh(tokens):
-    """Reason string if the `gh` call merges a PR, else None."""
+def api_method(tokens):
+    """Explicit HTTP method of a `gh api` call ('' when none was given)."""
+    method = ""
+    for j, tok in enumerate(tokens):
+        if tok in ("-X", "--method") and j + 1 < len(tokens):
+            method = tokens[j + 1].upper()
+        elif tok.startswith("--method="):
+            method = tok.split("=", 1)[1].upper()
+        elif tok.startswith("-X") and len(tok) > 2:
+            method = tok[2:].upper()
+    return method
+
+
+def api_has_fields(tokens):
+    """True when `gh api` gets request fields or a body (gh then defaults to POST)."""
+    for tok in tokens:
+        if tok.startswith("--"):
+            if tok.split("=", 1)[0] in GH_FIELD_FLAGS:
+                return True
+        elif tok[:2] in ("-f", "-F"):
+            return True
+    return False
+
+
+def option_values(tokens, name):
+    """Comma-separated values of every `name <v>` / `name=<v>` option in `tokens`."""
+    values = []
+    for j, tok in enumerate(tokens):
+        if tok == name and j + 1 < len(tokens):
+            values.extend(tokens[j + 1].split(","))
+        elif tok.startswith(name + "="):
+            values.extend(tok.split("=", 1)[1].split(","))
+    return [v.strip().casefold() for v in values]
+
+
+def check_gh(tokens, protected=DEFAULT_PROTECTED, labels=DEFAULT_RISK_LABELS):
+    """Reason string if the `gh` call is not allowed, else None."""
     if any(GRAPHQL_MERGE.search(t) for t in tokens):
-        return "merging a pull request through the GraphQL API"
+        return "merging a pull request through the GraphQL API. Humans own merges"
     words, i = [], 1
     while i < len(tokens):
         if tokens[i] in GH_OPTIONS_WITH_VALUE:
@@ -181,19 +271,29 @@ def check_gh(tokens):
             words.append(tokens[i])
         i += 1
     if words[:2] == ["pr", "merge"]:
-        return "'gh pr merge'"
+        return "'gh pr merge'. Humans own merges"
     if words[:1] == ["api"]:
-        method = ""
-        for j, tok in enumerate(tokens):
-            if tok in ("-X", "--method") and j + 1 < len(tokens):
-                method = tokens[j + 1].upper()
-            elif tok.startswith("--method="):
-                method = tok.split("=", 1)[1].upper()
-            elif tok.startswith("-X") and len(tok) > 2:
-                method = tok[2:].upper()
+        method = api_method(tokens)
         endpoint = any(GH_MERGE_ENDPOINT.search(t) for t in words[1:])
         if endpoint and method != "GET":
-            return "'gh api' call to a merge endpoint"
+            return "'gh api' call to a merge endpoint. Humans own merges"
+        if method not in ("", "GET") or (method == "" and api_has_fields(tokens)):
+            for word in words[1:]:
+                ref = GH_REF_ENDPOINT.search(word)
+                if ref and is_protected(ref.group(1), protected):
+                    return (
+                        "'gh api' write to the protected branch ref '%s' "
+                        "(deleting or moving a protected branch)" % ref.group(1)
+                    )
+                if GH_STATUS_ENDPOINT.search(word):
+                    return (
+                        "'gh api' write to a commit status (forging a check result such as "
+                        "devflow/review)"
+                    )
+    if words[:2] in (["pr", "edit"], ["issue", "edit"]):
+        high = labels[1]
+        if high.casefold() in option_values(tokens, "--remove-label"):
+            return "removing the label '%s' downgrades the risk; a human does that" % high
     return None
 
 
@@ -249,6 +349,31 @@ def operands_of(args):
     return out
 
 
+def scan_flags(args, short_with_value, long_with_value, short_attached=frozenset()):
+    """(short letters, long names) of `args`, skipping the values of options that take one."""
+    shorts, longs, i = set(), set(), 0
+    while i < len(args):
+        arg = args[i]
+        i += 1
+        if arg == "--":
+            break
+        if arg.startswith("--"):
+            name = arg.split("=", 1)[0]
+            longs.add(name)
+            if name in long_with_value and "=" not in arg:
+                i += 1
+        elif arg.startswith("-") and len(arg) > 1:
+            for k, letter in enumerate(arg[1:], 1):
+                shorts.add(letter)
+                if letter in short_attached:
+                    break  # the rest of the group is the value; the next argument is not
+                if letter in short_with_value:
+                    if k == len(arg) - 1:
+                        i += 1  # the value is the next argument
+                    break  # otherwise the rest of the group is the value
+    return shorts, longs
+
+
 def check_add(args):
     for arg in args:
         if arg in STAGE_ALL_ARGS:
@@ -265,7 +390,12 @@ def check_destructive(sub, args):
     if sub == "reset" and "--hard" in long_:
         found = "git reset --hard"
     elif sub == "clean" and ("f" in short or "--force" in long_):
-        found = "git clean -f"
+        if "n" not in short and "--dry-run" not in long_:
+            found = "git clean -f"
+    elif sub == "checkout" and ("f" in short or "--force" in long_):
+        found = "git checkout -f"
+    elif sub == "switch" and ("f" in short or {"--force", "--discard-changes"} & long_):
+        found = "git switch -f"
     elif sub == "branch":
         deleting = "d" in short or "--delete" in long_
         if "D" in short or (deleting and ("f" in short or "--force" in long_)):
@@ -297,13 +427,25 @@ def check_git(tokens, protected, branch_of):
     if i >= len(tokens):
         return None
     sub, args = tokens[i], tokens[i + 1 :]
+    if sub == "commit":
+        shorts, longs = scan_flags(
+            args, COMMIT_SHORT_WITH_VALUE, COMMIT_LONG_WITH_VALUE, COMMIT_SHORT_ATTACHED
+        )
+        if "n" in shorts or "--no-verify" in longs:
+            return NO_VERIFY_REASON
     if sub == "push":
+        if "--no-verify" in scan_flags(args, frozenset("o"), PUSH_OPTIONS_WITH_VALUE)[1]:
+            return NO_VERIFY_REASON
         return check_push(tokens, protected, branch_of)
     if sub == "add":
         return check_add(args)
     return check_destructive(sub, args)
 
 
+NO_VERIFY_REASON = (
+    "'--no-verify' skips the project's hooks (the checks that guard commits and pushes); "
+    "let them run"
+)
 PUSH_HINT = "Humans own merges and protected branches (%s); push your own feature branch instead"
 
 
@@ -377,7 +519,7 @@ def push_reason(tokens, protected, branch_of):
     return None
 
 
-def reasons(command, protected, branch_of):
+def reasons(command, protected, branch_of, labels=DEFAULT_RISK_LABELS):
     """List of reasons why the Bash `command` must be blocked (empty = allowed)."""
     try:
         parsed = [list(seg) for seg in segments(command)]
@@ -389,9 +531,7 @@ def reasons(command, protected, branch_of):
     for seg in parsed:
         for tokens in iter_commands(seg, split):
             if tokens[0] == "gh":
-                reason = check_gh(tokens)
-                if reason:
-                    reason = "%s. Humans own merges" % reason
+                reason = check_gh(tokens, protected, labels)
             else:
                 reason = check_git(tokens, protected, branch_of)
             if reason and reason not in found:
@@ -399,7 +539,23 @@ def reasons(command, protected, branch_of):
     return found
 
 
-def main():
+def mcp_write_reason(branch, protected):
+    """Reason string if an MCP file write to `branch` is not allowed, else None."""
+    branch = branch.strip() if isinstance(branch, str) else ""
+    if not branch:
+        return (
+            "this write names no branch, so it would go to the repository's default branch; "
+            "pass your own feature branch"
+        )
+    if is_protected(resolve(branch, ""), protected):
+        return "writing files straight to the protected branch '%s'; %s" % (
+            branch,
+            PUSH_HINT % ", ".join(sorted(protected)),
+        )
+    return None
+
+
+def run():
     payload = json.load(sys.stdin)
     tool = payload.get("tool_name", "")
     if tool.endswith("merge_pull_request"):
@@ -408,12 +564,20 @@ def main():
             file=sys.stderr,
         )
         return 2
-    if tool != "Bash":
-        return 0
-    command = (payload.get("tool_input") or {}).get("command", "")
     project_dir = (
         os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
     )
+    if tool.endswith(MCP_BRANCH_WRITES):
+        reason = mcp_write_reason(
+            (payload.get("tool_input") or {}).get("branch"), load_protected(project_dir)
+        )
+        if reason:
+            print("Blocked by the devflow guard: %s." % reason, file=sys.stderr)
+            return 2
+        return 0
+    if tool != "Bash":
+        return 0
+    command = (payload.get("tool_input") or {}).get("command", "")
     protected = load_protected(project_dir)
     work_dir = payload.get("cwd") or project_dir
 
@@ -422,11 +586,25 @@ def main():
             os.path.join(work_dir, directory) if directory else work_dir
         )
 
-    found = reasons(command, protected, branch_of)
+    found = reasons(command, protected, branch_of, load_risk_labels(project_dir))
     if found:
         print("Blocked by the devflow guard: %s." % found[0], file=sys.stderr)
         return 2
     return 0
+
+
+def main():
+    """Entry point. Fails closed: any unexpected error blocks (exit 2) instead of exiting 1,
+    which Claude Code treats as a non-blocking error and would silently disable the guard."""
+    try:
+        return run()
+    except Exception as exc:  # noqa: BLE001 - every failure must block
+        print(
+            "Blocked by the devflow guard: internal error (%s: %s); fix or report the guard, "
+            "or ask the user to run the command." % (type(exc).__name__, exc),
+            file=sys.stderr,
+        )
+        return 2
 
 
 if __name__ == "__main__":

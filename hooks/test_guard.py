@@ -3,12 +3,16 @@
 python3 -m unittest discover -s hooks -p 'test_*.py' -v
 """
 
+import contextlib
+import io
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import guard
 
@@ -202,6 +206,98 @@ class HookProcess(unittest.TestCase):
             self.assertEqual(run_hook({"tool_name": "Read", "tool_input": {}}, tmp).returncode, 0)
 
 
+class McpBranchWrites(unittest.TestCase):
+    TOOLS = (
+        "mcp__github__push_files",
+        "mcp__0322__create_or_update_file",
+        "mcp__github__delete_file",
+    )
+
+    def call(self, tool, tool_input, config=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            if config is not None:
+                os.makedirs(os.path.join(tmp, ".claude"))
+                with open(os.path.join(tmp, ".claude", "devflow.json"), "w", encoding="utf-8") as fh:
+                    json.dump(config, fh)
+            return run_hook({"tool_name": tool, "tool_input": tool_input}, tmp)
+
+    def test_protected_branch_is_blocked(self):
+        for tool in self.TOOLS:
+            for branch in ("main", "develop"):
+                with self.subTest(tool=tool, branch=branch):
+                    result = self.call(tool, {"branch": branch})
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn("protected branch", result.stderr)
+
+    def test_missing_or_empty_branch_is_blocked(self):
+        for tool in self.TOOLS:
+            for tool_input in ({}, {"branch": ""}, {"branch": None}):
+                with self.subTest(tool=tool, tool_input=tool_input):
+                    result = self.call(tool, tool_input)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn("default branch", result.stderr)
+
+    def test_feature_branch_is_allowed(self):
+        for tool in self.TOOLS:
+            with self.subTest(tool=tool):
+                self.assertEqual(self.call(tool, {"branch": "feat/12-x"}).returncode, 0)
+
+    def test_glob_protected_entry_is_blocked(self):
+        result = self.call(self.TOOLS[0], {"branch": "release/1.2"}, {"protectedBranches": ["release/*"]})
+        self.assertEqual(result.returncode, 2)
+
+    def test_configured_base_branch_is_blocked(self):
+        self.assertEqual(self.call(self.TOOLS[0], {"branch": "trunk"}, {"baseBranch": "trunk"}).returncode, 2)
+
+    def test_matcher_covers_bash_and_mcp_tools(self):
+        hooks_json = json.loads(Path(__file__).with_name("hooks.json").read_text(encoding="utf-8"))
+        matcher = hooks_json["hooks"]["PreToolUse"][0]["matcher"]
+        for tool in ("Bash", "mcp__github__merge_pull_request") + self.TOOLS:
+            self.assertTrue(re.fullmatch(matcher, tool), tool)
+        self.assertFalse(re.fullmatch(matcher, "Read"))
+
+
+class FailClosed(unittest.TestCase):
+    def run_main(self, stdin_text, **patches):
+        stderr = io.StringIO()
+        with mock.patch("sys.stdin", io.StringIO(stdin_text)), mock.patch("sys.stderr", stderr):
+            with contextlib.ExitStack() as stack:
+                for name, effect in patches.items():
+                    stack.enter_context(mock.patch.object(guard, name, side_effect=effect))
+                code = guard.main()
+        return code, stderr.getvalue()
+
+    def test_internal_error_blocks(self):
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git status"}})
+        code, err = self.run_main(payload, reasons=RuntimeError("boom"))
+        self.assertEqual(code, 2)
+        self.assertIn("Blocked by the devflow guard: internal error (RuntimeError: boom)", err)
+        self.assertIn("ask the user to run the command", err)
+
+    def test_error_loading_config_blocks_mcp_write(self):
+        payload = json.dumps({"tool_name": "mcp__x__push_files", "tool_input": {"branch": "feat/x"}})
+        code, err = self.run_main(payload, load_protected=OSError("disk"))
+        self.assertEqual(code, 2)
+        self.assertIn("internal error (OSError: disk)", err)
+
+    def test_unparsable_stdin_blocks(self):
+        for text in ("", "not json", "[1, 2]"):
+            with self.subTest(text=text):
+                code, err = self.run_main(text)
+                self.assertEqual(code, 2)
+                self.assertIn("internal error", err)
+
+    def test_unparsable_stdin_blocks_in_a_process(self):
+        result = subprocess.run(
+            ["python3", str(HOOK)], check=False, input="{", capture_output=True, text=True
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("internal error", result.stderr)
+
+    def test_normal_calls_are_unchanged(self):
+        self.assertEqual(self.run_main(json.dumps({"tool_name": "Read", "tool_input": {}}))[0], 0)
+
+
 class DestructiveGit(unittest.TestCase):
     BLOCKED = [
         "git reset --hard",
@@ -285,6 +381,147 @@ class DestructiveGit(unittest.TestCase):
     def test_reason_names_the_command(self):
         self.assertIn("git reset --hard", reasons_on("git -C x reset --hard")[0])
         self.assertIn("git stash clear", reasons_on("git stash clear")[0])
+
+
+class MoreBashRules(unittest.TestCase):
+    BLOCKED = [
+        # skipping hooks
+        "git commit --no-verify -m x",
+        "git commit -n -m x",
+        "git commit -nm x",
+        "git commit -anm 'x'",
+        "git commit -m x -n",
+        "git commit -m x --no-verify",
+        "git commit -am x --no-verify",
+        "git -C /repo commit -n -m x",
+        "git push --no-verify origin feature/x",
+        "git push origin feature/x --no-verify",
+        # gh api: protected refs and commit statuses
+        "gh api -X DELETE repos/acme/shop/git/refs/heads/main",
+        "gh api --method DELETE repos/acme/shop/git/refs/heads/develop",
+        "gh api -X PATCH repos/acme/shop/git/refs/heads/main -f sha=abc -F force=true",
+        "gh api repos/acme/shop/git/refs/heads/main -f sha=abc",
+        "gh api repos/acme/shop/git/refs/heads/main --input body.json",
+        "gh api -XDELETE /repos/acme/shop/git/refs/heads/main",
+        "gh api -X DELETE repos/acme/shop/git/refs/heads/release/1.2",
+        "gh api -X POST repos/acme/shop/statuses/abc123 -f state=success -f context=devflow/review",
+        "gh api repos/acme/shop/statuses/abc123 -f state=success",
+        "gh api repos/acme/shop/statuses/abc123 --raw-field state=success",
+        "gh api repos/acme/shop/statuses/abc123 --field=state=success",
+        "gh api -X PUT repos/acme/shop/statuses/abc123",
+        # risk labels, commit flags that precede an attached value
+        "git commit -S -n -m x",
+        "git commit -nuno -m x",
+        "gh pr edit 12 --remove-label risk:high",
+        "gh pr edit 12 --remove-label=bug,risk:high",
+        # staging everything with a glob
+        "git add *",
+        "git add -v *",
+        # discarding local changes
+        "git checkout -f feature/x",
+        "git checkout --force feature/x",
+        "git checkout -fb feature/x",
+        "git switch -f feature/x",
+        "git switch --force feature/x",
+        "git switch --discard-changes feature/x",
+        "git -C /repo checkout -f main",
+        "git clean -f -d --force",
+    ]
+    ALLOWED = [
+        "git commit -m x",
+        "git commit -am 'x'",
+        "git commit -m '-n'",
+        "git commit -m 'use --no-verify'",
+        "git commit -m --no-verify",
+        "git commit --message=--no-verify",
+        "git commit -F -",
+        "git commit -mn",
+        "git commit -m x --author='A <a@b.c>'",
+        "git commit -m x -- -n",
+        "git push -n origin feature/x",
+        "git push --dry-run origin feature/x",
+        "git push origin feature/x",
+        "gh api repos/acme/shop/git/refs/heads/main",
+        "gh api -X GET repos/acme/shop/git/refs/heads/main",
+        "gh api -X GET repos/acme/shop/git/refs/heads/main -f per_page=1",
+        "gh api -X DELETE repos/acme/shop/git/refs/heads/feature/x",
+        "gh api -X POST repos/acme/shop/git/refs -f ref=refs/heads/feature/x -f sha=abc",
+        "gh api repos/acme/shop/statuses/abc123",
+        "gh api -X GET repos/acme/shop/statuses/abc123",
+        "gh api repos/acme/shop/commits/abc123/statuses",
+        "gh api repos/acme/shop/commits/abc123/status",
+        "gh pr edit 12 --add-label risk:high",
+        "gh pr edit 12 --add-label risk:low",
+        "gh pr edit 12 --add-label=risk:low",
+        "gh pr edit 12 --add-label devflow,risk:low",
+        "gh issue edit 5 --add-label=bug,risk:low,x",
+        "git commit -uno -m x",
+        "git commit -SABCDn123 -m x",
+        "git commit -S -m x",
+        "git commit --untracked-files=no -m x",
+        "gh pr edit 12 --add-label devflow,bug",
+        "gh pr edit 12 --remove-label risk:low",
+        "gh issue edit 5 --remove-label bug",
+        "gh pr edit 12 --title 'risk:low'",
+        "git add src/a.py",
+        "echo git add *",
+        "git checkout -b feature/x",
+        "git checkout -B feature/x",
+        "git checkout feature/x",
+        "git switch feature/x",
+        "git switch -c feature/x",
+        "git switch -C feature/x origin/feature/x",
+        "git clean -nf",
+        "git clean -fn",
+        "git clean -fnd",
+        "git clean -f --dry-run",
+        "git clean -dfn",
+    ]
+
+    def test_blocked(self):
+        for command in self.BLOCKED:
+            with self.subTest(command=command):
+                self.assertTrue(reasons_on(command, protected={"main", "develop", "release/*"}), command)
+
+    def test_allowed(self):
+        for command in self.ALLOWED:
+            with self.subTest(command=command):
+                self.assertEqual(reasons_on(command, protected={"main", "develop", "release/*"}), [], command)
+
+    def test_reasons_are_specific(self):
+        self.assertIn("skips the project's hooks", reasons_on("git commit -nm x")[0])
+        self.assertIn("skips the project's hooks", reasons_on("git push --no-verify")[0])
+        self.assertIn("protected branch", reasons_on("gh api -X DELETE repos/a/b/git/refs/heads/main")[0])
+        self.assertIn("commit status", reasons_on("gh api repos/a/b/statuses/abc -f state=success")[0])
+        self.assertIn("downgrades the risk", reasons_on("gh pr edit 1 --remove-label risk:high")[0])
+        self.assertIn("stage the files you changed by name", reasons_on("git add *")[0])
+        self.assertIn("discards", reasons_on("git switch --discard-changes x")[0])
+
+
+class RiskLabelConfig(unittest.TestCase):
+    def test_default_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(guard.load_risk_labels(tmp), ("risk:low", "risk:high"))
+
+    def test_configured_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, ".claude"))
+            with open(os.path.join(tmp, ".claude", "devflow.json"), "w", encoding="utf-8") as fh:
+                json.dump({"labels": {"riskLow": "safe", "riskHigh": "danger"}}, fh)
+            self.assertEqual(guard.load_risk_labels(tmp), ("safe", "danger"))
+            payload = {"tool_name": "Bash", "tool_input": {"command": "gh pr edit 1 --add-label safe"}}
+            self.assertEqual(run_hook(payload, tmp).returncode, 0)
+            payload = {"tool_name": "Bash", "tool_input": {"command": "gh pr edit 1 --remove-label risk:high"}}
+            self.assertEqual(run_hook(payload, tmp).returncode, 0)
+            payload = {"tool_name": "Bash", "tool_input": {"command": "gh pr edit 1 --remove-label danger"}}
+            self.assertEqual(run_hook(payload, tmp).returncode, 2)
+
+    def test_invalid_config_uses_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, ".claude"))
+            with open(os.path.join(tmp, ".claude", "devflow.json"), "w", encoding="utf-8") as fh:
+                fh.write('{"labels": "nope"}')
+            self.assertEqual(guard.load_risk_labels(tmp), ("risk:low", "risk:high"))
 
 
 class StageEverything(unittest.TestCase):
