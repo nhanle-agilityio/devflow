@@ -1,6 +1,6 @@
 ---
 name: doctor
-description: Check that devflow works in this project (config, installed templates, GitHub access, worktrees, stale branches, claims, open PRs, allow-list, project files the plugin now owns) and report what to do. Read-only unless --fix, which fixes only what the user confirms item by item.
+description: Check that devflow works in this project (config, installed templates, GitHub access, worktrees, stale branches, claims, open PRs, allow-list, project files the plugin now owns, the guard hook) and report what to do. Read-only unless --fix, which fixes only what the user confirms item by item.
 argument-hint: "[--fix]"
 disable-model-invocation: true
 ---
@@ -13,7 +13,7 @@ Reports the health of the devflow setup. Read-only by default. With `--fix`, cha
 
 **Merged state:** never trust a `merged` field from a PR list or search result; the GitHub MCP list tools report `merged: false` for merged PRs. A PR is merged when `pull_request_read` (method `get`) returns a non-null `merged_at`, or when `git merge-base --is-ancestor <head sha> <remote>/<baseBranch>` succeeds after a fetch. Closed with neither: closed without merging. Take "merged by" and "merged at" from `pull_request_read`, not from a list.
 
-Run all checks even when one fails. If `.claude/devflow.json` is missing, report fail for check 1, suggest `/devflow:init`, and run only checks 3, 8 and 9.
+Run all checks even when one fails. If `.claude/devflow.json` is missing, report fail for check 1, suggest `/devflow:init`, and run only checks 3, 8, 9 and 10 (none of them needs the config).
 
 ## Checks
 
@@ -26,6 +26,7 @@ Run all checks even when one fails. If `.claude/devflow.json` is missing, report
 7. **Open PRs.** Open PRs labelled `labels.devflow` that are behind their base, conflicting, or have red checks. Report them and point at `/devflow:sync #<pr>`. Never fix them here.
 8. **Allow-list.** `.claude/settings.json` has the `permissions` allow rules background sessions need: the output of `node "${CLAUDE_PLUGIN_ROOT}/bin/devflow-setup" allow < .claude/devflow.json` (git, the remote, checks, verify, worktree setup, MCP tools; use the GitHub MCP prefix the project already allows). List what is missing (warn), and the `manual` commands the user must allow by hand (no safe specific prefix). A bare interpreter, shell or runner rule already in the list (`Bash(python3:*)`, `Bash(node:*)`, `Bash(bash:*)`, `Bash(npx:*)`) is a warn: it allows any code; suggest the specific rule instead. `--fix` after a yes: merge them in; never add a deny rule or a rule that allows merging a PR or pushing to a protected branch.
 9. **Owned by the plugin now.** Project files and rules that duplicate what the plugin does: `.claude/hooks/block_git_add_all.py` and its test, the `settings.json` hook that runs it and a `hook-test` style entry in `checks`; deny rules the guard enforces (force push, `gh pr merge`, pushes to protected branches, destructive git, `git add -A`); a maintenance `.claude/loop.md`; a project `.claude/agents/code-reviewer.md`. Build the list with `node "${CLAUDE_PLUGIN_ROOT}/bin/devflow-setup" leftovers` given `{"settings": <.claude/settings.json>, "config": <.claude/devflow.json>, "files": <git ls-files .claude>}`. Report each as `warn` with why it is removable and what replaces it. Never delete, edit or unregister any of them, also not with `--fix`: the user removes them (a project agent may hold project rules worth moving into CLAUDE.md first; say so).
+10. **Guard.** The guard hook must work on this machine, or nothing blocks merges, force pushes or `git add -A`. Run `printf '%s' '{"tool_name":"mcp__x__merge_pull_request","tool_input":{}}' | python3 "${CLAUDE_PLUGIN_ROOT}/hooks/guard.py"; echo $?` and expect exit status `2`. Anything else (python3 missing, a crash, exit 0) is `fail`: the guard is not protecting this machine. Fix: install Python 3.9+ and make sure `python3` is on the PATH of non-interactive shells (the hook runs without your shell profile); if it still crashes, report the guard's stderr to the plugin maintainers. Read-only; `--fix` has nothing to change here.
 
 ## Report
 
