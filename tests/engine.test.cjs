@@ -388,7 +388,7 @@ test('verification that could not run makes a risk:low PR high with the reason',
   assert.equal(rep[0].risk, 'high');
   const ship = prompt(calls, 'ship');
   assert.match(ship, /escalated from the issue label: verification was required but could not run: verify lock busy/);
-  assert.doesNotMatch(ship, /second line/);
+  assert.match(ship, /- Risk: .*verify lock busy\n/);
   assert.match(ship, /Also add "risk:high" to the issue/);
   assert.match(rep[0].notes.join(), /risk high: verification was required but could not run: verify lock busy/);
 });
