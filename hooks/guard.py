@@ -4,6 +4,9 @@
 Exit 2 blocks the call and sends the reason on stderr back to Claude. Blocked:
 
 - any MCP tool whose name ends with `merge_pull_request`;
+- MCP tools that write straight to a branch (names ending with `push_files`,
+  `create_or_update_file`, `delete_file`) when `tool_input.branch` is protected or missing/empty
+  (the API then writes to the default branch);
 - Bash `gh pr merge`, `gh api .../merge` (unless an explicit GET) and the GraphQL merge mutations;
 - Bash `git push` that forces (`--force`, `-f`, `+refspec`; `--force-with-lease` is allowed),
   mirrors or pushes `--all`, or targets a protected branch (explicit refspec, `--delete`, or a
@@ -64,6 +67,7 @@ STAGE_ALL_ARGS = frozenset({"-A", "--all", ".", "./", ":/"})
 WHOLE_TREE = frozenset({".", "./", ":/", "*"})
 STAGE_HINT = "stage the files you changed by name"
 DISCARD_HINT = "it discards work that may not be recoverable; ask the user to run it themselves if it is really needed"
+MCP_BRANCH_WRITES = ("push_files", "create_or_update_file", "delete_file")
 GH_MERGE_ENDPOINT = re.compile(r"(^|/)merges?(\?.*)?$")
 GRAPHQL_MERGE = re.compile(r"mergePullRequest|enablePullRequestAutoMerge")
 
@@ -399,6 +403,22 @@ def reasons(command, protected, branch_of):
     return found
 
 
+def mcp_write_reason(branch, protected):
+    """Reason string if an MCP file write to `branch` is not allowed, else None."""
+    branch = branch.strip() if isinstance(branch, str) else ""
+    if not branch:
+        return (
+            "this write names no branch, so it would go to the repository's default branch; "
+            "pass your own feature branch"
+        )
+    if is_protected(resolve(branch, ""), protected):
+        return "writing files straight to the protected branch '%s'; %s" % (
+            branch,
+            PUSH_HINT % ", ".join(sorted(protected)),
+        )
+    return None
+
+
 def main():
     payload = json.load(sys.stdin)
     tool = payload.get("tool_name", "")
@@ -408,12 +428,20 @@ def main():
             file=sys.stderr,
         )
         return 2
-    if tool != "Bash":
-        return 0
-    command = (payload.get("tool_input") or {}).get("command", "")
     project_dir = (
         os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
     )
+    if tool.endswith(MCP_BRANCH_WRITES):
+        reason = mcp_write_reason(
+            (payload.get("tool_input") or {}).get("branch"), load_protected(project_dir)
+        )
+        if reason:
+            print("Blocked by the devflow guard: %s." % reason, file=sys.stderr)
+            return 2
+        return 0
+    if tool != "Bash":
+        return 0
+    command = (payload.get("tool_input") or {}).get("command", "")
     protected = load_protected(project_dir)
     work_dir = payload.get("cwd") or project_dir
 
