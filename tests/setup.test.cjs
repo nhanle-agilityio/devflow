@@ -26,7 +26,7 @@ test('allowRules: checks, verify, worktree setup and the remote', () => {
     'Bash(.venv/bin/mypy src:*)',
     'Bash(make run:*)',
     'Bash(make setup:*)',
-    'Bash(curl:*)',
+    'Bash(curl http://127.0.0.1:5050/*)',
     'Bash(git push -u upstream:*)',
     'Bash(git push upstream:*)',
     'Bash(git fetch:*)',
