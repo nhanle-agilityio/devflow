@@ -78,6 +78,12 @@ test('minimalConfig keeps required keys and drops values equal to the schema def
   });
 });
 
+test('minimalConfig drops a default scan.ignore and keeps a custom one', () => {
+  const base = { github: { owner: 'a', repo: 'b' }, baseBranch: 'main', checks: [{ name: 't', run: 'make test' }] };
+  assert.deepEqual(minimalConfig({ ...base, scan: { ignore: [] } }, SCHEMA), base);
+  assert.deepEqual(minimalConfig({ ...base, scan: { ignore: ['tests/fixtures/**'] } }, SCHEMA).scan, { ignore: ['tests/fixtures/**'] });
+});
+
 test('minimalConfig does not change its input', () => {
   const full = { github: { owner: 'a', repo: 'b', remote: 'origin' }, baseBranch: 'main', checks: [] };
   const copy = JSON.parse(JSON.stringify(full));

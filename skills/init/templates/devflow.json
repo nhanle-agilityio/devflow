@@ -78,6 +78,9 @@
   // ignoreHotspots: hotspots matching these paths or globs (* and **) do not join lanes; conflicts there are small and
   // resolved by the merge gate's branch update or /devflow:sync.
   "dispatch": { "maxLanes": 3, "ignoreHotspots": ["README.md", "CHANGELOG.md"] },
+  // Weakened-checks scan: files matching these globs (** * ?) are skipped entirely, e.g. a test file whose fixture data
+  // holds the scanned patterns. .claude/devflow.json is never ignored, so editing this list is itself a scan hit.
+  "scan": { "ignore": [] },
   // Push notification (Claude Code PushNotification tool) when a run ends with a blocked issue, a risk:high PR waiting
   // for a human, or at the end of a lane. The other three switch each event on or off.
   "notify": { "push": true, "onDone": true, "onBlocked": true, "onHighRisk": true },

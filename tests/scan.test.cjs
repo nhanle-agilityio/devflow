@@ -71,3 +71,50 @@ test('a missing config scans with the default check configuration list', () => {
   assert.equal(out.scanned, true);
   assert.ok(out.hits.some((h) => h.file === 'pyproject.toml'));
 });
+
+function ignoreRepo(ignore) {
+  const { dir, git } = repo();
+  fs.writeFileSync(path.join(dir, '.claude', 'devflow.json'), JSON.stringify({ checks: [{ name: 'test', run: 'make test' }], scan: { ignore } }));
+  git('add', '.claude/devflow.json');
+  git('commit', '-q', '-m', 'ignore list');
+  git('switch', '-q', '-c', 'feat/y');
+  return { dir, git };
+}
+
+test('files matching scan.ignore are not reported and are listed in ignored', () => {
+  const { dir, git } = ignoreRepo(['fixtures/**', 'Makefile']);
+  fs.mkdirSync(path.join(dir, 'fixtures'));
+  fs.writeFileSync(path.join(dir, 'fixtures', 'f.py'), 'import os  # noqa\n');
+  fs.writeFileSync(path.join(dir, 'Makefile'), 'test:\n\ttrue\n');
+  fs.writeFileSync(path.join(dir, 'src', 'a.py'), 'import os  # noqa\n');
+  git('add', 'fixtures/f.py', 'Makefile', 'src/a.py');
+  git('commit', '-q', '-m', 'weaken');
+  const r = run(dir, 'feat/x', '.claude/devflow.json');
+  assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.deepEqual(out.hits.map((h) => h.file), ['src/a.py']);
+  assert.deepEqual(out.ignored.sort(), ['Makefile', 'fixtures/f.py']);
+});
+
+test('scan.ignore cannot hide a change to .claude/devflow.json', () => {
+  const { dir, git } = ignoreRepo(['**']);
+  fs.writeFileSync(path.join(dir, '.claude', 'devflow.json'), JSON.stringify({ checks: [], scan: { ignore: ['**'] } }));
+  fs.writeFileSync(path.join(dir, 'src', 'a.py'), 'import os  # noqa\n');
+  git('add', '.claude/devflow.json', 'src/a.py');
+  git('commit', '-q', '-m', 'cfg');
+  const out = JSON.parse(run(dir, 'feat/x', '.claude/devflow.json').stdout);
+  assert.deepEqual(out.hits.map((h) => `${h.file} ${h.kind}`), ['.claude/devflow.json check configuration changed']);
+  assert.deepEqual(out.ignored, ['src/a.py']);
+});
+
+test('a missing or invalid scan.ignore leaves the output unchanged', () => {
+  for (const bad of ['**', 5, [1, 2]]) {
+    const { dir, git } = ignoreRepo(bad);
+    fs.writeFileSync(path.join(dir, 'src', 'a.py'), 'import os  # noqa\n');
+    git('add', 'src/a.py');
+    git('commit', '-q', '-m', 'w');
+    const out = JSON.parse(run(dir, 'feat/x', '.claude/devflow.json').stdout);
+    assert.equal(out.ignored, undefined);
+    assert.deepEqual(out.hits.map((h) => h.file), ['src/a.py']);
+  }
+});

@@ -615,7 +615,8 @@ function checkConfigGlobs(checks) {
 }
 
 // hits: [{file, line, kind, text}]. diffText is `git diff` output; configGlobs from checkConfigGlobs.
-function scanWeakenedChecks(diffText, configGlobs) {
+// ignoreGlobs (optional, scan.ignore): files matching one are skipped entirely, except .claude/devflow.json.
+function scanWeakenedChecks(diffText, configGlobs, ignoreGlobs) {
   const isTestFile = (f) =>
     /(^|\/)(tests?|__tests__|spec|specs)\//.test(f) ||
     /(^|\/)(test_[^/]*\.py|[^/]*_test\.(py|go|rs)|[^/]*\.(test|spec)\.[cm]?[jt]sx?|[^/]*Tests?\.(java|kt)|[^/]*_spec\.rb)$/.test(f) ||
@@ -649,9 +650,11 @@ function scanWeakenedChecks(diffText, configGlobs) {
   const TEST_DEF = /^\s*(async\s+)?def\s+test\w*\s*\(|^\s*(it|test)\s*\(|^\s*func\s+Test\w+\s*\(/
   const ASSERT = /\bassert\b|\bself\.assert\w+\(|\bexpect\s*\(|\bassert\w*\s*\(|\bt\.(Error|Fatal)f?\(/
   const configRes = (Array.isArray(configGlobs) ? configGlobs : []).map(globToRegExp)
+  const ignoreRes = (Array.isArray(ignoreGlobs) ? ignoreGlobs : []).filter((g) => typeof g === 'string').map(globToRegExp)
   const hits = []
   for (const f of parseDiff(diffText)) {
     if (!f.file) continue
+    if (f.file !== '.claude/devflow.json' && ignoreRes.some((re) => re.test(f.file))) continue
     if (f.deleted && isTestFile(f.file)) {
       hits.push({ file: f.file, line: 0, kind: 'deleted test file', text: '' })
       continue
