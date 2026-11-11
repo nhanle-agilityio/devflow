@@ -4,7 +4,8 @@
 // Usage: devflow-scan <parentRef> [config path, default .claude/devflow.json]
 // Runs `git diff --unified=0 <parentRef>...HEAD`, scans it with the engine's pure helpers (parseDiff,
 // scanWeakenedChecks, checkConfigGlobs from workflows/next-task-engine.js, loaded through its exports hook)
-// and prints one JSON object: {"scanned": true, "hits": [{file, line, kind, text}]}. On any failure it prints
+// and prints one JSON object: {"scanned": true, "hits": [{file, line, kind, text}]}
+// (plus "ignored": [paths] when files matched scan.ignore of the config, which the scan skipped). On any failure it prints
 // {"scanned": false, "hits": [], "error": "..."} and exits 1. Node, no dependencies.
 
 const fs = require('fs');
@@ -30,6 +31,15 @@ function readChecks(configPath) {
   }
 }
 
+function readIgnore(configPath) {
+  try {
+    const ignore = JSON.parse(fs.readFileSync(configPath, 'utf8')).scan.ignore;
+    return Array.isArray(ignore) && ignore.every((g) => typeof g === 'string') ? ignore : [];
+  } catch (e) {
+    return [];
+  }
+}
+
 async function main(argv) {
   const [parentRef, configPath = '.claude/devflow.json'] = argv;
   if (!parentRef || parentRef.startsWith('-')) throw new Error('usage: devflow-scan <parentRef> [config path]');
@@ -44,7 +54,13 @@ async function main(argv) {
     throw new Error(`git diff failed: ${String((e.stderr || e.message || '')).trim().split('\n')[0]}`);
   }
   const h = await helpers();
-  return { scanned: true, hits: h.scanWeakenedChecks(diff, h.checkConfigGlobs(readChecks(configPath))) };
+  const ignore = readIgnore(configPath);
+  const out = { scanned: true, hits: h.scanWeakenedChecks(diff, h.checkConfigGlobs(readChecks(configPath)), ignore) };
+  // .claude/devflow.json is never ignored (same rule as in scanWeakenedChecks).
+  const res = ignore.map(h.globToRegExp);
+  const ignored = h.parseDiff(diff).map((f) => f.file).filter((f) => f && f !== '.claude/devflow.json' && res.some((re) => re.test(f)));
+  if (ignored.length) out.ignored = Array.from(new Set(ignored));
+  return out;
 }
 
 if (require.main === module) {
