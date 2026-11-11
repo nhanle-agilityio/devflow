@@ -699,7 +699,7 @@ test('scanWeakenedChecks never ignores .claude/devflow.json', async () => {
   for (const ignore of [['**'], ['.claude/**'], ['.claude/devflow.json']]) {
     const kinds = scanKinds(scanWeakenedChecks, text, checkConfigGlobs([]), ignore);
     assert.ok(kinds.some((k) => /^\.claude\/devflow\.json:\d+ check configuration changed$/.test(k)), kinds.join(' | '));
-    assert.ok(!kinds.some((k) => k.startsWith('src/a.py')), kinds.join(' | '));
+    assert.equal(kinds.some((k) => k.startsWith('src/a.py')), ignore[0] !== '**', kinds.join(' | '));
   }
 });
 
