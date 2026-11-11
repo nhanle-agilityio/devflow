@@ -69,7 +69,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 | Test files for docs and skill text | `tests/docs.test.cjs` (DESIGN.md, README.md, CHANGELOG keywords) and `tests/skills.test.cjs` (SKILL.md text) are new; whichever task lands first creates each, the others append their cases. Like the docs, these shared test files are not hotspots. | Append-only; sync resolves conflicts. |
 | Changelog entries | Each entry cites its issue number `(#NN)`. | T10 can check all nine are present. |
 | "Blocks at any stage" | Tested on a sample: Plan, Review and the `Error` stage of T2. | One code path for all stages. |
-| Gate: pending checks and merges | Only a required check that has started and is not finished (a queued or in-progress check run, or a `pending` commit status) holds the update slot. A missing check (no run and no status) does not hold it: the PR is skipped with `waiting for <name>: missing` and the slot passes on. A failed check releases it too. After a merge, no update happens in that run (`deferred: one merge per run`, as today). | Keeps one CI run at a time without letting a check that never starts (wrong name, path filter, fork approval) stop all updates. |
+| Gate: pending checks and merges | Only a required check that has started and is not finished (a queued or in-progress check run, or a `pending` commit status) holds the update slot. A missing check (no run and no status) holds it only while the head commit's committer date is less than 15 minutes old (a constant in the gate script, no config key), which covers the gap between `update-branch` and the first check appearing; after that the PR is skipped with `waiting for <name>: missing` and the slot passes on. A failed check releases it at once. After a merge, no update happens in that run (`deferred: one merge per run`, as today). | Keeps one CI run at a time without letting a check that never starts (wrong name, path filter, fork approval) stop all updates for longer than 15 minutes. |
 | Gate: bot logins | Logins are compared after stripping a `[bot]` suffix (REST and GraphQL spell bots differently). A thread with no comments does not block. | Bot PRs must match their own replies. |
 | Throw during parallel QA and Implement | Cleanup runs after both agents have settled (`Promise.allSettled`). A non-Error throw or an empty message gives the reason `Error: unknown`. | No agent may still be committing while cleanup runs. |
 | Counting syntax | Heading match is case-insensitive; `- [ ]`, `- [x]` and `- [X]` count; `*` and `+` bullets and numbered items do not. When Plan blocks, the count is still compared and the note added. | Matches the issue template. |
@@ -96,7 +96,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 **Merge gate (`skills/init/templates/github/scripts/devflow-merge-gate.cjs`).**
 
 - `state.updated` (boolean). In the behind branch of `evaluate`: if `state.updated`, return `{action: 'deferred', reason: 'deferred: waits for its turn'}`; otherwise update (or not, in dry run), set `state.updated = true`.
-- `checksGreen` returns `{ok, state, reason}` with `state` one of `green`, `pending` (a started, unfinished run or a `pending` status), `failed` or `missing`. When an up-to-date candidate's checks are `pending`, `evaluate` sets `state.updated = true` (it holds the slot) and returns the check reason as today; `failed` and `missing` do not set it.
+- `checksGreen` returns `{ok, state, reason}` with `state` one of `green`, `pending` (a started, unfinished run or a `pending` status), `failed` or `missing`. When an up-to-date candidate's checks are `pending`, or `missing` while the head commit's committer date is less than `MISSING_GRACE_MS` (15 minutes) old, `evaluate` sets `state.updated = true` (it holds the slot) and returns the check reason as today; `failed`, and `missing` on an older head, do not set it.
 - `unresolvedThreads` queries the first comment's `author { login __typename }` and `authorAssociation` plus the last comment's author. A thread blocks when not resolved or outdated and:
   - started by a `Bot`: last comment is not by the PR author (today's rule);
   - started by the PR author: today's rule;
@@ -118,7 +118,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 - T4 and T5 change the gate every reusable-mode project runs at the next tag: released as a minor (2.9.0), never moved into an existing tag.
 - `author_association` for a user who is a member of a private org may read `CONTRIBUTOR` when membership is private; such a user's threads are ignored by sync and the gate. Mitigation: documented in DESIGN.md; the owner can make membership public or add them as collaborator.
 - Reading the issue in seven stages adds MCP calls per issue; acceptable for correctness.
-- QA: two rounds; every question they raised is settled in Decisions. The spec PR review raised 3 warnings (gate slot with a missing check, claim race assignee, T10 vs docs tests) and the review bot's identity; all four are settled in Decisions. Nothing is open.
+- QA: two rounds; every question they raised is settled in Decisions. The spec PR review raised 3 warnings (gate slot with a missing check, claim race assignee, T10 vs docs tests) and the review bot's identity; a second review raised the gap right after an update (missing checks now hold the slot for 15 minutes). All are settled in Decisions. Nothing is open.
 
 ## Tasks
 
@@ -237,7 +237,8 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 - [ ] With three eligible candidates all behind their base, one run calls `updateBranch` once, for the first in priority order (priority label, then PR number) (action `updated`); the other two get action `deferred`, reason `deferred: waits for its turn`.
 - [ ] A candidate that is behind but skipped by an earlier rule (draft, risk, blocked, stacked, open dependency, high-risk file, conflict) does not take the update slot: the next eligible behind candidate is updated.
 - [ ] When the first eligible candidate is up to date and a required check has started but not finished (queued or in-progress run, or `pending` status), it holds the slot: a later behind candidate is `deferred` with reason `deferred: waits for its turn` and `updateBranch` is not called.
-- [ ] When the first eligible candidate is up to date and a required check has no run and no status at all, it is skipped with reason `waiting for <name>: missing` and does not hold the slot: the next behind candidate is `updated`.
+- [ ] When the first eligible candidate is up to date, a required check has no run and no status, and its head commit is less than 15 minutes old, it holds the slot: a later behind candidate is `deferred` with reason `deferred: waits for its turn` and `updateBranch` is not called.
+- [ ] When the first eligible candidate is up to date, a required check has no run and no status, and its head commit is 15 minutes old or older, it is skipped with reason `waiting for <name>: missing` and does not hold the slot: the next behind candidate is `updated`.
 - [ ] When `updateBranch` throws for the first behind candidate, its action is `error` and later behind candidates are still `deferred` (no second update in that run).
 - [ ] After one candidate is updated, a later candidate that is up to date with green checks and no blocking thread still merges in the same run.
 - [ ] In dry run, the first behind candidate gets `would update`, later behind ones `deferred` with the same reason, and `updateBranch` is never called.
@@ -251,7 +252,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 
 **Test plan**
 
-- Test cases: T4.1-T4.13 (see Test matrix). Gate tests with the existing stub `github` object.
+- Test cases: T4.1-T4.14 (see Test matrix). Gate tests with the existing stub `github` object.
 
 ### T5: Merge gate blocks on unresolved collaborator threads
 
@@ -471,7 +472,8 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 | T4.10 | T4 | No update after a merge | boundary | Given #1 up to date and green, #2 behind / When the gate runs / Then #1 is merged and #2 is `deferred: one merge per run`; updateBranch is not called | integration | should |
 | T4.11 | T4 | Dry run: would update plus deferred, no calls | happy | Given dryRun true and #1, #2 behind / When the gate runs / Then #1 is `would update`, #2 is `deferred` with `deferred: waits for its turn`, and updateBranch is never called | integration | must |
 | T4.12 | T4 | Docs describe it | happy | Given the T4 branch / When DESIGN.md "Risk and the merge gate", the README gate section (if present) and the newest CHANGELOG section (`[Unreleased]` or the latest version) are read (tests/docs.test.cjs) / Then each contains `deferred: waits for its turn` | unit | must |
-| T4.13 | T4 | A missing check does not hold the slot | edge | Given #1 up to date with no `devflow/review` run and no status, and #2 behind / When the gate runs / Then #1 is `skipped` with reason `waiting for devflow/review: missing`, #2 is `updated`, and updateBranch is called once, for #2 | integration | must |
+| T4.13 | T4 | A missing check on an old head does not hold the slot | edge | Given #1 up to date with no `devflow/review` run and no status, head commit dated 20 minutes ago (and separately exactly 15 minutes ago), and #2 behind / When the gate runs / Then #1 is `skipped` with reason `waiting for devflow/review: missing`, #2 is `updated`, and updateBranch is called once, for #2 | integration | must |
+| T4.14 | T4 | A missing check on a fresh head holds the slot | boundary | Given #1 up to date with no `devflow/review` run and no status, head commit dated 1 minute ago (and separately 14 minutes 59 seconds ago), and #2 behind / When the gate runs / Then #2 is `deferred` with `deferred: waits for its turn` and updateBranch is not called | integration | must |
 | T5.1 | T5 | A collaborator thread blocks even after an author reply | happy | Given PR author `author`, and one unresolved thread first by `rev` (`COLLABORATOR`, `__typename: User`) with last comment by `author` / When the gate runs / Then the action is `skipped` with reason `1 unanswered review threads` | integration | must |
 | T5.2 | T5 | OWNER and MEMBER also block | boundary | Given the same thread with association `OWNER`, then `MEMBER` / When the gate runs / Then each is `1 unanswered review threads` | integration | must |
 | T5.3 | T5 | Resolved or outdated does not block | happy | Given the collaborator thread with `isResolved: true`, then with `isOutdated: true` / When the gate runs / Then the PR merges | integration | must |
