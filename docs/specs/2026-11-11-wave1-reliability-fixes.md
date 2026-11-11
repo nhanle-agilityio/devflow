@@ -76,6 +76,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 | Labels on a reused PR | Ship adds the computed labels and never removes `risk:high` or any label already on the PR. | A human's label wins. |
 | Re-running init with a stale prefix | The stale GitHub MCP prefix in the allow list is replaced, shown in the diff before writing. | As init does today. |
 | Release changelog | No empty `[Unreleased]` section is left after the release; the date is the day the release PR is opened. T10.2 and T10.3 are checked once on the release branch, not kept in the suite; tagging after the human merge (T10.6) is a manual check. | A permanent "no [Unreleased]" test would fail on the next feature PR. |
+| Gate wake-up for expired holds | The merge gate caller template (`skills/init/templates/github/callers/devflow-merge-gate.yml`) and the copy-mode workflow template (`skills/init/templates/github/workflows/devflow-merge-gate.yml`) gain `schedule: - cron: '*/15 * * * *'` next to their existing triggers. A scheduled run has no `inputs.pr`, so it evaluates every candidate, like a `workflow_run` run. The reusable workflow (`.github/workflows/devflow-merge-gate.yml`) keeps its `workflow_call` inputs and secrets unchanged. Projects get the trigger with `/devflow:init --upgrade`; this repository's own caller is upgraded the same way after the release. | A hold that expires must be acted on without waiting for an unrelated event; GitHub may delay scheduled runs, so the bound is about 15 minutes plus that delay. |
 | Where docs tests look in the changelog | `tests/docs.test.cjs` looks for each task's entry in the newest changelog section (the first `## [` heading: `[Unreleased]` before the release, `[2.9.0]` after it), so the tests keep passing through T10. | T10 renames the section. |
 
 ## Design
@@ -105,6 +106,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
   - started by another user with association OWNER, MEMBER or COLLABORATOR: always blocks;
   - started by another user with any other association: never blocks.
 - The gate reason stays `<n> unanswered review threads`.
+- Both merge gate trigger templates gain a 15-minute `schedule` (Decisions); `gate()` already treats a run without `inputs.pr` as "evaluate every candidate", so the script needs no change for it.
 
 **Skills.**
 
@@ -121,6 +123,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 - `author_association` for a user who is a member of a private org may read `CONTRIBUTOR` when membership is private; such a user's threads are ignored by sync and the gate. Mitigation: documented in DESIGN.md; the owner can make membership public or add them as collaborator.
 - Reading the issue in seven stages adds MCP calls per issue; acceptable for correctness.
 - A CI run longer than 60 minutes lets the gate update the next PR while it still runs (two CI runs at once). Documented in DESIGN.md; the limit is a constant that can be raised in a later release.
+- An expired hold is acted on at the next gate run; the 15-minute schedule bounds that wait to about 15 minutes plus GitHub's scheduling delay. Until a project runs `/devflow:init --upgrade`, its caller has no schedule and an expired hold waits for the next gate event (`workflow_dispatch` is the manual way out); DESIGN.md says so.
 - QA: two rounds; every question they raised is settled in Decisions. The spec PR review raised 3 warnings (gate slot with a missing check, claim race assignee, T10 vs docs tests) and the review bot's identity; a second review raised the gap right after an update (missing checks now hold the slot for 15 minutes), a third the worst-state rule in `checksGreen` and one bot rule for sync and the gate, and a fourth the mapping of check states. A full self-review then settled the check-state mapping with bounded holds, how Review reads the issue (the reviewer agent has no MCP tools), T3's risk level, and the release-step and parallel-stage details. All are settled in Decisions. Nothing is open.
 
 ## Tasks
@@ -233,7 +236,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 - **Size:** S
 - **Needs e2e:** no
 - **Risk:** high - touches skills/init/templates/github/** (highPaths)
-- **Hotspot files:** skills/init/templates/github/scripts/devflow-merge-gate.cjs, tests/merge-gate.test.cjs
+- **Hotspot files:** skills/init/templates/github/scripts/devflow-merge-gate.cjs, tests/merge-gate.test.cjs, skills/init/templates/github/callers/devflow-merge-gate.yml, skills/init/templates/github/workflows/devflow-merge-gate.yml
 
 **Acceptance criteria**
 
@@ -248,17 +251,19 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 - [ ] When `updateBranch` throws for the first behind candidate, its action is `error` and later behind candidates are still `deferred` (no second update in that run).
 - [ ] After one candidate is updated, a later candidate that is up to date with green checks and no blocking thread still merges in the same run.
 - [ ] In dry run, the first behind candidate gets `would update`, later behind ones `deferred` with the same reason, and `updateBranch` is never called.
-- [ ] DESIGN.md (Risk and the merge gate), README.md where it lists gate actions, and CHANGELOG `[Unreleased]` describe it.
+- [ ] The merge gate caller template and the copy-mode merge gate workflow template both have a `schedule` trigger with cron `*/15 * * * *` in addition to their existing `workflow_run`, `status` and `workflow_dispatch` triggers; the reusable workflow's `workflow_call` inputs and secrets are unchanged.
+- [ ] DESIGN.md (Risk and the merge gate), README.md where it lists gate actions, and CHANGELOG `[Unreleased]` describe it, including the scheduled run and that projects get it with `/devflow:init --upgrade`.
 
 **Scope**
 
-- skills/init/templates/github/scripts/devflow-merge-gate.cjs (evaluate, gate state)
-- tests/merge-gate.test.cjs, tests/docs.test.cjs
+- skills/init/templates/github/scripts/devflow-merge-gate.cjs (evaluate, checksGreen, gate state)
+- skills/init/templates/github/callers/devflow-merge-gate.yml, skills/init/templates/github/workflows/devflow-merge-gate.yml (add the `schedule` trigger only)
+- tests/merge-gate.test.cjs, tests/reusable.test.cjs, tests/docs.test.cjs
 - DESIGN.md, README.md, CHANGELOG.md
 
 **Test plan**
 
-- Test cases: T4.1-T4.17 (see Test matrix). Gate tests with the existing stub `github` object.
+- Test cases: T4.1-T4.19 (see Test matrix). Gate tests with the existing stub `github` object.
 
 ### T5: Merge gate blocks on unresolved collaborator threads
 
@@ -486,6 +491,8 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 | T4.15 | T4 | Worst check state wins | edge | Given `requiredChecks: ["devflow/review", "test"]`, #1 up to date with `devflow/review` in progress and `test` failed (and separately the order reversed, and separately `devflow/review` missing on a fresh head with `test` failed), and #2 behind / When the gate runs / Then #1 is `skipped` with reason `waiting for test: failure`, #2 is `updated`, and updateBranch is called once | integration | must |
 | T4.16 | T4 | A pending hold ends after 60 minutes | boundary | Given #1 up to date with `devflow/review` in progress and head commit 60 minutes old (and separately 59 minutes), and #2 behind / When the gate runs / Then at 60 minutes #1 is `skipped` with `waiting for devflow/review: in_progress` and #2 is `updated`; at 59 minutes #2 is `deferred` | integration | must |
 | T4.17 | T4 | Non-success conclusions and status error count as failed | edge | Given #1 up to date, head 5 minutes old, with `devflow/review` run completed `cancelled` (and separately `skipped`, `neutral`, `timed_out`, and a commit status `error` with no run), and #2 behind / When the gate runs / Then #1 is `skipped` with the check reason and #2 is `updated` | integration | must |
+| T4.18 | T4 | Both gate templates run on a 15-minute schedule | happy | Given `skills/init/templates/github/callers/devflow-merge-gate.yml` and `skills/init/templates/github/workflows/devflow-merge-gate.yml` / When parsed (tests/reusable.test.cjs) / Then each has `schedule` with cron `*/15 * * * *` and still has `workflow_run`, `status` and `workflow_dispatch`; `.github/workflows/devflow-merge-gate.yml` still has only `workflow_call` with unchanged inputs and secrets | unit | must |
+| T4.19 | T4 | A scheduled run evaluates every candidate | happy | Given a gate run whose `context.payload` has no `inputs` (as for `schedule`), #1 up to date with `devflow/review` in progress on a head 61 minutes old, and #2 behind / When the gate runs / Then both PRs are evaluated, #1 is `skipped` and #2 is `updated` | integration | must |
 | T5.1 | T5 | A collaborator thread blocks even after an author reply | happy | Given PR author `author`, and one unresolved thread first by `rev` (`COLLABORATOR`, `__typename: User`) with last comment by `author` / When the gate runs / Then the action is `skipped` with reason `1 unanswered review threads` | integration | must |
 | T5.2 | T5 | OWNER and MEMBER also block | boundary | Given the same thread with association `OWNER`, then `MEMBER` / When the gate runs / Then each is `1 unanswered review threads` | integration | must |
 | T5.3 | T5 | Resolved or outdated does not block | happy | Given the collaborator thread with `isResolved: true`, then with `isOutdated: true` / When the gate runs / Then the PR merges | integration | must |
