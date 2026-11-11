@@ -1,0 +1,263 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "devflow project configuration",
+  "type": "object",
+  "required": ["github", "baseBranch", "checks"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "devflowVersion": { "type": "string", "description": "The plugin version the installed templates came from. Written by /devflow:init, updated by /devflow:init --upgrade." },
+    "github": {
+      "type": "object",
+      "required": ["owner", "repo"],
+      "additionalProperties": false,
+      "properties": {
+        "owner": { "type": "string", "minLength": 1 },
+        "repo": { "type": "string", "minLength": 1 },
+        "remote": { "type": "string", "default": "origin", "description": "Git remote that points at GitHub." }
+      }
+    },
+    "baseBranch": { "type": "string", "minLength": 1, "description": "Branches start from <remote>/<baseBranch>; PRs target it." },
+    "protectedBranches": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": ["main", "master", "develop"],
+      "description": "The guard hook blocks pushes to these and to baseBranch."
+    },
+    "branchPattern": {
+      "type": "string",
+      "default": "{type}/{issue}-{slug}",
+      "description": "Placeholders: {type} (feat|fix|chore|docs|refactor|test), {issue}, {slug} (at most 5 words, kebab-case)."
+    },
+    "commitScope": { "type": "string", "default": "#{issue}", "description": "Conventional Commits scope." },
+    "specDir": { "type": "string", "default": "docs/specs" },
+    "labels": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ready": { "type": "string", "default": "agent:ready" },
+        "inProgress": { "type": "string", "default": "agent:in-progress" },
+        "review": { "type": "string", "default": "agent:review" },
+        "blocked": { "type": "string", "default": "agent:blocked" },
+        "e2e": { "type": "string", "default": "needs-e2e" },
+        "devflow": { "type": "string", "default": "devflow", "description": "Put on every PR devflow opens; /devflow:sync targets PRs with it." },
+        "riskLow": { "type": "string", "default": "risk:low", "description": "Issue/PR label: eligible for the merge gate." },
+        "riskHigh": { "type": "string", "default": "risk:high", "description": "Issue/PR label: waits for a human merge." },
+        "stacked": { "type": "string", "default": "stacked", "description": "PR label: the PR is based on another open devflow PR." },
+        "triage": {
+          "type": "string",
+          "default": "needs-triage",
+          "description": "Issue label for bugs and gaps no human has triaged yet. /devflow:next-task never picks them; only a human replaces it with the ready label."
+        },
+        "priority": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "default": ["priority:critical", "priority:high", "priority:normal", "priority:low"],
+          "description": "Priority labels, highest first. No label counts as the entry ending in \"normal\". Changes only the order of /devflow:next-task and the merge gate, never who merges."
+        }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How /devflow:spec and next-task judge whether a change needs a human merge. Unsure means high.",
+      "properties": {
+        "highWhen": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [
+            "authentication or permissions",
+            "data migration or deleting stored data",
+            "a change to a public API contract that breaks existing clients",
+            "security-sensitive input handling",
+            "payments or money"
+          ],
+          "description": "Plain-language conditions; a task matching any is risk:high."
+        },
+        "highPaths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Globs (** * ?). A PR touching a matching file is escalated to risk:high before it is opened."
+        }
+      }
+    },
+    "mergeGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read by the devflow merge gate GitHub Action. Claude itself never merges.",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "dryRun": { "type": "boolean", "default": true, "description": "Log what would be merged without merging." },
+        "requiredChecks": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["devflow/review"],
+          "description": "Names of check runs or commit-status contexts that must be green before the gate merges."
+        },
+        "method": { "enum": ["merge"], "default": "merge", "description": "Merge commits are required for stacked PRs." }
+      }
+    },
+    "testing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "e2eFramework": {
+          "type": "boolean",
+          "default": false,
+          "description": "True when the project has an automated e2e/browser test setup that can hold committed e2e tests. When false, e2e test rows are covered by the verify stage only."
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Run in order; all must pass before review.",
+      "items": {
+        "type": "object",
+        "required": ["name", "run"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "run": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "format": {
+      "type": "object",
+      "default": {},
+      "additionalProperties": { "type": "string" },
+      "description": "Formatters the plugin runs after Claude writes or edits a file: glob -> shell command; {file} is the shell-quoted path relative to the project root (appended when missing). A glob without \"/\" matches the file name in any directory. Quiet; never fails the edit. Example: {\"*.py\": \".venv/bin/ruff format {file}\"}."
+    },
+    "verify": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "modes": {
+          "type": "array",
+          "items": { "enum": ["http", "browser"] },
+          "uniqueItems": true,
+          "default": [],
+          "description": "[] disables verification."
+        },
+        "devServer": {
+          "type": "object",
+          "required": ["run", "url"],
+          "additionalProperties": false,
+          "properties": {
+            "run": { "type": "string", "minLength": 1 },
+            "url": { "type": "string", "minLength": 1 },
+            "readyTimeoutSec": { "type": "integer", "minimum": 1, "default": 60 }
+          }
+        },
+        "browserTool": { "enum": ["playwright", "chrome"], "default": "playwright" },
+        "lock": { "type": "boolean", "default": true, "description": "Only one session at a time runs Verify on this machine (a lock under the git common dir), so parallel lanes do not fight over the dev server port." }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "testMatrix": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run the QA step in /devflow:spec: an agent drafts a test matrix from the acceptance criteria and reports criteria it cannot test."
+        },
+        "qaModel": {
+          "enum": ["opus", "sonnet"],
+          "default": "opus",
+          "description": "Model for the QA agent. Opus is better at spotting untestable criteria and cases the spec leaves out; Sonnet is cheaper."
+        }
+      }
+    },
+    "nextTask": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaultLimit": { "type": "integer", "minimum": 1, "default": 3 },
+        "maxFixRounds": { "type": "integer", "minimum": 0, "default": 2 },
+        "maxReviewRounds": { "type": "integer", "minimum": 0, "default": 2 },
+        "parallelQa": { "type": "boolean", "default": true, "description": "Implement runs a QA agent (acceptance tests from the spec and issue only) in parallel with the dev agent when the plan names test files for the issue's Test cases rows. false: one agent writes the test first, then the implementation." },
+        "reviewerAgent": { "type": "string", "default": "devflow:reviewer", "description": "Subagent type the Review stage runs as (the plugin ships devflow:reviewer). Empty string: the default workflow agent. Falls back to the default agent when the type cannot be started." }
+      }
+    },
+    "worktree": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Isolated runs (/devflow:next-task --isolated, /devflow:dispatch): each ticket gets its own git worktree.",
+      "properties": {
+        "dir": { "type": "string", "minLength": 1, "default": ".claude/worktrees", "description": "Directory (relative to the repository root) that holds the worktrees. Keep it in .gitignore." },
+        "setup": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": [],
+          "description": "Commands run once in a fresh worktree before any work, e.g. \"make setup\" or \"npm ci\"."
+        }
+      }
+    },
+    "dispatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read by /devflow:dispatch, which starts one background Claude session per lane.",
+      "properties": {
+        "maxLanes": { "type": "integer", "minimum": 1, "default": 3, "description": "Most background sessions running at the same time." },
+        "pluginDir": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Passed as --plugin-dir to background sessions when the plugin is loaded from a local directory. Omit when it is installed from a marketplace."
+        },
+        "ignoreHotspots": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["README.md", "CHANGELOG.md"],
+          "description": "Hotspots matching these exact paths (or globs with * and **) do not join lanes: conflicts there are small and resolved by the merge gate's branch update or /devflow:sync."
+        }
+      }
+    },
+    "scan": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read by the weakened-checks scan of the Review stage (bin/devflow-scan).",
+      "properties": {
+        "ignore": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Globs (** * ?, like risk.highPaths) of files the scan skips entirely, e.g. a test file whose fixture data holds the scanned patterns. .claude/devflow.json is never ignored, so an edit to this list is itself a scan hit (and a high-risk path at the merge gate)."
+        }
+      }
+    },
+    "notify": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Push notifications (Claude Code PushNotification tool) from runs.",
+      "properties": {
+        "push": { "type": "boolean", "default": true, "description": "Send a push notification when a run ends with a blocked issue, a risk:high PR waiting for a human, or at the end of a lane." },
+        "onDone": { "type": "boolean", "default": true, "description": "Notify at the end of a lane or run." },
+        "onBlocked": { "type": "boolean", "default": true, "description": "Notify when an issue is blocked." },
+        "onHighRisk": { "type": "boolean", "default": true, "description": "Notify when a risk:high PR waits for a human." }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read by /devflow:release.",
+      "properties": {
+        "tagPrefix": { "type": "string", "default": "v", "description": "Release tag = tagPrefix + version." },
+        "draft": { "type": "boolean", "default": true, "description": "Create the GitHub release as a draft; a human publishes it." },
+        "deploy": { "type": "string", "default": "", "description": "Optional shell command run after the release, only after the user says yes. Empty: none." },
+        "notesFrom": { "enum": ["prs"], "default": "prs", "description": "Where the release notes come from: the merged PRs since the last tag." }
+      }
+    },
+    "accept": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read by /devflow:accept.",
+      "properties": {
+        "model": { "enum": ["sonnet", "opus"], "default": "sonnet", "description": "Model for the acceptance check." },
+        "labels": { "type": "array", "items": { "type": "string" }, "default": ["type:gap"], "description": "Extra labels on the gap issues it files." }
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+name: Claude Code Review
+
+# Thin caller installed by /devflow:init (reusable mode): the review itself lives in the devflow repository,
+# pinned to the tag below. /devflow:init --upgrade moves the tag. Publishes the commit status `devflow/review`.
+# Needs the CLAUDE_CODE_OAUTH_TOKEN repository secret. If devflow is a private repository, its owner must allow
+# access from this repository (devflow Settings > Actions > General > Access).
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+concurrency:
+  group: devflow-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      statuses: write
+      id-token: write
+    uses: nhanle-agilityio/devflow/.github/workflows/devflow-review.yml@v2.8.0
+    # Passed by name: inheriting all secrets only works inside one organization or enterprise.
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
