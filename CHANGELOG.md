@@ -2,6 +2,24 @@
 
 All notable changes to devflow. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/).
 
+## [2.8.0] - 2026-11-11
+
+Hardening release for the auto-merge path: the merge gate, the weakened-checks scan, the verification step and the guard all get stricter. No config change is required; every new config key is optional.
+
+### Added
+- Config key `scan.ignore`: globs the weakened-checks scan skips. `.claude/devflow.json` is never ignored.
+- `tests/version.test.cjs`: the versions in `plugin.json`, `marketplace.json`, the init template, the README and DESIGN.md, the flows page and the changelog must agree.
+- `/devflow:doctor` check 10, guard self-test: it runs the guard on a merge call and expects exit status 2, so a machine where the guard cannot run is reported instead of silently unprotected.
+- Scan: new hits for `.github/scripts/**`, `.github/actions/**`, a `Makefile` at any depth when any simple command of a check runs `make`, `package.json` script and tool-config lines only (dependency changes are not hits), Go `t.Skip` in `_test.go`, JUnit `@Disabled` / `@Ignore`, Rust `#[ignore]`, `//nolint`, `# rubocop:disable`, pytest `collect_ignore` / `pytest_ignore_collect`, and hollow assertions (`assert True`, `expect(true).toBe(true)`) in test files. More test-file layouts are recognised.
+- Guard: blocks MCP file writes (`push_files`, `create_or_update_file`, `delete_file`) to a protected or unnamed branch; `git commit --no-verify` / `-n` and `git push --no-verify`; `gh api` writes to a protected branch ref or to a commit status; removing the `risk:high` label with `gh pr edit` / `gh issue edit` (adding `risk:low` is allowed); `git add *`; `git checkout -f` and `git switch -f` / `--discard-changes`. `git clean -n` is allowed.
+
+### Changed
+- Merge gate: re-reads the PR's files on every run. A PR that touches `risk.highPaths` or the built-in `.github/**` / `.claude/**` is skipped and relabelled `risk:high` (dry run: `would skip`), before any update-branch, whatever its label says. A `devflow/review` commit status counts only when `github-actions[bot]` created it.
+- Engine: a required verification that could not run (`ran: false`) raises the PR to `risk:high`, with the reason in the Risk line and in the notes.
+- Scan: line patterns no longer run on prose files (`.md`, `.mdx`, `.txt`, `.rst`, `.adoc`, `docs/**`).
+- Guard: fails closed. An internal error, including unparsable input, blocks with exit 2 instead of disabling the guard.
+- Upgrade: copy-mode projects run `/devflow:init --upgrade` for the new merge gate script. The guard, scan and engine changes apply as soon as the plugin updates. A `v2.8.0` tag is published with this release for reusable-mode callers.
+
 ## [2.7.0] - 2026-11-10
 
 Minor release: every new config key is optional and existing configs stay valid. Behaviour is stricter (the guard blocks more git commands, accept gaps wait for triage, weakened checks raise risk), but no setup change is required.
