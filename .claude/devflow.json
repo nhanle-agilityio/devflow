@@ -1,0 +1,39 @@
+{
+  "$schema": "./devflow.schema.json",
+  "devflowVersion": "2.8.0",
+  "github": {
+    "owner": "nhanle-agilityio",
+    "repo": "devflow"
+  },
+  "baseBranch": "main",
+  "risk": {
+    "highPaths": [
+      ".github/**",
+      "hooks/guard.py",
+      "skills/init/templates/github/**"
+    ]
+  },
+  "mergeGate": {
+    "requiredChecks": [
+      "devflow/review",
+      "test (python 3.9, ubuntu-24.04)",
+      "test (python 3.13, ubuntu-latest)"
+    ]
+  },
+  "checks": [
+    {
+      "name": "node-tests",
+      "run": "node --test tests/*.test.cjs"
+    },
+    {
+      "name": "hook-tests",
+      "run": "python3 -m unittest discover -s hooks -p 'test_*.py' -v"
+    }
+  ],
+  "scan": {
+    "ignore": [
+      "tests/engine.test.cjs",
+      "tests/scan.test.cjs"
+    ]
+  }
+}
