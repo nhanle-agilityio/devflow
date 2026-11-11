@@ -29,7 +29,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 
 - No new config key.
 - No change to the reusable workflows' inputs or secrets.
-- No change to how claims race (claim comments and `pickClaimWinner` stay as they are).
+- No change to how a claim race is decided (claim comments and `pickClaimWinner` stay as they are); only the loser's release also drops its own assignee (Decisions).
 - Bot-started review threads keep today's gate rule (last comment by the PR author answers them).
 
 ## Decisions
@@ -42,7 +42,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 | `doctor --fix` for a stale claim | Besides the label swap and claim comment removal, removes the assignee only when it is the authenticated user. | Doctor cannot know which run assigned; other people's assignments are theirs. |
 | Gate: which behind PR is updated? | Per run, only the first candidate in priority order that is behind and passes every earlier rule. Later behind candidates get action `deferred`, reason `deferred: waits for its turn`. In dry run the first gets `would update`, the rest `deferred` the same way. | Avoids N² CI runs. |
 | Gate: can a PR merge in the same run as an update? | Yes. At most one update and one merge per run; an up-to-date green PR later in the queue still merges. | An update does not change other PRs. |
-| Who is trusted for sync and answer? | Authenticated user, or `author_association` OWNER, MEMBER or COLLABORATOR. `/devflow:sync` also trusts `github-actions[bot]` (the devflow review bot). `/devflow:answer` takes answers from trusted humans only (no bots). Other comments are listed as `ignored: not a collaborator`. | Bots report as non-collaborators; sync must still act on devflow's own review. |
+| Who is trusted for sync and answer? | Authenticated user, or `author_association` OWNER, MEMBER or COLLABORATOR. `/devflow:sync` also trusts `claude[bot]`, the author of the devflow review's comments and threads (`github-actions[bot]` only creates the `devflow/review` status). `/devflow:answer` takes answers from trusted humans only (no bots). Other comments are listed as `ignored: not a collaborator`. | Bots report as non-collaborators; sync must still act on devflow's own review. |
 | Gate: threads started by a non-collaborator human | Ignored (do not block), same trust rule as sync. | A stranger's comment must not stall the gate; sync ignores them too. |
 | Gate: threads started by a trusted human other than the PR author | Block until resolved or outdated, whoever commented last. Bot-started threads (GraphQL author `__typename` `Bot`) keep today's rule. | The reviewer must agree; a "won't fix" reply is not agreement. |
 | Which stages read the issue themselves? | All seven that embed it today: Plan, Integrate, Implement, QA, Fix, Verify, Review. They read the issue (body, labels, comments not needed) from GitHub and treat it as the source of truth. The Select copy is kept only for the engine's parsing (spec path, Depends on, Test cases levels, Risk line). | No stage should see a possibly altered copy. |
@@ -56,7 +56,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 | Hotspots | Code files only. DESIGN.md, README.md and CHANGELOG.md are not hotspots; `/devflow:sync` resolves their conflicts. | Listing them would force every task into one lane. |
 | Stale text in the answer skill | Fixed in T3 (which edits the same skill). | Same file. |
 | Scope of the try/catch in `runIssue` | Wraps the stage work only; `block()` and its cleanup run outside it, so a normal block is never cleaned up twice. A throw from the cleanup (after a normal block or after a throw) gives `Workflow error:` plus the note `cleanup failed; run /devflow:doctor`. The `Error:` reason uses the first line of the message, as other reasons do. | One cleanup per issue. |
-| Claim edge cases | `assignedByRun` missing counts as false. A run that loses the claim race never touches the assignee (release step unchanged). An issue assigned to the authenticated user and to another user is taken. The authenticated user is trusted even when it is a GitHub App. | Safe defaults; the winner owns the assignment. |
+| Claim edge cases | `assignedByRun` missing counts as false. A run that loses the claim race removes its authenticated user from the assignees only when `assignedByRun` is true and the winner's claim comment was posted by a different login; with the same login it touches no assignee. The claim agent returns each claim comment's author login. An issue assigned to the authenticated user and to another user is taken. The authenticated user is trusted even when it is a GitHub App. | Safe defaults; a loser's leftover assignee would otherwise hide the issue forever under the new taken rule. |
 | What counts toward the run limit | Every issue worked past Claim, including `blocked` and `Workflow error` results. Only Claim skips (taken, claim lost) do not count. | Work was attempted. |
 | Gate update slot | The slot is held by the first candidate (priority label, then PR number, as today) that passes every earlier rule and is either behind, or up to date with required checks still pending. Later behind candidates are deferred. If `updateBranch` fails, the slot is still used (action `error`, no retry in this run). | The head keeps its turn while its CI runs; otherwise each gate run would start another CI run. |
 | Gate: unknown thread author | A first comment with no author (deleted user) or no association counts as untrusted: it does not block. A trusted human's thread blocks whoever authored the PR (also a bot PR). | Same trust rule everywhere. |
@@ -69,13 +69,14 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 | Test files for docs and skill text | `tests/docs.test.cjs` (DESIGN.md, README.md, CHANGELOG keywords) and `tests/skills.test.cjs` (SKILL.md text) are new; whichever task lands first creates each, the others append their cases. Like the docs, these shared test files are not hotspots. | Append-only; sync resolves conflicts. |
 | Changelog entries | Each entry cites its issue number `(#NN)`. | T10 can check all nine are present. |
 | "Blocks at any stage" | Tested on a sample: Plan, Review and the `Error` stage of T2. | One code path for all stages. |
-| Gate: pending checks and merges | A required check that is missing, queued or in progress counts as pending and holds the update slot; only a failed check releases it. After a merge, no update happens in that run (`deferred: one merge per run`, as today). | Keeps one CI run at a time. |
+| Gate: pending checks and merges | Only a required check that has started and is not finished (a queued or in-progress check run, or a `pending` commit status) holds the update slot. A missing check (no run and no status) does not hold it: the PR is skipped with `waiting for <name>: missing` and the slot passes on. A failed check releases it too. After a merge, no update happens in that run (`deferred: one merge per run`, as today). | Keeps one CI run at a time without letting a check that never starts (wrong name, path filter, fork approval) stop all updates. |
 | Gate: bot logins | Logins are compared after stripping a `[bot]` suffix (REST and GraphQL spell bots differently). A thread with no comments does not block. | Bot PRs must match their own replies. |
 | Throw during parallel QA and Implement | Cleanup runs after both agents have settled (`Promise.allSettled`). A non-Error throw or an empty message gives the reason `Error: unknown`. | No agent may still be committing while cleanup runs. |
 | Counting syntax | Heading match is case-insensitive; `- [ ]`, `- [x]` and `- [X]` count; `*` and `+` bullets and numbered items do not. When Plan blocks, the count is still compared and the note added. | Matches the issue template. |
 | Labels on a reused PR | Ship adds the computed labels and never removes `risk:high` or any label already on the PR. | A human's label wins. |
 | Re-running init with a stale prefix | The stale GitHub MCP prefix in the allow list is replaced, shown in the diff before writing. | As init does today. |
-| Release changelog | No empty `[Unreleased]` section is left after the release; the date is the day the release PR is opened; tagging after the human merge is a manual check. | Matches the current changelog style. |
+| Release changelog | No empty `[Unreleased]` section is left after the release; the date is the day the release PR is opened. T10.2 and T10.3 are checked once on the release branch, not kept in the suite; tagging after the human merge (T10.6) is a manual check. | A permanent "no [Unreleased]" test would fail on the next feature PR. |
+| Where docs tests look in the changelog | `tests/docs.test.cjs` looks for each task's entry in the newest changelog section (the first `## [` heading: `[Unreleased]` before the release, `[2.9.0]` after it), so the tests keep passing through T10. | T10 renames the section. |
 
 ## Design
 
@@ -84,6 +85,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 **Engine (`workflows/next-task-engine.js`).**
 
 - `CLAIM_SCHEMA` gains `assignedByRun: boolean`. `claimPrompt` step 1 uses the new taken rule; step 2 adds the authenticated user only when not already assigned and reports `assignedByRun`.
+- Each entry of `claims` in `CLAIM_SCHEMA` gains `author` (login). `releasePrompt(issue, assignedByRun, winnerAuthor)` tells the loser to remove the authenticated user from the assignees when `assignedByRun` is true and `winnerAuthor` differs from that user's login.
 - `blockedPrompt(…, assignedByRun)` step 4 also removes the authenticated user from the assignees when `assignedByRun` is true.
 - `runIssue` keeps `assignedByRun` from the claim; the body after a won claim is wrapped in try/catch → `block('Error', message)`.
 - Main loop: `worked++` is undone for results with status `skipped` that come from Claim. If `runIssue` throws (cleanup itself failed), the report keeps "Workflow error" and adds the note `cleanup failed; run /devflow:doctor`.
@@ -94,6 +96,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 **Merge gate (`skills/init/templates/github/scripts/devflow-merge-gate.cjs`).**
 
 - `state.updated` (boolean). In the behind branch of `evaluate`: if `state.updated`, return `{action: 'deferred', reason: 'deferred: waits for its turn'}`; otherwise update (or not, in dry run), set `state.updated = true`.
+- `checksGreen` returns `{ok, state, reason}` with `state` one of `green`, `pending` (a started, unfinished run or a `pending` status), `failed` or `missing`. When an up-to-date candidate's checks are `pending`, `evaluate` sets `state.updated = true` (it holds the slot) and returns the check reason as today; `failed` and `missing` do not set it.
 - `unresolvedThreads` queries the first comment's `author { login __typename }` and `authorAssociation` plus the last comment's author. A thread blocks when not resolved or outdated and:
   - started by a `Bot`: last comment is not by the PR author (today's rule);
   - started by the PR author: today's rule;
@@ -103,7 +106,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 
 **Skills.**
 
-- `skills/sync/SKILL.md` step 4: keep only threads whose first comment's author is trusted (Decisions); list the rest in the final table as `ignored: not a collaborator`. Update the sentence about how the gate treats author replies.
+- `skills/sync/SKILL.md` step 4: keep only threads whose first comment's author is trusted (Decisions; the review bot is `claude[bot]`); list the rest in the final table as `ignored: not a collaborator`. Update the sentence about how the gate treats author replies.
 - `skills/answer/SKILL.md` step 2.2: only comments by trusted humans; list ignored ones. Step 6: say that a branch with commits from an earlier blocked run is resumed by the engine.
 - `skills/doctor/SKILL.md` check 6 `--fix` (assignee) and check 3 (server name, allow-list mismatch warn).
 - `skills/init/SKILL.md` background-sessions paragraph: probe connected servers before generating the allow list.
@@ -115,7 +118,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 - T4 and T5 change the gate every reusable-mode project runs at the next tag: released as a minor (2.9.0), never moved into an existing tag.
 - `author_association` for a user who is a member of a private org may read `CONTRIBUTOR` when membership is private; such a user's threads are ignored by sync and the gate. Mitigation: documented in DESIGN.md; the owner can make membership public or add them as collaborator.
 - Reading the issue in seven stages adds MCP calls per issue; acceptable for correctness.
-- QA: two rounds; every question they raised is settled in Decisions. Nothing is open.
+- QA: two rounds; every question they raised is settled in Decisions. The spec PR review raised 3 warnings (gate slot with a missing check, claim race assignee, T10 vs docs tests) and the review bot's identity; all four are settled in Decisions. Nothing is open.
 
 ## Tasks
 
@@ -148,6 +151,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 - [ ] The claim prompt adds the authenticated user only when not already assigned, and the claim schema requires `assignedByRun` (boolean).
 - [ ] When the claim returns `assignedByRun: true` and the run blocks at any stage, the blocked cleanup prompt tells the agent to remove the authenticated user from the assignees.
 - [ ] When the claim returns `assignedByRun: false` and the run blocks, the blocked cleanup prompt does not tell the agent to remove any assignee.
+- [ ] Each claim returned by the claim agent carries `author` (login). When the run loses the claim race with `assignedByRun: true` and the winning claim's author differs from the loser's own claim author, the release prompt tells the agent to remove the authenticated user from the assignees; when the authors are the same login, or `assignedByRun` is false, the release prompt does not touch any assignee.
 - [ ] DESIGN.md (engine Claim and blocked cleanup), README.md where it describes claims, and CHANGELOG `[Unreleased]` describe the new rule.
 
 **Scope** (files and areas this task may touch)
@@ -158,7 +162,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 
 **Test plan**
 
-- Test cases: T1.1-T1.10 (see Test matrix). Engine tests with stub agents: inspect the claim prompt text and schema, and the blocked prompt with `assignedByRun` true and false.
+- Test cases: T1.1-T1.11 (see Test matrix). Engine tests with stub agents: inspect the claim prompt text and schema, and the blocked prompt with `assignedByRun` true and false.
 
 ### T2: Clean up the claim when a run throws, and doctor removes a stale assignee
 
@@ -202,7 +206,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 
 **Acceptance criteria**
 
-- [ ] `skills/sync/SKILL.md` step 4 handles only threads whose first comment's author is the authenticated user, has `author_association` OWNER, MEMBER or COLLABORATOR, or is `github-actions[bot]`; every other thread is listed in the final table as `ignored: not a collaborator` and gets no reply or commit.
+- [ ] `skills/sync/SKILL.md` step 4 handles only threads whose first comment's author is the authenticated user, has `author_association` OWNER, MEMBER or COLLABORATOR, or is `claude[bot]` (the devflow review bot); every other thread is listed in the final table as `ignored: not a collaborator` and gets no reply or commit.
 - [ ] `skills/sync/SKILL.md` no longer says the gate ignores threads whose last comment is by the PR author for human threads; it says a trusted human's thread blocks the gate until the human resolves it.
 - [ ] `skills/answer/SKILL.md` step 2.2 takes answers only from comments by the authenticated user or authors with `author_association` OWNER, MEMBER or COLLABORATOR, never bots; ignored comments are listed as `ignored: not a collaborator` in the report.
 - [ ] `skills/answer/SKILL.md` step 6 says a branch with commits from an earlier blocked run is resumed by the engine (no manual handling).
@@ -232,7 +236,8 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 
 - [ ] With three eligible candidates all behind their base, one run calls `updateBranch` once, for the first in priority order (priority label, then PR number) (action `updated`); the other two get action `deferred`, reason `deferred: waits for its turn`.
 - [ ] A candidate that is behind but skipped by an earlier rule (draft, risk, blocked, stacked, open dependency, high-risk file, conflict) does not take the update slot: the next eligible behind candidate is updated.
-- [ ] When the first eligible candidate is up to date and its required checks are still pending, it holds the slot: a later behind candidate is `deferred` with reason `deferred: waits for its turn` and `updateBranch` is not called.
+- [ ] When the first eligible candidate is up to date and a required check has started but not finished (queued or in-progress run, or `pending` status), it holds the slot: a later behind candidate is `deferred` with reason `deferred: waits for its turn` and `updateBranch` is not called.
+- [ ] When the first eligible candidate is up to date and a required check has no run and no status at all, it is skipped with reason `waiting for <name>: missing` and does not hold the slot: the next behind candidate is `updated`.
 - [ ] When `updateBranch` throws for the first behind candidate, its action is `error` and later behind candidates are still `deferred` (no second update in that run).
 - [ ] After one candidate is updated, a later candidate that is up to date with green checks and no blocking thread still merges in the same run.
 - [ ] In dry run, the first behind candidate gets `would update`, later behind ones `deferred` with the same reason, and `updateBranch` is never called.
@@ -246,7 +251,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 
 **Test plan**
 
-- Test cases: T4.1-T4.12 (see Test matrix). Gate tests with the existing stub `github` object.
+- Test cases: T4.1-T4.13 (see Test matrix). Gate tests with the existing stub `github` object.
 
 ### T5: Merge gate blocks on unresolved collaborator threads
 
@@ -406,10 +411,12 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 - [ ] The version is 2.9.0 in plugin.json, marketplace.json, the init template, README, DESIGN.md, the flows page and the changelog, and `node --test tests/version.test.cjs` passes.
 - [ ] CHANGELOG `[Unreleased]` is renamed `[2.9.0] - <release date>` with every entry from T1-T9, and a new empty `[Unreleased]` is not left behind.
 - [ ] The PR is labelled `risk:high`; the tag `v2.9.0` is created only after a human merges it.
+- [ ] The full suite, including every docs test from T1-T9 (which read the newest changelog section), passes on the release branch.
 
 **Scope**
 
 - version files listed in CLAUDE.md, CHANGELOG.md, docs/devflow-flows.html
+- tests/docs.test.cjs (only if a docs test needs adjusting for the renamed section)
 
 **Test plan**
 
@@ -427,8 +434,9 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 | T1.6 | T1 | assignedByRun true: cleanup removes self (later stage) | boundary | Given `assignedByRun: true` and the review stub always returns a warning finding until maxReviewRounds / When the run blocks at Review / Then the blocked prompt has the remove-assignee instruction | integration | should |
 | T1.7 | T1 | assignedByRun false: no assignee removal | error | Given the claim stub returns `assignedByRun: false` and Plan blocks / When the blocked agent runs / Then its prompt has no instruction to remove any assignee | integration | must |
 | T1.8 | T1 | assignedByRun missing counts as false | edge | Given the claim stub omits `assignedByRun` and Plan blocks / When the blocked agent runs / Then the prompt has no remove-assignee instruction | integration | must |
-| T1.9 | T1 | Lost claim never touches assignee | edge | Given `lose: true` for #1 and `assignedByRun: true` / When the run ends / Then no blocked agent is called and the release prompt has no assignee removal | integration | should |
-| T1.10 | T1 | Docs describe the new rule | happy | Given the T1 branch / When DESIGN.md (Claim, blocked cleanup) and CHANGELOG `## [Unreleased]` are read (tests/docs.test.cjs) / Then each contains `assignedByRun` or "authenticated user"; the CHANGELOG entry cites the issue number; README is changed only if it has a claims section | unit | must |
+| T1.9 | T1 | Lost claim, same login: assignee untouched | edge | Given `lose: true` for #1, `assignedByRun: true`, and both claims with author `me` / When the run ends / Then no blocked agent is called and the release prompt has no assignee removal | integration | must |
+| T1.10 | T1 | Docs describe the new rule | happy | Given the T1 branch / When DESIGN.md (Claim, blocked cleanup) and the newest CHANGELOG section (`[Unreleased]` or the latest version) are read (tests/docs.test.cjs) / Then each contains `assignedByRun` or "authenticated user"; the CHANGELOG entry cites the issue number; README is changed only if it has a claims section | unit | must |
+| T1.11 | T1 | Lost claim, other login: loser removes its own assignee | happy | Given `lose: true` for #1, `assignedByRun: true`, our claim author `me` and the winning claim author `other` / When the run ends / Then the release prompt tells the agent to remove the authenticated user from the assignees, and no blocked agent is called; with `assignedByRun: false` / Then the release prompt has no assignee removal | integration | must |
 | T2.1 | T2 | Stage throw after claim runs cleanup with Error | happy | Given claim won and the implement stub throws `new Error('boom')` / When the run ends / Then the blocked agent is called once with stage `Error` and `boom` in its prompt; the report entry is `{status:'blocked'}` with reason starting `Error: boom` | integration | must |
 | T2.2 | T2 | Error reason uses the first line | boundary | Given the plan stub throws `new Error('line1\nline2')` / When the run ends / Then the reason is `Error: line1` and does not contain `line2` | integration | should |
 | T2.3 | T2 | Throw cleanup follows the assignedByRun rule (true) | happy | Given `assignedByRun: true` and the QA stub throws / When cleanup runs / Then the blocked prompt has the remove-assignee instruction | integration | must |
@@ -442,27 +450,28 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 | T2.11 | T2 | Parallel QA/Implement throw waits for both | edge | Given parallelQa true, the QA stub throws and the implement stub resolves later / When the run ends / Then the blocked agent is called after the implement stub settled, once, with stage `Error` | integration | should |
 | T2.12 | T2 | Non-Error or empty throw | edge | Given the plan stub throws `undefined`, then `new Error('')` / When the run ends / Then the reason is `Error: unknown` | integration | should |
 | T2.13 | T2 | Doctor --fix removes the assignee only if it is the authenticated user | happy | Given `skills/doctor/SKILL.md` (tests/skills.test.cjs) / When check 6 `--fix` is read / Then it removes the assignee of a stale in-progress issue only when it is the authenticated user and says other assignees are kept | unit | must |
-| T2.14 | T2 | Docs describe both | happy | Given the T2 branch / When DESIGN.md (engine, doctor) and CHANGELOG `[Unreleased]` are read (tests/docs.test.cjs) / Then they mention cleanup on a thrown error (`Error:`), `cleanup failed; run /devflow:doctor`, and doctor removing only its own assignee | unit | must |
-| T3.1 | T3 | Sync handles only trusted thread starters | happy | Given `skills/sync/SKILL.md` / When step 4 is read / Then it names the authenticated user, `author_association` OWNER, MEMBER, COLLABORATOR and `github-actions[bot]` as the trusted first-comment authors | unit | must |
+| T2.14 | T2 | Docs describe both | happy | Given the T2 branch / When DESIGN.md (engine, doctor) and the newest CHANGELOG section (`[Unreleased]` or the latest version) are read (tests/docs.test.cjs) / Then they mention cleanup on a thrown error (`Error:`), `cleanup failed; run /devflow:doctor`, and doctor removing only its own assignee | unit | must |
+| T3.1 | T3 | Sync handles only trusted thread starters | happy | Given `skills/sync/SKILL.md` / When step 4 is read / Then it names the authenticated user, `author_association` OWNER, MEMBER, COLLABORATOR and `claude[bot]` as the trusted first-comment authors, and does not trust `github-actions[bot]` or any other bot | unit | must |
 | T3.2 | T3 | Sync: untrusted thread listed, no reply or commit | error | Given the sync skill / When step 4 and the final table are read / Then other threads are listed as `ignored: not a collaborator`, and the skill says they get no reply and no commit | unit | must |
 | T3.3 | T3 | Sync acts only on trusted comments inside a thread | edge | Given the sync skill / When step 4 is read / Then it says untrusted replies inside a trusted thread are ignored | unit | should |
 | T3.4 | T3 | Sync no longer claims an author reply clears human threads | error | Given the sync skill / When it is searched / Then no sentence says the gate ignores human threads whose last comment is by the PR author; a sentence says a trusted human's thread blocks the gate until resolved | unit | must |
 | T3.5 | T3 | Answer takes answers from trusted humans only | happy | Given `skills/answer/SKILL.md` / When step 2.2 is read / Then it names the authenticated user and OWNER, MEMBER, COLLABORATOR, and says bots are never used | unit | must |
 | T3.6 | T3 | Answer lists ignored comments; latest trusted answer wins | edge | Given the answer skill / When step 2.2 and the report section are read / Then ignored comments are reported as `ignored: not a collaborator`, and the latest trusted answer per question wins | unit | must |
 | T3.7 | T3 | Answer step 6: the engine resumes a branch with commits | happy | Given the answer skill / When step 6 is read / Then it says a branch with commits from an earlier blocked run is resumed by the engine, and "must be handled by hand" is gone | unit | must |
-| T3.8 | T3 | Docs describe the trust rule | happy | Given the T3 branch / When DESIGN.md (sync, answer) and CHANGELOG `[Unreleased]` are read (tests/docs.test.cjs) / Then both name OWNER/MEMBER/COLLABORATOR and `ignored: not a collaborator` | unit | must |
+| T3.8 | T3 | Docs describe the trust rule | happy | Given the T3 branch / When DESIGN.md (sync, answer) and the newest CHANGELOG section (`[Unreleased]` or the latest version) are read (tests/docs.test.cjs) / Then both name OWNER/MEMBER/COLLABORATOR and `ignored: not a collaborator` | unit | must |
 | T4.1 | T4 | Three behind PRs: only the first is updated | happy | Given PRs #1, #2, #3, all eligible, `behind_by: 2`, not dry run / When the gate runs / Then `pulls.updateBranch` is called once, for #1 (action `updated`); #2 and #3 are `deferred` with reason `deferred: waits for its turn` | integration | must |
 | T4.2 | T4 | Priority order picks the slot holder | boundary | Given behind PRs #1 (no priority) and #5 (linked issue labelled `priority:critical`) / When the gate runs / Then #5 is `updated` and #1 is `deferred` | integration | must |
 | T4.3 | T4 | A skipped behind PR does not take the slot (draft) | edge | Given #1 draft and behind, and #2 eligible and behind / When the gate runs / Then #1 is `skipped`/`draft`, #2 is `updated`, and updateBranch is called once, for #2 | integration | must |
 | T4.4 | T4 | Each earlier rule leaves the slot free | edge | Given (one test per rule) a first PR that is behind and either risk:high, labelled blocked, stacked, with an open dependency, touching a highPaths file, or in conflict (`mergeable:false`), followed by an eligible behind PR / When the gate runs / Then the second PR is `updated` | integration | should |
 | T4.5 | T4 | Mergeability not computed does not take the slot | edge | Given #1 with `mergeable: null`, and #2 behind / When the gate runs / Then #1 is `skipped` and #2 is `updated` | integration | should |
-| T4.6 | T4 | Up to date with pending checks holds the slot | happy | Given #1 up to date with `devflow/review` in progress (and separately with no run or status yet), and #2 behind / When the gate runs / Then #2 is `deferred` with `deferred: waits for its turn` and updateBranch is not called | integration | must |
+| T4.6 | T4 | Up to date with pending checks holds the slot | happy | Given #1 up to date with `devflow/review` in progress (and separately queued, and separately a `pending` commit status), and #2 behind / When the gate runs / Then #2 is `deferred` with `deferred: waits for its turn` and updateBranch is not called | integration | must |
 | T4.7 | T4 | Up to date with failed checks does not hold the slot | edge | Given #1 up to date with `devflow/review` failure, and #2 behind / When the gate runs / Then #1 is `skipped` with the check reason and #2 is `updated` | integration | must |
 | T4.8 | T4 | updateBranch throws: the slot is still used | error | Given #1 and #2 behind and updateBranch rejecting for #1 / When the gate runs / Then #1 is `error`, #2 is `deferred` with the same reason, and updateBranch is called exactly once | integration | must |
 | T4.9 | T4 | Update and merge in one run | happy | Given #1 behind, and #2 up to date, green, with no threads / When the gate runs / Then #1 is `updated` and pulls.merge is called for #2 | integration | must |
 | T4.10 | T4 | No update after a merge | boundary | Given #1 up to date and green, #2 behind / When the gate runs / Then #1 is merged and #2 is `deferred: one merge per run`; updateBranch is not called | integration | should |
 | T4.11 | T4 | Dry run: would update plus deferred, no calls | happy | Given dryRun true and #1, #2 behind / When the gate runs / Then #1 is `would update`, #2 is `deferred` with `deferred: waits for its turn`, and updateBranch is never called | integration | must |
-| T4.12 | T4 | Docs describe it | happy | Given the T4 branch / When DESIGN.md "Risk and the merge gate", the README gate section (if present) and CHANGELOG `[Unreleased]` are read (tests/docs.test.cjs) / Then each contains `deferred: waits for its turn` | unit | must |
+| T4.12 | T4 | Docs describe it | happy | Given the T4 branch / When DESIGN.md "Risk and the merge gate", the README gate section (if present) and the newest CHANGELOG section (`[Unreleased]` or the latest version) are read (tests/docs.test.cjs) / Then each contains `deferred: waits for its turn` | unit | must |
+| T4.13 | T4 | A missing check does not hold the slot | edge | Given #1 up to date with no `devflow/review` run and no status, and #2 behind / When the gate runs / Then #1 is `skipped` with reason `waiting for devflow/review: missing`, #2 is `updated`, and updateBranch is called once, for #2 | integration | must |
 | T5.1 | T5 | A collaborator thread blocks even after an author reply | happy | Given PR author `author`, and one unresolved thread first by `rev` (`COLLABORATOR`, `__typename: User`) with last comment by `author` / When the gate runs / Then the action is `skipped` with reason `1 unanswered review threads` | integration | must |
 | T5.2 | T5 | OWNER and MEMBER also block | boundary | Given the same thread with association `OWNER`, then `MEMBER` / When the gate runs / Then each is `1 unanswered review threads` | integration | must |
 | T5.3 | T5 | Resolved or outdated does not block | happy | Given the collaborator thread with `isResolved: true`, then with `isOutdated: true` / When the gate runs / Then the PR merges | integration | must |
@@ -474,7 +483,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 | T5.9 | T5 | Author-started thread follows today's rule | happy | Given a thread first by `author`, last by `rev` / Then it blocks; last by `author` / Then it does not block | integration | must |
 | T5.10 | T5 | The count includes only blocking threads | boundary | Given 4 unresolved threads (collaborator; NONE stranger; Bot answered by the author; author-started with a reviewer reply) / When the gate runs / Then the reason is `2 unanswered review threads` | integration | should |
 | T5.11 | T5 | The query asks for first-comment author type and association | happy | Given the stub `github.graphql` / When the gate runs / Then the query text contains `__typename` and `authorAssociation`, and asks for both the first and the last comment | integration | should |
-| T5.12 | T5 | Docs describe the rule | happy | Given the T5 branch / When DESIGN.md (Risk and the merge gate), README (if present) and CHANGELOG `[Unreleased]` are read (tests/docs.test.cjs) / Then they say a collaborator's thread blocks until resolved, and DESIGN.md mentions the private-membership `CONTRIBUTOR` caveat | unit | must |
+| T5.12 | T5 | Docs describe the rule | happy | Given the T5 branch / When DESIGN.md (Risk and the merge gate), README (if present) and the newest CHANGELOG section (`[Unreleased]` or the latest version) are read (tests/docs.test.cjs) / Then they say a collaborator's thread blocks until resolved, and DESIGN.md mentions the private-membership `CONTRIBUTOR` caveat | unit | must |
 | T6.1 | T6 | Seven prompts drop the Select body | happy | Given the select stub body contains `MARKER-7f3a` / When the issue runs through Plan, QA, Implement, Fix (after a failing check), Integrate, Verify and Review / Then no prompt for those labels contains `MARKER-7f3a` | integration | must |
 | T6.2 | T6 | Seven prompts say to read the issue from GitHub | happy | Given the same run / When each of the seven prompts is read / Then each contains `#1`, `o/r` and an instruction to read the issue from GitHub and treat it as the source of truth; the title stays inline | integration | must |
 | T6.3 | T6 | Select still gets the full body; engine parsing uses it | happy | Given a select body with spec path `docs/specs/x.md`, `Depends on #9`, a Test cases table with an `http` level and a Risk line / When the run proceeds / Then the select prompt still asks for the full body, and the engine uses that spec path, dependency, test level and risk reason | integration | must |
@@ -487,7 +496,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 | T6.10 | T6 | No heading counts 0 | edge | Given a body without an Acceptance criteria heading and plan returning 0 / Then there is no note; with plan returning 2 / Then the note is `acceptance criteria: plan read 2, selection had 0` | integration | must |
 | T6.11 | T6 | Plan omits or mistypes the count | error | Given plan stubs returning no `acceptanceCriteria`, then `"2"`, then `2.5` / When each run ends / Then the notes contain `plan did not report the acceptance criteria count` and the status is `pr` | integration | must |
 | T6.12 | T6 | Count compared when Plan blocks | edge | Given plan returns `status: blocked` with `acceptanceCriteria: 5` and the body has 2 items / When the run ends / Then the blocked entry's notes contain `acceptance criteria: plan read 5, selection had 2` | integration | should |
-| T6.13 | T6 | Docs describe it | happy | Given the T6 branch / When DESIGN.md (engine stages) and CHANGELOG `[Unreleased]` are read (tests/docs.test.cjs) / Then they say the stages read the issue from GitHub and the Select copy is used only for parsing | unit | must |
+| T6.13 | T6 | Docs describe it | happy | Given the T6 branch / When DESIGN.md (engine stages) and the newest CHANGELOG section (`[Unreleased]` or the latest version) are read (tests/docs.test.cjs) / Then they say the stages read the issue from GitHub and the Select copy is used only for parsing | unit | must |
 | T7.1 | T7 | Taken at Claim does not count | happy | Given limit 1, issues [1,2] and `taken` for #1 / When the run ends / Then #1 is `skipped` and #2 has status `pr` | integration | must |
 | T7.2 | T7 | Lost claim does not count | happy | Given limit 1, issues [1,2] and `lose` for #1 / When the run ends / Then #2 has status `pr` | integration | must |
 | T7.3 | T7 | Blocked after Claim counts | error | Given limit 1, issues [1,2] and Plan blocked for #1 / When the run ends / Then #2 is `skipped` with reason `over limit (1)` | integration | must |
@@ -498,24 +507,24 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 | T7.8 | T7 | An unknown severity blocks | error | Given review findings `[{severity:'major'}]`, then `[{severity:'Suggestion'}]` / When the run ends / Then each starts a fix round (fail closed) | integration | must |
 | T7.9 | T7 | A warning left after maxReviewRounds blocks with today's reason | boundary | Given maxReviewRounds 2 and review always returning a warning / When the run ends / Then the status is `blocked` with a reason starting `Review: Review still has critical/warning findings after 2 fix round(s)` | integration | must |
 | T7.10 | T7 | An unaccepted scan hit counts as blocking | edge | Given review `verdict:'pass'` with no findings, but an unaccepted scan hit injected / When the loop runs / Then a fix round starts | integration | should |
-| T7.11 | T7 | Docs describe both | happy | Given the T7 branch / When DESIGN.md (engine) and CHANGELOG `[Unreleased]` are read (tests/docs.test.cjs) / Then they say Claim skips do not count toward the limit and the review exits on findings only | unit | must |
+| T7.11 | T7 | Docs describe both | happy | Given the T7 branch / When DESIGN.md (engine) and the newest CHANGELOG section (`[Unreleased]` or the latest version) are read (tests/docs.test.cjs) / Then they say Claim skips do not count toward the limit and the review exits on findings only | unit | must |
 | T8.1 | T8 | Ship step 0 reuses an open PR | happy | Given a run with branch `feat/1-x` / When the ship prompt is captured / Then its first step tells the agent to look for an open PR in `o/r` with head `feat/1-x`; if one exists, push normally, retarget the base if it differs, rewrite the body, add the computed labels without removing existing ones, never open a new PR, and continue with the issue labels | integration | must |
 | T8.2 | T8 | Intended base in step 0 follows stacking | boundary | Given a chain where #2 stacks on #1's branch / When #2's ship prompt is captured / Then the retarget step names #1's branch as the intended base | integration | should |
 | T8.3 | T8 | reused true adds a note | happy | Given the ship stub returns `{prNumber:42, reused:true}` / When the run ends / Then the entry has status `pr`, PR 42, and notes containing `reused open PR #42` | integration | must |
 | T8.4 | T8 | Ship schema fields | happy | Given a run / When the ship agent is called / Then the schema has `reused` of type `boolean` and `prNumber` is still required | integration | must |
 | T8.5 | T8 | reused false or missing: no note | error | Given ship stubs returning `reused:false`, then without `reused` / When each run ends / Then no note starts with `reused open PR` | integration | must |
 | T8.6 | T8 | Reuse never removes labels | edge | Given the ship prompt / When step 0 is read / Then it says never to remove `risk:high` or a label already on the PR | integration | must |
-| T8.7 | T8 | Docs describe it | happy | Given the T8 branch / When DESIGN.md (engine Ship) and CHANGELOG `[Unreleased]` are read (tests/docs.test.cjs) / Then they mention reusing an open PR for the branch | unit | must |
+| T8.7 | T8 | Docs describe it | happy | Given the T8 branch / When DESIGN.md (engine Ship) and the newest CHANGELOG section (`[Unreleased]` or the latest version) are read (tests/docs.test.cjs) / Then they mention reusing an open PR for the branch | unit | must |
 | T9.1 | T9 | Init probes the servers: one answers | happy | Given `skills/init/SKILL.md` / When the background-sessions paragraph is read / Then, before the allow list is generated, it says to probe each connected GitHub MCP server by getting the authenticated user, and to use the tool prefix of the one that answers | unit | must |
 | T9.2 | T9 | Init: several answer | edge | Given the init skill / Then it says to ask the user which server to use when several answer | unit | must |
 | T9.3 | T9 | Init: none answers | error | Given the init skill / Then it says to stop and tell the user to connect a GitHub MCP server when none answers (an auth error counts as not answering) | unit | must |
 | T9.4 | T9 | Init replaces a stale prefix | edge | Given the init skill / Then it says a GitHub MCP prefix in the allow list other than the chosen one is replaced, shown in the diff before writing | unit | should |
 | T9.5 | T9 | Doctor check 3 names the prefix | happy | Given `skills/doctor/SKILL.md` / When check 3 is read / Then it reports the tool prefix of the server it used | unit | must |
 | T9.6 | T9 | Doctor check 3 warns on an allow-list mismatch | error | Given the doctor skill / When check 3 is read / Then it is `warn` when `.claude/settings.json` allows another GitHub MCP prefix but not this one; ok when both are allowed; no allowed prefix is left to check 8 | unit | must |
-| T9.7 | T9 | Docs describe it | happy | Given the T9 branch / When DESIGN.md (init, doctor), README (allow-list section, if present) and CHANGELOG `[Unreleased]` are read (tests/docs.test.cjs) / Then they mention the probe and the check 3 prefix warning | unit | must |
+| T9.7 | T9 | Docs describe it | happy | Given the T9 branch / When DESIGN.md (init, doctor), README (allow-list section, if present) and the newest CHANGELOG section (`[Unreleased]` or the latest version) are read (tests/docs.test.cjs) / Then they mention the probe and the check 3 prefix warning | unit | must |
 | T10.1 | T10 | Versions agree at 2.9.0 | happy | Given the release branch / When `node --test tests/version.test.cjs` runs and plugin.json is read / Then it passes and the version is `2.9.0` | unit | must |
-| T10.2 | T10 | Changelog heading moved, no empty Unreleased | happy | Given CHANGELOG.md / Then the first `## [` heading matches `## [2.9.0] - YYYY-MM-DD` and no `## [Unreleased]` heading exists | unit | must |
-| T10.3 | T10 | Release date is valid | boundary | Given the `[2.9.0]` heading / Then the date parses and is not earlier than 2.8.0's date | unit | should |
+| T10.2 | T10 | Changelog heading moved, no empty Unreleased (release-time check, not kept in the suite) | happy | Given CHANGELOG.md / Then the first `## [` heading matches `## [2.9.0] - YYYY-MM-DD` and no `## [Unreleased]` heading exists | unit | must |
+| T10.3 | T10 | Release date is valid (release-time check, not kept in the suite) | boundary | Given the `[2.9.0]` heading / Then the date parses and is not earlier than 2.8.0's date | unit | should |
 | T10.4 | T10 | Entries from T1-T9 are present | happy | Given the `[2.9.0]` section / Then it cites the issue number of each of T1-T9 | unit | must |
-| T10.5 | T10 | The full suite passes | happy | Given the release branch / When `node --test tests/*.test.cjs` and the hook unittest discovery run / Then both pass | unit | must |
-| T10.6 | T10 | risk:high label; tag only after merge | happy | Given the release PR / Then it has the `risk:high` label, and `v2.9.0` does not exist before the merge (manual check after the human merge) | unit | must |
+| T10.5 | T10 | The full suite passes | happy | Given the release branch with `[Unreleased]` renamed to `[2.9.0]` / When `node --test tests/*.test.cjs` (including tests/docs.test.cjs) and the hook unittest discovery run / Then both pass | unit | must |
+| T10.6 | T10 | risk:high label; tag only after merge (manual check, not a suite test) | happy | Given the release PR / Then it has the `risk:high` label, and `v2.9.0` does not exist before the merge (manual check after the human merge) | integration | must |
