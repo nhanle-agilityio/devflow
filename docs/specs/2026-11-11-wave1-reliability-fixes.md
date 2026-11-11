@@ -30,7 +30,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 - No new config key.
 - No change to the reusable workflows' inputs or secrets.
 - No change to how a claim race is decided (claim comments and `pickClaimWinner` stay as they are); only the loser's release also drops its own assignee (Decisions).
-- Bot-started review threads keep today's gate rule (last comment by the PR author answers them).
+- Threads started by the devflow review bot (`claude[bot]`) keep today's gate rule (last comment by the PR author answers them).
 
 ## Decisions
 
@@ -44,7 +44,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 | Gate: can a PR merge in the same run as an update? | Yes. At most one update and one merge per run; an up-to-date green PR later in the queue still merges. | An update does not change other PRs. |
 | Who is trusted for sync and answer? | Authenticated user, or `author_association` OWNER, MEMBER or COLLABORATOR. `/devflow:sync` also trusts `claude[bot]`, the author of the devflow review's comments and threads (`github-actions[bot]` only creates the `devflow/review` status). `/devflow:answer` takes answers from trusted humans only (no bots). Other comments are listed as `ignored: not a collaborator`. | Bots report as non-collaborators; sync must still act on devflow's own review. |
 | Gate: threads started by a non-collaborator human | Ignored (do not block), same trust rule as sync. | A stranger's comment must not stall the gate; sync ignores them too. |
-| Gate: threads started by a trusted human other than the PR author | Block until resolved or outdated, whoever commented last. Bot-started threads (GraphQL author `__typename` `Bot`) keep today's rule. | The reviewer must agree; a "won't fix" reply is not agreement. |
+| Gate: threads started by a trusted human other than the PR author | Block until resolved or outdated, whoever commented last. Threads started by `claude[bot]` keep today's rule. Threads started by any other bot (GraphQL author `__typename` `Bot`, e.g. Copilot, CodeRabbit) do not block: sync ignores them too, so one trust rule covers both. | The reviewer must agree; a "won't fix" reply is not agreement. |
 | Which stages read the issue themselves? | All seven that embed it today: Plan, Integrate, Implement, QA, Fix, Verify, Review. They read the issue (body, labels, comments not needed) from GitHub and treat it as the source of truth. The Select copy is kept only for the engine's parsing (spec path, Depends on, Test cases levels, Risk line). | No stage should see a possibly altered copy. |
 | Plan's acceptance-criteria count | Plan returns `acceptanceCriteria` (count of checklist items under the issue's Acceptance criteria heading it read). The engine counts the same in the Select copy; on mismatch it logs and adds a report note, never blocks. | The copy is only a hint; GitHub wins. |
 | Run limit | An issue skipped at Claim (taken or claim lost) does not count toward the limit. | The limit is about work done. |
@@ -96,9 +96,10 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 **Merge gate (`skills/init/templates/github/scripts/devflow-merge-gate.cjs`).**
 
 - `state.updated` (boolean). In the behind branch of `evaluate`: if `state.updated`, return `{action: 'deferred', reason: 'deferred: waits for its turn'}`; otherwise update (or not, in dry run), set `state.updated = true`.
-- `checksGreen` returns `{ok, state, reason}` with `state` one of `green`, `pending` (a started, unfinished run or a `pending` status), `failed` or `missing`. When an up-to-date candidate's checks are `pending`, or `missing` while the head commit's committer date is less than `MISSING_GRACE_MS` (15 minutes) old, `evaluate` sets `state.updated = true` (it holds the slot) and returns the check reason as today; `failed`, and `missing` on an older head, do not set it.
+- `checksGreen` evaluates every required check (it no longer returns at the first non-green one) and returns the worst state, in the order `failed` > `pending` > `missing` > `green`, with the reason of the check that decided it. It returns `{ok, state, reason}` with `state` one of `green`, `pending` (a started, unfinished run or a `pending` status), `failed` or `missing`. When an up-to-date candidate's checks are `pending`, or `missing` while the head commit's committer date is less than `MISSING_GRACE_MS` (15 minutes) old, `evaluate` sets `state.updated = true` (it holds the slot) and returns the check reason as today; `failed`, and `missing` on an older head, do not set it.
 - `unresolvedThreads` queries the first comment's `author { login __typename }` and `authorAssociation` plus the last comment's author. A thread blocks when not resolved or outdated and:
-  - started by a `Bot`: last comment is not by the PR author (today's rule);
+  - started by `claude[bot]` (login `claude` in GraphQL): last comment is not by the PR author (today's rule);
+  - started by any other `Bot`: never blocks;
   - started by the PR author: today's rule;
   - started by another user with association OWNER, MEMBER or COLLABORATOR: always blocks;
   - started by another user with any other association: never blocks.
@@ -118,7 +119,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 - T4 and T5 change the gate every reusable-mode project runs at the next tag: released as a minor (2.9.0), never moved into an existing tag.
 - `author_association` for a user who is a member of a private org may read `CONTRIBUTOR` when membership is private; such a user's threads are ignored by sync and the gate. Mitigation: documented in DESIGN.md; the owner can make membership public or add them as collaborator.
 - Reading the issue in seven stages adds MCP calls per issue; acceptable for correctness.
-- QA: two rounds; every question they raised is settled in Decisions. The spec PR review raised 3 warnings (gate slot with a missing check, claim race assignee, T10 vs docs tests) and the review bot's identity; a second review raised the gap right after an update (missing checks now hold the slot for 15 minutes). All are settled in Decisions. Nothing is open.
+- QA: two rounds; every question they raised is settled in Decisions. The spec PR review raised 3 warnings (gate slot with a missing check, claim race assignee, T10 vs docs tests) and the review bot's identity; a second review raised the gap right after an update (missing checks now hold the slot for 15 minutes), and a third the worst-state rule in `checksGreen` and one bot rule for sync and the gate. All are settled in Decisions. Nothing is open.
 
 ## Tasks
 
@@ -220,7 +221,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 
 **Test plan**
 
-- Test cases: T3.1-T3.8 (see Test matrix). Node text test over the two SKILL.md files.
+- Test cases: T3.1-T3.9 (see Test matrix). Node text test over the two SKILL.md files.
 
 ### T4: Merge gate updates only the head of the queue
 
@@ -239,6 +240,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 - [ ] When the first eligible candidate is up to date and a required check has started but not finished (queued or in-progress run, or `pending` status), it holds the slot: a later behind candidate is `deferred` with reason `deferred: waits for its turn` and `updateBranch` is not called.
 - [ ] When the first eligible candidate is up to date, a required check has no run and no status, and its head commit is less than 15 minutes old, it holds the slot: a later behind candidate is `deferred` with reason `deferred: waits for its turn` and `updateBranch` is not called.
 - [ ] When the first eligible candidate is up to date, a required check has no run and no status, and its head commit is 15 minutes old or older, it is skipped with reason `waiting for <name>: missing` and does not hold the slot: the next behind candidate is `updated`.
+- [ ] When the first eligible candidate is up to date with one required check in progress and another failed (in either order in `requiredChecks`), it is skipped with the failed check's reason and does not hold the slot: the next behind candidate is `updated`.
 - [ ] When `updateBranch` throws for the first behind candidate, its action is `error` and later behind candidates are still `deferred` (no second update in that run).
 - [ ] After one candidate is updated, a later candidate that is up to date with green checks and no blocking thread still merges in the same run.
 - [ ] In dry run, the first behind candidate gets `would update`, later behind ones `deferred` with the same reason, and `updateBranch` is never called.
@@ -252,7 +254,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 
 **Test plan**
 
-- Test cases: T4.1-T4.14 (see Test matrix). Gate tests with the existing stub `github` object.
+- Test cases: T4.1-T4.15 (see Test matrix). Gate tests with the existing stub `github` object.
 
 ### T5: Merge gate blocks on unresolved collaborator threads
 
@@ -271,7 +273,8 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 - [ ] An unresolved thread started by a user with any other association (for example CONTRIBUTOR or NONE) does not block.
 - [ ] An unresolved thread whose first comment has no author (deleted user) or no association does not block.
 - [ ] When the PR author is a bot, an unresolved thread started by a trusted human blocks.
-- [ ] An unresolved thread started by a Bot blocks when its last comment is not by the PR author and does not block when it is (today's rule).
+- [ ] An unresolved thread started by `claude[bot]` blocks when its last comment is not by the PR author and does not block when it is (today's rule).
+- [ ] An unresolved thread started by any other bot (for example `copilot-pull-request-reviewer`, `coderabbitai`) does not block, whoever commented last.
 - [ ] An unresolved thread started by the PR author blocks only when its last comment is not by the PR author (today's rule).
 - [ ] DESIGN.md (Risk and the merge gate), README.md and CHANGELOG `[Unreleased]` describe the rule.
 
@@ -283,7 +286,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 
 **Test plan**
 
-- Test cases: T5.1-T5.12 (see Test matrix). Gate tests feeding GraphQL thread nodes through the stub.
+- Test cases: T5.1-T5.13 (see Test matrix). Gate tests feeding GraphQL thread nodes through the stub.
 
 ### T6: Stages read the issue from GitHub themselves
 
@@ -460,6 +463,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 | T3.6 | T3 | Answer lists ignored comments; latest trusted answer wins | edge | Given the answer skill / When step 2.2 and the report section are read / Then ignored comments are reported as `ignored: not a collaborator`, and the latest trusted answer per question wins | unit | must |
 | T3.7 | T3 | Answer step 6: the engine resumes a branch with commits | happy | Given the answer skill / When step 6 is read / Then it says a branch with commits from an earlier blocked run is resumed by the engine, and "must be handled by hand" is gone | unit | must |
 | T3.8 | T3 | Docs describe the trust rule | happy | Given the T3 branch / When DESIGN.md (sync, answer) and the newest CHANGELOG section (`[Unreleased]` or the latest version) are read (tests/docs.test.cjs) / Then both name OWNER/MEMBER/COLLABORATOR and `ignored: not a collaborator` | unit | must |
+| T3.9 | T3 | Sync ignores other bots' threads | error | Given the sync skill / When step 4 is read / Then a thread started by a bot other than `claude[bot]` (for example Copilot or CodeRabbit) is listed as `ignored: not a collaborator` with no reply and no commit | unit | must |
 | T4.1 | T4 | Three behind PRs: only the first is updated | happy | Given PRs #1, #2, #3, all eligible, `behind_by: 2`, not dry run / When the gate runs / Then `pulls.updateBranch` is called once, for #1 (action `updated`); #2 and #3 are `deferred` with reason `deferred: waits for its turn` | integration | must |
 | T4.2 | T4 | Priority order picks the slot holder | boundary | Given behind PRs #1 (no priority) and #5 (linked issue labelled `priority:critical`) / When the gate runs / Then #5 is `updated` and #1 is `deferred` | integration | must |
 | T4.3 | T4 | A skipped behind PR does not take the slot (draft) | edge | Given #1 draft and behind, and #2 eligible and behind / When the gate runs / Then #1 is `skipped`/`draft`, #2 is `updated`, and updateBranch is called once, for #2 | integration | must |
@@ -474,18 +478,20 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 | T4.12 | T4 | Docs describe it | happy | Given the T4 branch / When DESIGN.md "Risk and the merge gate", the README gate section (if present) and the newest CHANGELOG section (`[Unreleased]` or the latest version) are read (tests/docs.test.cjs) / Then each contains `deferred: waits for its turn` | unit | must |
 | T4.13 | T4 | A missing check on an old head does not hold the slot | edge | Given #1 up to date with no `devflow/review` run and no status, head commit dated 20 minutes ago (and separately exactly 15 minutes ago), and #2 behind / When the gate runs / Then #1 is `skipped` with reason `waiting for devflow/review: missing`, #2 is `updated`, and updateBranch is called once, for #2 | integration | must |
 | T4.14 | T4 | A missing check on a fresh head holds the slot | boundary | Given #1 up to date with no `devflow/review` run and no status, head commit dated 1 minute ago (and separately 14 minutes 59 seconds ago), and #2 behind / When the gate runs / Then #2 is `deferred` with `deferred: waits for its turn` and updateBranch is not called | integration | must |
+| T4.15 | T4 | Worst check state wins | edge | Given `requiredChecks: ["devflow/review", "test"]`, #1 up to date with `devflow/review` in progress and `test` failed (and separately the order reversed, and separately `devflow/review` missing on a fresh head with `test` failed), and #2 behind / When the gate runs / Then #1 is `skipped` with reason `waiting for test: failure`, #2 is `updated`, and updateBranch is called once | integration | must |
 | T5.1 | T5 | A collaborator thread blocks even after an author reply | happy | Given PR author `author`, and one unresolved thread first by `rev` (`COLLABORATOR`, `__typename: User`) with last comment by `author` / When the gate runs / Then the action is `skipped` with reason `1 unanswered review threads` | integration | must |
 | T5.2 | T5 | OWNER and MEMBER also block | boundary | Given the same thread with association `OWNER`, then `MEMBER` / When the gate runs / Then each is `1 unanswered review threads` | integration | must |
 | T5.3 | T5 | Resolved or outdated does not block | happy | Given the collaborator thread with `isResolved: true`, then with `isOutdated: true` / When the gate runs / Then the PR merges | integration | must |
 | T5.4 | T5 | Untrusted association does not block | error | Given an unresolved thread started by `stranger` with `CONTRIBUTOR`, then `NONE`, then `FIRST_TIME_CONTRIBUTOR`, last comment by `stranger` / When the gate runs / Then the PR merges | integration | must |
 | T5.5 | T5 | No author, no association or no comments does not block | edge | Given an unresolved thread whose first comment has `author: null`, one with `authorAssociation` missing, and one with no comment nodes / When the gate runs / Then the PR merges | integration | must |
 | T5.6 | T5 | Bot PR author: a trusted human's thread blocks | happy | Given a PR with `user.login: 'devflow-bot[bot]'` and an unresolved thread started by an OWNER human, last comment by `devflow-bot` / When the gate runs / Then the action is `skipped` with `1 unanswered review threads` | integration | must |
-| T5.7 | T5 | Bot-started thread follows today's rule | happy | Given a thread first by `github-actions` (`__typename: Bot`), with last comment by `rev` / When the gate runs / Then it blocks; with last comment by the PR author / Then it does not block | integration | must |
-| T5.8 | T5 | Bot login suffix is ignored when comparing | edge | Given a PR by `renovate[bot]` and a Bot-started thread whose last comment author login is `renovate` / When the gate runs / Then it does not block | integration | should |
+| T5.7 | T5 | claude[bot]-started thread follows today's rule | happy | Given a thread first by `claude` (`__typename: Bot`), with last comment by `rev` / When the gate runs / Then it blocks; with last comment by the PR author / Then it does not block | integration | must |
+| T5.8 | T5 | Bot login suffix is ignored when comparing | edge | Given a PR by `renovate[bot]` and a thread started by `claude` (`__typename: Bot`) whose last comment author login is `renovate` / When the gate runs / Then it does not block | integration | should |
 | T5.9 | T5 | Author-started thread follows today's rule | happy | Given a thread first by `author`, last by `rev` / Then it blocks; last by `author` / Then it does not block | integration | must |
-| T5.10 | T5 | The count includes only blocking threads | boundary | Given 4 unresolved threads (collaborator; NONE stranger; Bot answered by the author; author-started with a reviewer reply) / When the gate runs / Then the reason is `2 unanswered review threads` | integration | should |
+| T5.10 | T5 | The count includes only blocking threads | boundary | Given 4 unresolved threads (collaborator; NONE stranger; claude[bot] answered by the author; author-started with a reviewer reply) / When the gate runs / Then the reason is `2 unanswered review threads` | integration | should |
 | T5.11 | T5 | The query asks for first-comment author type and association | happy | Given the stub `github.graphql` / When the gate runs / Then the query text contains `__typename` and `authorAssociation`, and asks for both the first and the last comment | integration | should |
 | T5.12 | T5 | Docs describe the rule | happy | Given the T5 branch / When DESIGN.md (Risk and the merge gate), README (if present) and the newest CHANGELOG section (`[Unreleased]` or the latest version) are read (tests/docs.test.cjs) / Then they say a collaborator's thread blocks until resolved, and DESIGN.md mentions the private-membership `CONTRIBUTOR` caveat | unit | must |
+| T5.13 | T5 | Other bots' threads do not block | happy | Given an unresolved thread first by `coderabbitai` (`__typename: Bot`), last comment by `coderabbitai` (and separately one by `copilot-pull-request-reviewer`) / When the gate runs / Then the PR merges | integration | must |
 | T6.1 | T6 | Seven prompts drop the Select body | happy | Given the select stub body contains `MARKER-7f3a` / When the issue runs through Plan, QA, Implement, Fix (after a failing check), Integrate, Verify and Review / Then no prompt for those labels contains `MARKER-7f3a` | integration | must |
 | T6.2 | T6 | Seven prompts say to read the issue from GitHub | happy | Given the same run / When each of the seven prompts is read / Then each contains `#1`, `o/r` and an instruction to read the issue from GitHub and treat it as the source of truth; the title stays inline | integration | must |
 | T6.3 | T6 | Select still gets the full body; engine parsing uses it | happy | Given a select body with spec path `docs/specs/x.md`, `Depends on #9`, a Test cases table with an `http` level and a Risk line / When the run proceeds / Then the select prompt still asks for the full body, and the engine uses that spec path, dependency, test level and risk reason | integration | must |
