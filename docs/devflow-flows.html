@@ -274,7 +274,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
 
 <header>
   <div class="top">
-    <span class="eyebrow">Claude Code plugin · nhanle-agilityio/devflow · v2.7.0</span>
+    <span class="eyebrow">Claude Code plugin · nhanle-agilityio/devflow · v2.8.0</span>
     <div class="lang" role="group" aria-label="Language">
       <button type="button" id="lang-en" aria-pressed="true">EN</button>
       <button type="button" id="lang-vi" aria-pressed="false">VI</button>
@@ -877,7 +877,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
 </section>
 
 <footer>
-  <span>devflow 2.7.0 · plugin Claude Code · cài bằng <code>/plugin marketplace add nhanle-agilityio/devflow</code></span>
+  <span>devflow 2.8.0 · plugin Claude Code · cài bằng <code>/plugin marketplace add nhanle-agilityio/devflow</code></span>
   <span>Kịch bản trên trang là ví dụ minh hoạ dựa trên TaskBoard (số issue và PR là giả định).</span>
 </footer>
 
@@ -1105,7 +1105,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     'dispatch.ignoreHotspots (mặc định README.md và CHANGELOG.md) không tham gia việc xếp lane: xung đột ở các file này nhỏ, merge gate (update branch) hoặc /devflow:sync xử lý được.': 'dispatch.ignoreHotspots (README.md and CHANGELOG.md by default) do not take part in lane planning: conflicts in those files are small and the merge gate (update branch) or /devflow:sync handles them.',
     '/devflow:accept: mỗi gap thành issue mới → agent:ready': '/devflow:accept: every gap becomes a new issue → agent:ready',
     'issue do /devflow:accept tạo, kèm agent:ready': 'issues created by /devflow:accept, together with agent:ready',
-    'devflow 2.7.0 · plugin Claude Code · cài bằng': 'devflow 2.7.0 · Claude Code plugin · install with',
+    'devflow 2.8.0 · plugin Claude Code · cài bằng': 'devflow 2.8.0 · Claude Code plugin · install with',
     // ---- ship ----
     'Sau khi merge · nghiệm thu, bằng chứng, release': 'After the merge · acceptance, evidence, release',
     'Sau khi merge: accept → report → release': 'After merge: accept → report → release',
@@ -2139,8 +2139,8 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     drR.start(async (sleep) => {
       const L = (k, m, c) => logTo(drLog, k, m, c);
       drLog.innerHTML = '';
-      L('doctor', t('Đọc .claude/devflow.json, plugin là 2.7.0. Chạy cả 9 kiểm tra dù một cái fail', 'Reads .claude/devflow.json, the plugin is 2.7.0. All 9 checks run even if one fails'), '--haiku');
-      await drCheck(sleep, 0, 'warn', t('devflowVersion 2.4.0 thấp hơn plugin 2.7.0 (khác minor) → /devflow:init --upgrade. Chỉ khác patch thì vẫn ok: bản patch không đổi template, schema hay key config', 'devflowVersion 2.4.0 is lower than plugin 2.7.0 (a minor difference) → /devflow:init --upgrade. A patch-only difference stays ok: patch releases never change templates, the schema or config keys'));
+      L('doctor', t('Đọc .claude/devflow.json, plugin là 2.8.0. Chạy cả 9 kiểm tra dù một cái fail', 'Reads .claude/devflow.json, the plugin is 2.8.0. All 9 checks run even if one fails'), '--haiku');
+      await drCheck(sleep, 0, 'warn', t('devflowVersion 2.4.0 thấp hơn plugin 2.8.0 (khác minor) → /devflow:init --upgrade. Chỉ khác patch thì vẫn ok: bản patch không đổi template, schema hay key config', 'devflowVersion 2.4.0 is lower than plugin 2.8.0 (a minor difference) → /devflow:init --upgrade. A patch-only difference stays ok: patch releases never change templates, the schema or config keys'));
       await drCheck(sleep, 1, 'warn', t('lệch 2 file: .github/scripts/devflow-merge-gate.cjs, .claude/devflow.schema.json. Chỉ báo cáo; cách sửa là /devflow:init --upgrade', '2 files drift: .github/scripts/devflow-merge-gate.cjs, .claude/devflow.schema.json. Report only; the fix is /devflow:init --upgrade'));
       await drCheck(sleep, 2, 'ok', t('MCP kết nối (lấy được user đăng nhập), gh đã cài. Thiếu gh chỉ là warn', 'MCP reachable (the authenticated user was found), gh installed. A missing gh is only a warn'));
       await drCheck(sleep, 3, 'warn', t('2 worktree trong .claude/worktrees: lane-31-32-33 sạch, branch đã push · accept-project-edit-delete còn thay đổi chưa commit', '2 worktrees under .claude/worktrees: lane-31-32-33 clean, branch pushed · accept-project-edit-delete has uncommitted changes'));
@@ -2164,11 +2164,11 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       await sleep(1400);
 
       const UP = [
-        ['--sonnet', t('devflowVersion 2.4.0 trong .claude/devflow.json, plugin 2.7.0. Cần working tree sạch', 'devflowVersion 2.4.0 in .claude/devflow.json, plugin 2.7.0. Needs a clean working tree')],
+        ['--sonnet', t('devflowVersion 2.4.0 trong .claude/devflow.json, plugin 2.8.0. Cần working tree sạch', 'devflowVersion 2.4.0 in .claude/devflow.json, plugin 2.8.0. Needs a clean working tree')],
         ['--sonnet', t('So từng byte với template của plugin: lệch .github/scripts/devflow-merge-gate.cjs (bản mới có trailer Merged-by và comment marker) và .claude/devflow.schema.json. Template dự án chưa từng cài thì bỏ qua', 'Byte-for-byte against the plugin templates: .github/scripts/devflow-merge-gate.cjs drifts (the new one has the Merged-by trailer and the marker comment) and so does .claude/devflow.schema.json. A template the project never installed is skipped')],
         ['--sonnet', t('Key có trong template mà config thiếu, kèm default (verify.lock, dispatch.ignoreHotspots, notify, release, accept…). Không ghi key nào trừ khi bạn yêu cầu', 'Keys present in the template but missing from the config, with defaults (verify.lock, dispatch.ignoreHotspots, notify, release, accept…). No key is written unless you ask')],
         ['--human', t('Hiện kế hoạch rồi hỏi từng file kèm diff: devflow-merge-gate.cjs → có · devflow.schema.json → có. File bị từ chối giữ nguyên. Workflow của cổng giữ nguyên danh sách workflow_run do init điền', 'Shows the plan, then asks per file with a diff: devflow-merge-gate.cjs → yes · devflow.schema.json → yes. A declined file stays as it is. The gate workflow keeps the workflow_run list init filled in')],
-        ['--sonnet', t('Tạo branch chore/devflow-upgrade-2.7.0 từ github/main, chép template đã nhận, đặt devflowVersion, kiểm tra với schema mới. Commit chore(devflow): upgrade templates to devflow 2.7.0 (stage theo tên), push bình thường', 'Creates branch chore/devflow-upgrade-2.7.0 from github/main, copies the accepted templates, sets devflowVersion, validates against the new schema. Commit chore(devflow): upgrade templates to devflow 2.7.0 (files staged by name), normal push')],
+        ['--sonnet', t('Tạo branch chore/devflow-upgrade-2.8.0 từ github/main, chép template đã nhận, đặt devflowVersion, kiểm tra với schema mới. Commit chore(devflow): upgrade templates to devflow 2.8.0 (stage theo tên), push bình thường', 'Creates branch chore/devflow-upgrade-2.8.0 from github/main, copies the accepted templates, sets devflowVersion, validates against the new schema. Commit chore(devflow): upgrade templates to devflow 2.8.0 (files staged by name), normal push')],
         ['--out', t('Mở PR gắn devflow + risk:high (đụng .github/** và .claude/**, nên người merge). PR lỗi thì in link compare điền sẵn. Workflow cổng mới chỉ hoạt động khi đã nằm trên default branch. Không bao giờ tự merge', 'Opens a PR labelled devflow + risk:high (it touches .github/** and .claude/**, so a human merges). If PR creation fails it prints a pre-filled compare link. A changed gate workflow only acts once it is on the default branch. Never merges by itself')],
       ];
       for (let i = 0; i < drNodes.length; i++) {
