@@ -572,7 +572,7 @@ test('a root-cause round that edits a QA file still blocks', async () => {
 
 // --- scan coverage: config globs, more skip/suppress forms, prose files ---
 
-const scanKinds = (scan, text, globs) => scan(text, globs).map((h) => `${h.file}:${h.line} ${h.kind}`);
+const scanKinds = (scan, text, globs, ignore) => scan(text, globs, ignore).map((h) => `${h.file}:${h.line} ${h.kind}`);
 
 test('package.json hits only on script and tool-config lines, whatever the checks run', async () => {
   const { scanWeakenedChecks, checkConfigGlobs } = await helpers();
@@ -675,4 +675,38 @@ test('conftest.py hits only when it ignores test collection', async () => {
   assert.deepEqual(kinds('@@ -0,0 +1,3 @@\n+@pytest.fixture\n+def db():\n+    return 1'), []);
   assert.deepEqual(kinds('@@ -0,0 +1 @@\n+collect_ignore = ["test_slow.py"]'), ['tests/conftest.py:1 collection ignored']);
   assert.deepEqual(kinds('@@ -0,0 +1 @@\n+def pytest_ignore_collect(path):'), ['tests/conftest.py:1 collection ignored']);
+});
+
+test('scanWeakenedChecks skips files matching the ignore globs entirely', async () => {
+  const { scanWeakenedChecks, checkConfigGlobs } = await helpers();
+  const globs = checkConfigGlobs([{ name: 't', run: 'make test' }]);
+  const text = [
+    diffOf('tests/engine.test.cjs', '@@ -0,0 +1,2 @@\n+  t.Skip("x")\n+  // nolint'),
+    diffOf('tests/test_a.py', '@@ -3,3 +3,1 @@\n-def test_one():\n-    assert a == 1\n-    assert b == 2\n+@pytest.mark.skip'),
+    diffOf('tests/test_old.py', '@@ -1,2 +0,0 @@\n-def test_gone():\n-    assert True', 'deleted file mode 100644\n'),
+    diffOf('Makefile', '@@ -1 +1 @@\n-test:\n+test: # x'),
+    diffOf('src/a.py', '@@ -0,0 +1 @@\n+import os  # noqa'),
+  ].join('');
+  const files = (ignore) => Array.from(new Set(scanWeakenedChecks(text, globs, ignore).map((h) => h.file))).sort();
+  assert.deepEqual(files(['tests/**', 'Makefile']), ['src/a.py']);
+  assert.deepEqual(files(['tests/engine.test.*']), ['Makefile', 'src/a.py', 'tests/test_a.py', 'tests/test_old.py']);
+  assert.deepEqual(files(['**']).filter((f) => f !== '.claude/devflow.json'), []);
+});
+
+test('scanWeakenedChecks never ignores .claude/devflow.json', async () => {
+  const { scanWeakenedChecks, checkConfigGlobs } = await helpers();
+  const text = diffOf('.claude/devflow.json', '@@ -1 +1,2 @@\n-{}\n+{"scan":{"ignore":["**"]}}\n+x') + diffOf('src/a.py', '@@ -0,0 +1 @@\n+import os  # noqa');
+  for (const ignore of [['**'], ['.claude/**'], ['.claude/devflow.json']]) {
+    const kinds = scanKinds(scanWeakenedChecks, text, checkConfigGlobs([]), ignore);
+    assert.ok(kinds.some((k) => /^\.claude\/devflow\.json:\d+ check configuration changed$/.test(k)), kinds.join(' | '));
+    assert.ok(!kinds.some((k) => k.startsWith('src/a.py')), kinds.join(' | '));
+  }
+});
+
+test('scanWeakenedChecks treats a missing or non-array ignore argument as none', async () => {
+  const { scanWeakenedChecks } = await helpers();
+  const text = diffOf('src/a.py', '@@ -0,0 +1 @@\n+import os  # noqa');
+  const base = scanWeakenedChecks(text, []);
+  assert.equal(base.length, 1);
+  for (const bad of [undefined, null, '**', {}, 5]) assert.deepEqual(scanWeakenedChecks(text, [], bad), base);
 });
