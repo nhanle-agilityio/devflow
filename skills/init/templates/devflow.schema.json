@@ -215,6 +215,19 @@
         }
       }
     },
+    "scan": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read by the weakened-checks scan of the Review stage (bin/devflow-scan).",
+      "properties": {
+        "ignore": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Globs (** * ?, like risk.highPaths) of files the scan skips entirely, e.g. a test file whose fixture data holds the scanned patterns. .claude/devflow.json is never ignored, so an edit to this list is itself a scan hit (and a high-risk path at the merge gate)."
+        }
+      }
+    },
     "notify": {
       "type": "object",
       "additionalProperties": false,
