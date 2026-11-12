@@ -1795,9 +1795,9 @@ for (const issue of queue) {
   try {
     result = await runIssue(issue)
   } catch (e) {
-    // claimWon: the cleanup agent threw. Otherwise the claim or release agent threw and the claim may be partial.
+    // inCleanup or claimWon: the cleanup agent threw. Otherwise the claim or release agent threw and the claim may be partial.
     const msg = String((e && e.message) || e || '').split('\n')[0].trim() || 'unknown'
-    const left = issue.claimWon ? 'cleanup failed; run /devflow:doctor' : 'claim may be partial; run /devflow:doctor'
+    const left = issue.inCleanup || issue.claimWon ? 'cleanup failed; run /devflow:doctor' : 'claim may be partial; run /devflow:doctor'
     result = { issue: issue.number, status: 'blocked', reason: `Workflow error: ${msg}`, notes: (issue.notes || []).concat([left]) }
   }
   result.notes = laneNotes.concat(result.notes || [])
