@@ -24,7 +24,7 @@ Fail fast with a clear message if any check fails.
 
 Using the GitHub MCP server (`github.owner` / `github.repo`), list open issues labelled `labels.ready` that are not labelled `labels.inProgress`, `labels.blocked` or `labels.triage` (default `needs-triage`). Lanes are planned by hotspots and dependencies only; inside a lane the issues run parents first, and priority (`labels.priority`) only breaks ties in that order. Apply the same rules as the `/devflow:next-task` engine's Select stage:
 
-- Skip an issue that has an open PR closing it ("Closes"/"Fixes" lines, branch names, search open PRs for `#<n>`).
+- Skip an issue that has an open PR closing it ("Closes"/"Fixes" lines, branch names, search open PRs for `#<n>`). Exception: do not skip it when its only open PR is labelled `labels.devflow` and has a `Closes #<n>` line for it, and the issue is not labelled `labels.review`; the run resumes that PR's branch. Any other open PR referencing the issue still skips it.
 - Read `Depends on #N` lines from the body. Dependencies that are closed do not count.
 - An issue with an open dependency that has no open PR and is not itself in this ready set is not schedulable. List it as "waiting for #N" and leave it out of the plan.
 - An open dependency that has an open PR, or that is in the ready set, is fine.
