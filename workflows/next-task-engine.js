@@ -1322,6 +1322,10 @@ async function runIssue(issue) {
   let assignedByRun = false
   // Facts the final report states as they happened (the skill prints them, nothing is inferred later).
   const notes = []
+  // The main loop reads these after a throw: the notes so far, whether the claim was won, whether cleanup started.
+  issue.notes = notes
+  issue.claimWon = false
+  issue.inCleanup = false
   const done = (r) => Object.assign(r, { notes })
 
   async function block(stage, reason, questions) {
@@ -1334,12 +1338,14 @@ async function runIssue(issue) {
     // A reason that is itself a tagged question (e.g. from a fix round) goes into the questions comment too.
     if (!questions && /^\[(BA|QA|Dev)\] /.test(reason)) questions = [reason]
     log(`#${issue.number} blocked at ${stage}: ${reason.split('\n')[0]}`)
+    issue.inCleanup = true
     await agent(blockedPrompt(issue, branch, stage, reason, questions, assignedByRun), {
       label: `blocked #${issue.number}`,
       phase: stage,
       schema: BLOCKED_SCHEMA,
       model: 'haiku',
     })
+    issue.inCleanup = false
     return done({ issue: issue.number, status: 'blocked', reason: `${stage}: ${reason.split('\n')[0]}` })
   }
 
@@ -1377,309 +1383,327 @@ async function runIssue(issue) {
     return done({ issue: issue.number, status: 'skipped', reason: `claimed by ${winner.claimId}` })
   }
 
-  // Branch
-  const made = await agent(branchPrompt(issue), {
-    label: `branch #${issue.number}`,
-    phase: 'Implement',
-    schema: BRANCH_SCHEMA,
-    model: 'haiku',
-  })
-  if (!made || !made.ok || !made.branch) {
-    return block('Branch', (made && made.problem) || 'The branch agent failed or could not create the branch.')
-  }
-  branch = made.branch
-  // The parent PR merged (and its branch was deleted) before this issue started: its changes are in the base.
-  if (made.parentMerged && parentsOf(issue).length === 1) {
-    log(`#${issue.number}: parent PR #${parentsOf(issue)[0].prNumber} is already merged; starting from ${base}, not stacked.`)
-    notes.push(`parent PR #${parentsOf(issue)[0].prNumber} was already merged before this issue started; branched from ${base}, not stacked`)
-    issue.parents = []
-  }
-  if (made.resumed) {
-    resumed[issue.number] = Array.isArray(made.commits) ? made.commits : []
-    log(`#${issue.number}: resuming ${branch} with ${resumed[issue.number].length} earlier commit(s).`)
-    notes.push(`resumed branch ${branch} from an earlier blocked run (${resumed[issue.number].length} commit(s) kept)`)
-  }
-
-  // Integrate: several open parents are merged into the branch before any work starts.
-  if (parentsOf(issue).length > 1) {
-    const integ = await agent(integratePrompt(issue, branch), {
-      label: `integrate #${issue.number}`,
+  issue.claimWon = true
+  try {
+    // Branch
+    const made = await agent(branchPrompt(issue), {
+      label: `branch #${issue.number}`,
       phase: 'Implement',
-      schema: INTEGRATE_SCHEMA,
-      model: 'sonnet',
-    })
-    if (!integ || !integ.ok || !integ.integrationSha) {
-      return block('Integrate', (integ && integ.problem) || 'The integrate agent failed or did not report an integration commit.')
-    }
-    integration[issue.number] = integ.integrationSha
-    log(`#${issue.number}: merged ${integ.merged.join(', ')} at ${integ.integrationSha.slice(0, 7)}.`)
-  }
-
-  // Plan: posted on the issue; nobody approves it. Open questions block the issue before any code is written.
-  const specPathForPlan = specPathFor(issue)
-  const plan = await agent(planPrompt(issue, branch), {
-    label: `plan #${issue.number}`,
-    phase: 'Implement',
-    schema: PLAN_SCHEMA,
-    model: 'sonnet',
-  })
-  if (!plan) return block('Plan', 'The plan agent died.')
-  if (plan.status === 'blocked') {
-    const qs = plan.questions || []
-    return block('Plan', qs.join('; ') || 'The plan agent reported blocked without questions.', qs)
-  }
-  if (specPathForPlan && !readSpec(plan, specPathForPlan)) return block('Plan', `Plan did not read the spec ${specPathForPlan}`)
-
-  const own = { qaFiles: plan.qaFiles || [], devFiles: plan.devFiles || [] }
-  const shared = overlap(own.qaFiles, own.devFiles)
-  if (shared.length) return block('Plan', `Ownership overlap: ${shared.join(', ')} is planned for both the QA and the dev agent.`)
-
-  // Implement: QA tests and the change in parallel when the plan gives QA its own files, else one agent, test first.
-  let impl
-  // A resumed branch continues with one agent: the QA tests may already be committed there.
-  if (nt.parallelQa === true && own.qaFiles.length && !made.resumed) {
-    state.qaFiles = own.qaFiles
-    log(`#${issue.number}: QA writes ${own.qaFiles.join(', ')} while dev writes the change.`)
-    const [qa, dev] = await parallel([
-      () => agent(qaPrompt(issue, branch, plan.plan, own), { label: `qa #${issue.number}`, phase: 'Implement', schema: QA_SCHEMA, model: 'sonnet' }),
-      () => agent(implementPrompt(issue, branch, plan.plan, own), { label: `implement #${issue.number}`, phase: 'Implement', schema: IMPLEMENT_SCHEMA, model: 'sonnet' }),
-    ])
-    if (!qa) return block('Implement', 'The QA agent died.')
-    if (!dev) return block('Implement', 'The implement agent died.')
-    // Every open question, from both roles, goes into one comment and one block.
-    const questions = (qa.questions || []).slice()
-    if (dev.status === 'blocked') questions.push(`[Dev] ${dev.blockedReason || 'The implement agent reported blocked without a reason.'}`)
-    if (qa.status === 'blocked' && !(qa.questions || []).length) questions.push('[QA] The QA agent reported blocked without a question.')
-    if (questions.length) return block('Implement', questions.join('; '), questions)
-    const qaOut = outside(qa.filesChanged, own.qaFiles)
-    if (qaOut.length) return block('Implement', `The QA agent changed files outside its own: ${qaOut.join(', ')}.`)
-    const devIn = overlap(dev.filesChanged, own.qaFiles)
-    if (devIn.length) return block('Implement', `The dev agent changed QA test files: ${devIn.join(', ')}.`)
-    if (specPathForPlan && !readSpec(qa, specPathForPlan)) return block('Implement', `The QA agent did not read the spec ${specPathForPlan}`)
-
-    const committed = await agent(commitPrompt(issue, branch, own, qa, dev), {
-      label: `commit #${issue.number}`,
-      phase: 'Implement',
-      schema: COMMIT_SCHEMA,
+      schema: BRANCH_SCHEMA,
       model: 'haiku',
     })
-    if (!committed || !committed.ok) return block('Implement', (committed && committed.problem) || 'The commit agent failed.')
-    if (!committed.failedFirst) {
-      log(`#${issue.number}: the QA tests did not fail without the change (${committed.failureNote || 'no note'}).`)
-      dev.assumptions = (dev.assumptions || []).concat([`QA tests did not fail before the implementation: ${committed.failureNote || 'no note'}`])
-      notes.push('the QA tests did not fail before the implementation (see the PR assumptions)')
-    } else {
-      notes.push('QA and dev ran in parallel; the test commit came first and failed without the change')
+    if (!made || !made.ok || !made.branch) {
+      return block('Branch', (made && made.problem) || 'The branch agent failed or could not create the branch.')
     }
-    impl = Object.assign({}, dev, {
-      commits: committed.commits,
-      filesChanged: Array.from(new Set((qa.filesChanged || []).concat(dev.filesChanged || []))),
-    })
-    merge(state, impl)
-  } else {
-    impl = await agent(implementPrompt(issue, branch, plan.plan), {
-      label: `implement #${issue.number}`,
-      phase: 'Implement',
-      schema: IMPLEMENT_SCHEMA,
-      model: 'sonnet',
-    })
-    if (!impl) return block('Implement', 'The implement agent died.')
-    merge(state, impl)
-    if (impl.status === 'blocked') {
-      const reason = impl.blockedReason || 'The implement agent reported blocked without a reason.'
-      return block('Implement', reason, [`[Dev] ${reason}`])
+    branch = made.branch
+    // The parent PR merged (and its branch was deleted) before this issue started: its changes are in the base.
+    if (made.parentMerged && parentsOf(issue).length === 1) {
+      log(`#${issue.number}: parent PR #${parentsOf(issue)[0].prNumber} is already merged; starting from ${base}, not stacked.`)
+      notes.push(`parent PR #${parentsOf(issue)[0].prNumber} was already merged before this issue started; branched from ${base}, not stacked`)
+      issue.parents = []
     }
-  }
+    if (made.resumed) {
+      resumed[issue.number] = Array.isArray(made.commits) ? made.commits : []
+      log(`#${issue.number}: resuming ${branch} with ${resumed[issue.number].length} earlier commit(s).`)
+      notes.push(`resumed branch ${branch} from an earlier blocked run (${resumed[issue.number].length} commit(s) kept)`)
+    }
 
-  // The spec must have been read: one corrective fix, then block.
-  const specPath = specPathFor(issue)
-  if (specPath && !readSpec(impl, specPath)) {
-    log(`#${issue.number}: Implement did not report reading ${specPath}; running one corrective fix.`)
-    const fix = await runFix(
-      issue,
-      branch,
-      state,
-      'the implementation was written without reading the spec',
-      `Read ${specPath} with \`git show ${baseRef}:${specPath}\`, compare every requirement with the change on this branch, and fix any difference. Return specRead = ${specPath}.`,
-    )
-    if (!fix.ok) return block('Implement', fix.reason)
-    if (!readSpec(fix.result, specPath)) return block('Implement', `Implement did not read the spec ${specPath}`)
-  }
-
-  // Fix issues need a root cause for the PR: one round to supply it, then ship with "unknown".
-  if (isFixIssue(issue, cfg) && !state.rootCause) {
-    const fix = await runFix(
-      issue,
-      branch,
-      state,
-      'the fix PR needs its root cause',
-      'Find the root cause of the bug this issue fixes and return rootCause (cause, introducedBy, whyMissed). Use `git log -S`, `git blame` on the lines the fix changed and the issue text. Change code only if the cause shows the fix is incomplete.',
-    )
-    // Only a QA-file edit blocks; a root-cause round that died or was blocked ships with "unknown".
-    if (!fix.ok && fix.qaOverlap) return block('Implement', fix.reason)
-    if (!fix.ok) {
-      log(`#${issue.number}: root cause round failed (${fix.reason.split('\n')[0]}); shipping with "unknown".`)
-      notes.push(`root cause round failed (${fix.reason.split('\n')[0]}); the PR says "unknown"`)
-    } else if (!state.rootCause) notes.push('root cause not found; the PR says "unknown"')
-  }
-
-  // Check
-  const checked = await checkLoop(issue, branch, state)
-  if (!checked.ok) return block('Check', checked.reason)
-
-  // Verify
-  const needsVerify =
-    verifyCfg.modes.length > 0 &&
-    (issue.labels.indexOf(labels.e2e) !== -1 || state.touchesUi || hasHttpOrE2eRow(issue.body))
-  if (needsVerify) {
-    for (let round = 0; round <= 1; round++) {
-      phase('Verify')
-      const v = await agent(verifyPrompt(issue, branch, state), {
-        label: `verify #${issue.number}${round ? ' (again)' : ''}`,
-        phase: 'Verify',
-        schema: VERIFY_SCHEMA,
+    // Integrate: several open parents are merged into the branch before any work starts.
+    if (parentsOf(issue).length > 1) {
+      const integ = await agent(integratePrompt(issue, branch), {
+        label: `integrate #${issue.number}`,
+        phase: 'Implement',
+        schema: INTEGRATE_SCHEMA,
         model: 'sonnet',
       })
-      if (!v) return block('Verify', 'The verify agent died.')
-      state.verification = v
-      if (!v.ran) {
-        const why = String(v.notes || '').split('\n')[0].trim() || 'no reason given'
-        state.verifyProblem = `verification was required but could not run: ${why}`
-        log(`#${issue.number}: verification could not run (${v.notes}); continuing without it.`)
-        break
+      if (!integ || !integ.ok || !integ.integrationSha) {
+        return block('Integrate', (integ && integ.problem) || 'The integrate agent failed or did not report an integration commit.')
       }
-      state.verifyProblem = ''
-      const bad = failedSteps(v)
-      if (bad.length === 0) break
-      const details = bad.map((s) => `- ${s.action}: expected ${s.expected}; actual ${s.actual}`).join('\n')
-      if (round === 1) return block('Verify', `Verification still failing after one fix round:\n${details}`)
-      const fix = await runFix(issue, branch, state, 'verification against the running app failed', details)
-      if (!fix.ok) return block('Verify', fix.reason)
+      integration[issue.number] = integ.integrationSha
+      log(`#${issue.number}: merged ${integ.merged.join(', ')} at ${integ.integrationSha.slice(0, 7)}.`)
+    }
+
+    // Plan: posted on the issue; nobody approves it. Open questions block the issue before any code is written.
+    const specPathForPlan = specPathFor(issue)
+    const plan = await agent(planPrompt(issue, branch), {
+      label: `plan #${issue.number}`,
+      phase: 'Implement',
+      schema: PLAN_SCHEMA,
+      model: 'sonnet',
+    })
+    if (!plan) return block('Plan', 'The plan agent died.')
+    if (plan.status === 'blocked') {
+      const qs = plan.questions || []
+      return block('Plan', qs.join('; ') || 'The plan agent reported blocked without questions.', qs)
+    }
+    if (specPathForPlan && !readSpec(plan, specPathForPlan)) return block('Plan', `Plan did not read the spec ${specPathForPlan}`)
+
+    const own = { qaFiles: plan.qaFiles || [], devFiles: plan.devFiles || [] }
+    const shared = overlap(own.qaFiles, own.devFiles)
+    if (shared.length) return block('Plan', `Ownership overlap: ${shared.join(', ')} is planned for both the QA and the dev agent.`)
+
+    // Implement: QA tests and the change in parallel when the plan gives QA its own files, else one agent, test first.
+    let impl
+    // A resumed branch continues with one agent: the QA tests may already be committed there.
+    if (nt.parallelQa === true && own.qaFiles.length && !made.resumed) {
+      state.qaFiles = own.qaFiles
+      log(`#${issue.number}: QA writes ${own.qaFiles.join(', ')} while dev writes the change.`)
+      // Each half catches its own error so both settle before the cleanup runs; the first error is rethrown.
+    const caught = []
+    const settle = (fn) => async () => {
+      try {
+        return await fn()
+      } catch (e) {
+        caught.push(e)
+        return null
+      }
+    }
+    const [qa, dev] = await parallel([
+      settle(() => agent(qaPrompt(issue, branch, plan.plan, own), { label: `qa #${issue.number}`, phase: 'Implement', schema: QA_SCHEMA, model: 'sonnet' })),
+      settle(() => agent(implementPrompt(issue, branch, plan.plan, own), { label: `implement #${issue.number}`, phase: 'Implement', schema: IMPLEMENT_SCHEMA, model: 'sonnet' })),
+    ])
+    if (caught.length) throw caught[0]
+    if (!qa) return block('Implement', 'The QA agent died.')
+      if (!dev) return block('Implement', 'The implement agent died.')
+      // Every open question, from both roles, goes into one comment and one block.
+      const questions = (qa.questions || []).slice()
+      if (dev.status === 'blocked') questions.push(`[Dev] ${dev.blockedReason || 'The implement agent reported blocked without a reason.'}`)
+      if (qa.status === 'blocked' && !(qa.questions || []).length) questions.push('[QA] The QA agent reported blocked without a question.')
+      if (questions.length) return block('Implement', questions.join('; '), questions)
+      const qaOut = outside(qa.filesChanged, own.qaFiles)
+      if (qaOut.length) return block('Implement', `The QA agent changed files outside its own: ${qaOut.join(', ')}.`)
+      const devIn = overlap(dev.filesChanged, own.qaFiles)
+      if (devIn.length) return block('Implement', `The dev agent changed QA test files: ${devIn.join(', ')}.`)
+      if (specPathForPlan && !readSpec(qa, specPathForPlan)) return block('Implement', `The QA agent did not read the spec ${specPathForPlan}`)
+
+      const committed = await agent(commitPrompt(issue, branch, own, qa, dev), {
+        label: `commit #${issue.number}`,
+        phase: 'Implement',
+        schema: COMMIT_SCHEMA,
+        model: 'haiku',
+      })
+      if (!committed || !committed.ok) return block('Implement', (committed && committed.problem) || 'The commit agent failed.')
+      if (!committed.failedFirst) {
+        log(`#${issue.number}: the QA tests did not fail without the change (${committed.failureNote || 'no note'}).`)
+        dev.assumptions = (dev.assumptions || []).concat([`QA tests did not fail before the implementation: ${committed.failureNote || 'no note'}`])
+        notes.push('the QA tests did not fail before the implementation (see the PR assumptions)')
+      } else {
+        notes.push('QA and dev ran in parallel; the test commit came first and failed without the change')
+      }
+      impl = Object.assign({}, dev, {
+        commits: committed.commits,
+        filesChanged: Array.from(new Set((qa.filesChanged || []).concat(dev.filesChanged || []))),
+      })
+      merge(state, impl)
+    } else {
+      impl = await agent(implementPrompt(issue, branch, plan.plan), {
+        label: `implement #${issue.number}`,
+        phase: 'Implement',
+        schema: IMPLEMENT_SCHEMA,
+        model: 'sonnet',
+      })
+      if (!impl) return block('Implement', 'The implement agent died.')
+      merge(state, impl)
+      if (impl.status === 'blocked') {
+        const reason = impl.blockedReason || 'The implement agent reported blocked without a reason.'
+        return block('Implement', reason, [`[Dev] ${reason}`])
+      }
+    }
+
+    // The spec must have been read: one corrective fix, then block.
+    const specPath = specPathFor(issue)
+    if (specPath && !readSpec(impl, specPath)) {
+      log(`#${issue.number}: Implement did not report reading ${specPath}; running one corrective fix.`)
+      const fix = await runFix(
+        issue,
+        branch,
+        state,
+        'the implementation was written without reading the spec',
+        `Read ${specPath} with \`git show ${baseRef}:${specPath}\`, compare every requirement with the change on this branch, and fix any difference. Return specRead = ${specPath}.`,
+      )
+      if (!fix.ok) return block('Implement', fix.reason)
+      if (!readSpec(fix.result, specPath)) return block('Implement', `Implement did not read the spec ${specPath}`)
+    }
+
+    // Fix issues need a root cause for the PR: one round to supply it, then ship with "unknown".
+    if (isFixIssue(issue, cfg) && !state.rootCause) {
+      const fix = await runFix(
+        issue,
+        branch,
+        state,
+        'the fix PR needs its root cause',
+        'Find the root cause of the bug this issue fixes and return rootCause (cause, introducedBy, whyMissed). Use `git log -S`, `git blame` on the lines the fix changed and the issue text. Change code only if the cause shows the fix is incomplete.',
+      )
+      // Only a QA-file edit blocks; a root-cause round that died or was blocked ships with "unknown".
+      if (!fix.ok && fix.qaOverlap) return block('Implement', fix.reason)
+      if (!fix.ok) {
+        log(`#${issue.number}: root cause round failed (${fix.reason.split('\n')[0]}); shipping with "unknown".`)
+        notes.push(`root cause round failed (${fix.reason.split('\n')[0]}); the PR says "unknown"`)
+      } else if (!state.rootCause) notes.push('root cause not found; the PR says "unknown"')
+    }
+
+    // Check
+    const checked = await checkLoop(issue, branch, state)
+    if (!checked.ok) return block('Check', checked.reason)
+
+    // Verify
+    const needsVerify =
+      verifyCfg.modes.length > 0 &&
+      (issue.labels.indexOf(labels.e2e) !== -1 || state.touchesUi || hasHttpOrE2eRow(issue.body))
+    if (needsVerify) {
+      for (let round = 0; round <= 1; round++) {
+        phase('Verify')
+        const v = await agent(verifyPrompt(issue, branch, state), {
+          label: `verify #${issue.number}${round ? ' (again)' : ''}`,
+          phase: 'Verify',
+          schema: VERIFY_SCHEMA,
+          model: 'sonnet',
+        })
+        if (!v) return block('Verify', 'The verify agent died.')
+        state.verification = v
+        if (!v.ran) {
+          const why = String(v.notes || '').split('\n')[0].trim() || 'no reason given'
+          state.verifyProblem = `verification was required but could not run: ${why}`
+          log(`#${issue.number}: verification could not run (${v.notes}); continuing without it.`)
+          break
+        }
+        state.verifyProblem = ''
+        const bad = failedSteps(v)
+        if (bad.length === 0) break
+        const details = bad.map((s) => `- ${s.action}: expected ${s.expected}; actual ${s.actual}`).join('\n')
+        if (round === 1) return block('Verify', `Verification still failing after one fix round:\n${details}`)
+        const fix = await runFix(issue, branch, state, 'verification against the running app failed', details)
+        if (!fix.ok) return block('Verify', fix.reason)
+        const again = await checkLoop(issue, branch, state)
+        if (!again.ok) return block('Check', again.reason)
+      }
+    }
+
+    // Review. Before each round a deterministic scan of the diff (bin/devflow-scan) looks for weakened checks.
+    for (let round = 0; round <= nt.maxReviewRounds; round++) {
+      phase('Review')
+      const scan = pluginRoot
+        ? await agent(scanPrompt(issue, branch), {
+            label: `scan #${issue.number}${round ? ` (round ${round + 1})` : ''}`,
+            phase: 'Review',
+            schema: SCAN_SCHEMA,
+            model: 'haiku',
+          })
+        : null
+      let hits = []
+      if (!pluginRoot) state.scanProblem = 'the weakened-checks scan could not run: no pluginRoot was passed to the engine'
+      else if (!scan) state.scanProblem = 'the weakened-checks scan could not run (the scan agent died)'
+      else if (!scan.scanned) state.scanProblem = `the weakened-checks scan could not run: ${scan.error || 'no reason given'}`
+      else {
+        state.scanProblem = ''
+        hits = (Array.isArray(scan.hits) ? scan.hits : [])
+          .filter((h) => h && h.file)
+          .map((h) => ({ file: String(h.file), line: Number(h.line) || 0, kind: String(h.kind || ''), text: String(h.text || '') }))
+      }
+      if (hits.length) log(`#${issue.number}: weakened-checks scan: ${hits.map(hitLine).join('; ')}`)
+      // The plugin's reviewer agent (agents/reviewer.md) when available; the default subagent otherwise.
+      const reviewOpts = { label: `review #${issue.number} (round ${round + 1})`, phase: 'Review', schema: REVIEW_SCHEMA, model: 'opus' }
+      let review
+      if (nt.reviewerAgent && !reviewerMissing) {
+        try {
+          review = await agent(reviewPrompt(issue, branch, state, round, hits), Object.assign({ agentType: nt.reviewerAgent }, reviewOpts))
+        } catch (e) {
+          reviewerMissing = `reviewer agent ${nt.reviewerAgent} unavailable (${e && e.message ? e.message : e}); reviewed with the default agent`
+          log(`#${issue.number}: ${reviewerMissing}`)
+          notes.push(reviewerMissing)
+        }
+      }
+      if (review === undefined) review = await agent(reviewPrompt(issue, branch, state, round, hits), reviewOpts)
+      if (!review) return block('Review', 'The review agent died.')
+      // Every hit is critical unless the reviewer accepted it; an accepted hit makes the PR risk:high at Ship.
+      const accepted = Array.isArray(review.acceptedWeakenings) ? review.acceptedWeakenings : []
+      let injected = 0
+      for (const h of hits) {
+        if (acceptedHit(h, accepted)) continue
+        if (review.findings.some((f) => f.severity === 'critical' && f.file === h.file && Number(f.line) === Number(h.line))) continue
+        injected++
+        review.findings.push({ severity: 'critical', file: h.file, line: h.line, problem: `Weakened check (${h.kind}): ${h.text || h.file}`, fix: 'Remove it and fix the cause instead; keep it only if the issue itself requires it.' })
+      }
+      state.weakened = hits.filter((h) => acceptedHit(h, accepted)).map((h) => Object.assign({}, h, { reason: (accepted.find((a) => a.file === h.file && Number(a.line) === Number(h.line)) || {}).reason || '' }))
+      const blocking = review.findings.filter((f) => f.severity !== 'suggestion')
+      state.suggestions = review.findings.filter((f) => f.severity === 'suggestion')
+      // A pass verdict does not override a scan hit the reviewer neither reported nor accepted.
+      if ((review.verdict === 'pass' && !injected) || blocking.length === 0) break
+      const details = blocking
+        .map((f) => `- [${f.severity}] ${f.file}:${f.line}: ${f.problem}\n  Suggested fix: ${f.fix}`)
+        .join('\n')
+      if (round === nt.maxReviewRounds) {
+        return block('Review', `Review still has critical/warning findings after ${nt.maxReviewRounds} fix round(s):\n${details}`)
+      }
+      const fix = await runFix(issue, branch, state, `review found problems (round ${round + 1} of ${nt.maxReviewRounds})`, details)
+      if (!fix.ok) return block('Review', fix.reason)
       const again = await checkLoop(issue, branch, state)
       if (!again.ok) return block('Check', again.reason)
     }
-  }
 
-  // Review. Before each round a deterministic scan of the diff (bin/devflow-scan) looks for weakened checks.
-  for (let round = 0; round <= nt.maxReviewRounds; round++) {
-    phase('Review')
-    const scan = pluginRoot
-      ? await agent(scanPrompt(issue, branch), {
-          label: `scan #${issue.number}${round ? ` (round ${round + 1})` : ''}`,
-          phase: 'Review',
-          schema: SCAN_SCHEMA,
-          model: 'haiku',
-        })
-      : null
-    let hits = []
-    if (!pluginRoot) state.scanProblem = 'the weakened-checks scan could not run: no pluginRoot was passed to the engine'
-    else if (!scan) state.scanProblem = 'the weakened-checks scan could not run (the scan agent died)'
-    else if (!scan.scanned) state.scanProblem = `the weakened-checks scan could not run: ${scan.error || 'no reason given'}`
-    else {
-      state.scanProblem = ''
-      hits = (Array.isArray(scan.hits) ? scan.hits : [])
-        .filter((h) => h && h.file)
-        .map((h) => ({ file: String(h.file), line: Number(h.line) || 0, kind: String(h.kind || ''), text: String(h.text || '') }))
-    }
-    if (hits.length) log(`#${issue.number}: weakened-checks scan: ${hits.map(hitLine).join('; ')}`)
-    // The plugin's reviewer agent (agents/reviewer.md) when available; the default subagent otherwise.
-    const reviewOpts = { label: `review #${issue.number} (round ${round + 1})`, phase: 'Review', schema: REVIEW_SCHEMA, model: 'opus' }
-    let review
-    if (nt.reviewerAgent && !reviewerMissing) {
-      try {
-        review = await agent(reviewPrompt(issue, branch, state, round, hits), Object.assign({ agentType: nt.reviewerAgent }, reviewOpts))
-      } catch (e) {
-        reviewerMissing = `reviewer agent ${nt.reviewerAgent} unavailable (${e && e.message ? e.message : e}); reviewed with the default agent`
-        log(`#${issue.number}: ${reviewerMissing}`)
-        notes.push(reviewerMissing)
-      }
-    }
-    if (review === undefined) review = await agent(reviewPrompt(issue, branch, state, round, hits), reviewOpts)
-    if (!review) return block('Review', 'The review agent died.')
-    // Every hit is critical unless the reviewer accepted it; an accepted hit makes the PR risk:high at Ship.
-    const accepted = Array.isArray(review.acceptedWeakenings) ? review.acceptedWeakenings : []
-    let injected = 0
-    for (const h of hits) {
-      if (acceptedHit(h, accepted)) continue
-      if (review.findings.some((f) => f.severity === 'critical' && f.file === h.file && Number(f.line) === Number(h.line))) continue
-      injected++
-      review.findings.push({ severity: 'critical', file: h.file, line: h.line, problem: `Weakened check (${h.kind}): ${h.text || h.file}`, fix: 'Remove it and fix the cause instead; keep it only if the issue itself requires it.' })
-    }
-    state.weakened = hits.filter((h) => acceptedHit(h, accepted)).map((h) => Object.assign({}, h, { reason: (accepted.find((a) => a.file === h.file && Number(a.line) === Number(h.line)) || {}).reason || '' }))
-    const blocking = review.findings.filter((f) => f.severity !== 'suggestion')
-    state.suggestions = review.findings.filter((f) => f.severity === 'suggestion')
-    // A pass verdict does not override a scan hit the reviewer neither reported nor accepted.
-    if ((review.verdict === 'pass' && !injected) || blocking.length === 0) break
-    const details = blocking
-      .map((f) => `- [${f.severity}] ${f.file}:${f.line}: ${f.problem}\n  Suggested fix: ${f.fix}`)
-      .join('\n')
-    if (round === nt.maxReviewRounds) {
-      return block('Review', `Review still has critical/warning findings after ${nt.maxReviewRounds} fix round(s):\n${details}`)
-    }
-    const fix = await runFix(issue, branch, state, `review found problems (round ${round + 1} of ${nt.maxReviewRounds})`, details)
-    if (!fix.ok) return block('Review', fix.reason)
-    const again = await checkLoop(issue, branch, state)
-    if (!again.ok) return block('Check', again.reason)
-  }
-
-  // Risk: label first, then deterministic escalation by touched paths.
-  const reasonMatch = /^\s*Risk:\s*(?:low|high)\s*[-:\u2013\u2014]\s*(.+)$/im.exec(issue.body || '')
-  const risk = { level: issueRisk(issue), reason: reasonMatch ? reasonMatch[1].trim() : '', escalation: '' }
-  if (risk.level === 'unknown') log(`#${issue.number}: no risk label; treated as high (human merge).`)
-  const escalation = escalationFor(state.filesChanged)
-  if (escalation && risk.level !== 'high') {
-    risk.level = 'high'
-    risk.escalation = escalation
-    log(`#${issue.number}: risk escalated to high: ${escalation}`)
-  }
-  // Weakened checks that remain after review (accepted as justified), or a scan that could not see the whole diff.
-  // A verification that was required but could not run counts the same way.
-  const weakReason = [
-    (state.weakened || []).length
-      ? `weakened checks kept after review: ${state.weakened.map(hitLine).join('; ')}`
-      : state.scanProblem || '',
-    state.verifyProblem || '',
-  ]
-    .filter(Boolean)
-    .join('; ')
-  if (weakReason) {
-    if (risk.level !== 'high') {
+    // Risk: label first, then deterministic escalation by touched paths.
+    const reasonMatch = /^\s*Risk:\s*(?:low|high)\s*[-:\u2013\u2014]\s*(.+)$/im.exec(issue.body || '')
+    const risk = { level: issueRisk(issue), reason: reasonMatch ? reasonMatch[1].trim() : '', escalation: '' }
+    if (risk.level === 'unknown') log(`#${issue.number}: no risk label; treated as high (human merge).`)
+    const escalation = escalationFor(state.filesChanged)
+    if (escalation && risk.level !== 'high') {
       risk.level = 'high'
-      risk.escalation = risk.escalation ? `${risk.escalation}; ${weakReason}` : weakReason
-    } else {
-      risk.reason = risk.reason ? `${risk.reason}; ${weakReason}` : weakReason
+      risk.escalation = escalation
+      log(`#${issue.number}: risk escalated to high: ${escalation}`)
     }
-    log(`#${issue.number}: risk high: ${weakReason}`)
-    notes.push(`risk high: ${weakReason}`)
-  }
-  if (parentsOf(issue).length) log(`#${issue.number}: stacked on ${parentList(issue)}; PR base is ${prBaseFor(issue)}.`)
+    // Weakened checks that remain after review (accepted as justified), or a scan that could not see the whole diff.
+    // A verification that was required but could not run counts the same way.
+    const weakReason = [
+      (state.weakened || []).length
+        ? `weakened checks kept after review: ${state.weakened.map(hitLine).join('; ')}`
+        : state.scanProblem || '',
+      state.verifyProblem || '',
+    ]
+      .filter(Boolean)
+      .join('; ')
+    if (weakReason) {
+      if (risk.level !== 'high') {
+        risk.level = 'high'
+        risk.escalation = risk.escalation ? `${risk.escalation}; ${weakReason}` : weakReason
+      } else {
+        risk.reason = risk.reason ? `${risk.reason}; ${weakReason}` : weakReason
+      }
+      log(`#${issue.number}: risk high: ${weakReason}`)
+      notes.push(`risk high: ${weakReason}`)
+    }
+    if (parentsOf(issue).length) log(`#${issue.number}: stacked on ${parentList(issue)}; PR base is ${prBaseFor(issue)}.`)
 
-  // Ship
-  phase('Ship')
-  const ship = await agent(shipPrompt(issue, branch, state, risk), {
-    label: `ship #${issue.number}`,
-    phase: 'Ship',
-    schema: SHIP_SCHEMA,
-    model: 'sonnet', // writes the PR body reviewers read; worth more than haiku
-  })
-  if (!ship || !ship.ok) return block('Ship', (ship && ship.problem) || 'The ship agent died.')
-  if (ship.unstacked) {
-    log(`#${issue.number}: parent PR merged while this issue was built; PR #${ship.prNumber} targets ${base}, not stacked.`)
-    notes.push(`parent PR #${parentsOf(issue)[0].prNumber} was merged while this issue was built; the PR targets ${base}, not stacked`)
+    // Ship
+    phase('Ship')
+    const ship = await agent(shipPrompt(issue, branch, state, risk), {
+      label: `ship #${issue.number}`,
+      phase: 'Ship',
+      schema: SHIP_SCHEMA,
+      model: 'sonnet', // writes the PR body reviewers read; worth more than haiku
+    })
+    if (!ship || !ship.ok) return block('Ship', (ship && ship.problem) || 'The ship agent died.')
+    if (ship.unstacked) {
+      log(`#${issue.number}: parent PR merged while this issue was built; PR #${ship.prNumber} targets ${base}, not stacked.`)
+      notes.push(`parent PR #${parentsOf(issue)[0].prNumber} was merged while this issue was built; the PR targets ${base}, not stacked`)
+    }
+    const followUps = Array.isArray(ship.followUps) ? ship.followUps : []
+    if (followUps.length) notes.push(`out-of-scope follow-ups (${labels.triage}): ${followUps.map((f) => '#' + f.number).join(', ')}`)
+    const missingManual = state.manualChecks.filter((m) => m.result !== 'pass').map((m) => `${m.rowId} ${m.result}`)
+    if (missingManual.length) notes.push(`manual checks not passing: ${missingManual.join(', ')}`)
+    return done({
+      issue: issue.number,
+      status: 'pr',
+      url: ship.url,
+      prNumber: ship.prNumber,
+      risk: risk.level === 'unknown' ? 'high' : risk.level,
+      stackedOn: ship.unstacked ? [] : parentsOf(issue).map((p) => p.prNumber),
+      branch,
+    })
+  } catch (e) {
+    // A throw inside the cleanup itself goes to the main loop; a normal block is never cleaned up twice.
+    if (issue.inCleanup) throw e
+    return block('Error', String((e && e.message) || '').split('\n')[0].trim() || 'unknown')
   }
-  const followUps = Array.isArray(ship.followUps) ? ship.followUps : []
-  if (followUps.length) notes.push(`out-of-scope follow-ups (${labels.triage}): ${followUps.map((f) => '#' + f.number).join(', ')}`)
-  const missingManual = state.manualChecks.filter((m) => m.result !== 'pass').map((m) => `${m.rowId} ${m.result}`)
-  if (missingManual.length) notes.push(`manual checks not passing: ${missingManual.join(', ')}`)
-  return done({
-    issue: issue.number,
-    status: 'pr',
-    url: ship.url,
-    prNumber: ship.prNumber,
-    risk: risk.level === 'unknown' ? 'high' : risk.level,
-    stackedOn: ship.unstacked ? [] : parentsOf(issue).map((p) => p.prNumber),
-    branch,
-  })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1771,7 +1795,10 @@ for (const issue of queue) {
   try {
     result = await runIssue(issue)
   } catch (e) {
-    result = { issue: issue.number, status: 'blocked', reason: `Workflow error: ${e && e.message ? e.message : e}`, notes: [] }
+    // claimWon: the cleanup agent threw. Otherwise the claim or release agent threw and the claim may be partial.
+    const msg = String((e && e.message) || e || '').split('\n')[0].trim() || 'unknown'
+    const left = issue.claimWon ? 'cleanup failed; run /devflow:doctor' : 'claim may be partial; run /devflow:doctor'
+    result = { issue: issue.number, status: 'blocked', reason: `Workflow error: ${msg}`, notes: (issue.notes || []).concat([left]) }
   }
   result.notes = laneNotes.concat(result.notes || [])
   if (result.mcpDown) stopped = `${MCP_DOWN}: the run stopped at #${issue.number}`
