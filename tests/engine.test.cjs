@@ -916,3 +916,89 @@ test('test_t2_15_notes_survive_a_throw', async () => {
   assert.match(notes, /resum|continu/i);
   assert.match(notes, new RegExp(CLEANUP_FAILED));
 });
+
+// ---------------------------------------------------------------------------------------------
+// T7: run limit counts worked issues; review exits on findings only
+// ---------------------------------------------------------------------------------------------
+const L1 = { ...BASE, limit: 1 };
+const byIssue = (rep, n) => rep.find((x) => x.issue === n);
+const finding = (severity) => ({ severity, file: 'src/x.py', line: 1, problem: 'p', fix: 'f' });
+// Review stub returning the given results in order (the last one repeats).
+const reviewSeq = (results) => {
+  let i = 0;
+  return () => results[Math.min(i++, results.length - 1)];
+};
+
+test('test_t7_1_taken_at_claim_does_not_count_toward_limit', async () => {
+  const { rep } = await run({ ...L1, issues: [1, 2] }, { taken: (n) => n === 1 });
+  assert.equal(byIssue(rep, 1).status, 'skipped');
+  assert.equal(byIssue(rep, 2).status, 'pr');
+});
+
+test('test_t7_2_lost_claim_does_not_count_toward_limit', async () => {
+  const { rep } = await run({ ...L1, issues: [1, 2] }, { lose: (n) => n === 1 });
+  assert.equal(byIssue(rep, 2).status, 'pr');
+});
+
+test('test_t7_3_blocked_after_claim_counts_toward_limit', async () => {
+  const { rep } = await run({ ...L1, issues: [1, 2] }, { planBlocked: (n) => n === 1 });
+  assert.equal(byIssue(rep, 1).status, 'blocked');
+  assert.equal(byIssue(rep, 2).status, 'skipped');
+  assert.equal(byIssue(rep, 2).reason, 'over limit (1)');
+});
+
+test('test_t7_4_workflow_error_after_claim_counts_toward_limit', async () => {
+  const { rep } = await run({ ...L1, issues: [1, 2] }, { planBlocked: (n) => n === 1, onCall: throwOn('blocked', () => new Error('boom'), 1) });
+  assert.equal(byIssue(rep, 2).status, 'skipped');
+  assert.match(byIssue(rep, 2).reason, /over limit \(1\)/);
+});
+
+test('test_t7_5_several_claim_skips_in_a_row_still_reach_a_worked_issue', async () => {
+  const { rep } = await run({ ...L1, issues: [1, 2, 3] }, { taken: (n) => n === 1, lose: (n) => n === 2 });
+  assert.equal(byIssue(rep, 3).status, 'pr');
+});
+
+test('test_t7_6_pass_verdict_with_warning_starts_a_fix_round', async () => {
+  const review = reviewSeq([{ verdict: 'pass', findings: [finding('warning')] }, { verdict: 'pass', findings: [] }]);
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { review });
+  assert.equal(rep[0].status, 'pr');
+  const order = labels(calls);
+  const firstReview = order.indexOf('review');
+  const fixAt = order.indexOf('fix');
+  const secondReview = order.indexOf('review', firstReview + 1);
+  const shipAt = order.indexOf('ship');
+  assert.ok(fixAt > firstReview && fixAt < secondReview, 'fix runs between the two reviews');
+  assert.equal(count(calls, 'ship'), 1);
+  assert.ok(shipAt > secondReview, 'Ship only after the second review');
+});
+
+test('test_t7_7_changes_verdict_with_only_suggestions_ships', async () => {
+  const review = { verdict: 'changes', findings: [finding('suggestion')] };
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { review });
+  assert.equal(rep[0].status, 'pr');
+  assert.ok(!has(calls, 'fix'));
+  assert.equal(count(calls, 'review'), 1);
+});
+
+test('test_t7_8_unknown_severity_blocks_fail_closed', async () => {
+  for (const severity of ['major', 'Suggestion']) {
+    const review = reviewSeq([{ verdict: 'pass', findings: [finding(severity)] }, { verdict: 'pass', findings: [] }]);
+    const { rep, calls } = await run({ ...BASE, issues: [1] }, { review });
+    assert.ok(has(calls, 'fix'), `${severity} starts a fix round`);
+    assert.equal(rep[0].status, 'pr');
+  }
+});
+
+test('test_t7_9_warning_left_after_max_review_rounds_blocks_with_same_reason', async () => {
+  const cfg = { ...CFG, nextTask: { maxReviewRounds: 2 } };
+  const review = { verdict: 'pass', findings: [finding('warning')] };
+  const { rep } = await run({ ...BASE, config: cfg, issues: [1] }, { review });
+  assert.equal(rep[0].status, 'blocked');
+  assert.ok(rep[0].reason.startsWith('Review: Review still has critical/warning findings after 2 fix round(s)'), rep[0].reason);
+});
+
+test('test_t7_10_unaccepted_scan_hit_with_pass_verdict_starts_a_fix_round', async () => {
+  const seen = { n: 0 };
+  const { calls } = await run({ ...BASE, issues: [1] }, { diff: () => (seen.n++ === 0 ? NOQA : ''), review: { verdict: 'pass', findings: [] } });
+  assert.ok(has(calls, 'fix'));
+});
