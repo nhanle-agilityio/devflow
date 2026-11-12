@@ -24,3 +24,17 @@ test('test_t1_10_docs_describe_the_claim_assignee_rule', () => {
   const readme = read('README.md');
   if (/claims/i.test(readme)) assert.match(readme, KEY);
 });
+
+// T2.14
+test('test_t2_14_docs_describe_throw_cleanup_and_doctor_assignee', () => {
+  const design = read('DESIGN.md');
+  assert.match(design, /cleanup failed; run \/devflow:doctor/);
+  assert.match(design, /Error:/);
+  const doctor = design.split('\n').filter((l) => /doctor/i.test(l) && /assignee/i.test(l));
+  assert.ok(doctor.some((l) => /authenticated user|own assignee/i.test(l)), 'DESIGN.md doctor line limits assignee removal');
+  const entry = changelogEntry(29);
+  assert.ok(entry, 'CHANGELOG has an entry citing (#29)');
+  assert.match(entry, /Error:|thrown|throws?/i);
+  assert.match(entry, /cleanup failed; run \/devflow:doctor/);
+  assert.match(entry, /assignee/i);
+});

@@ -27,6 +27,7 @@ async function run(args, opts = {}) {
     calls.push({ l, prompt, model: o.model, agentType: o.agentType, schema: o.schema });
     if (opts.reviewerMissing && o.agentType) throw new Error('Unknown agent type ' + o.agentType);
     const n = Number((/#(\d+)/.exec(l) || [])[1]);
+    if (opts.onCall) await opts.onCall(l, n);
     if (l === 'select issues') {
       return {
         issues: (args.issues || []).map((i) => ({ number: i, title: 't' + i, labels: opts.selectLabels ? opts.selectLabels(i) : opts.labels || [], body: 'spec docs/specs/a.md', dependsOn: [], parents: [] })),
@@ -792,4 +793,126 @@ test('test_t1_11_lost_claim_other_login_removes_own_assignee', async () => {
   r = await run({ ...BASE, issues: [1] }, { lose: true, assignedByRun: false, myAuthor: 'me', winnerAuthor: 'other' });
   assert.ok(!has(r.calls, 'blocked'));
   assert.doesNotMatch(prompt(r.calls, 'release'), REMOVE_ASSIGNEE);
+});
+
+// T2: cleanup when a run throws, partial-claim and cleanup-failed notes
+const CLEANUP_FAILED = 'cleanup failed; run /devflow:doctor';
+const PARTIAL = 'claim may be partial; run /devflow:doctor';
+const count = (calls, label) => calls.filter((c) => c.l.startsWith(label)).length;
+const throwOn = (label, make, only) => (l, n) => {
+  if (l.startsWith(label) && (only === undefined || only === n)) throw make();
+};
+
+test('test_t2_1_stage_throw_after_claim_runs_cleanup_with_error', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { onCall: throwOn('implement', () => new Error('boom')) });
+  assert.equal(count(calls, 'blocked'), 1);
+  assert.match(prompt(calls, 'blocked'), /stage "Error"/);
+  assert.match(prompt(calls, 'blocked'), /boom/);
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(rep[0].reason, /^Error: boom/);
+});
+
+test('test_t2_2_error_reason_uses_first_line', async () => {
+  const { rep } = await run({ ...BASE, issues: [1] }, { onCall: throwOn('plan', () => new Error('line1\nline2')) });
+  assert.match(rep[0].reason, /^Error: line1/);
+  assert.doesNotMatch(rep[0].reason, /line2/);
+});
+
+test('test_t2_3_throw_cleanup_removes_assignee_when_assigned_by_run', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] }, { ...QA, assignedByRun: true, onCall: throwOn('qa', () => new Error('x')) });
+  assert.equal(count(calls, 'blocked'), 1);
+  assert.match(prompt(calls, 'blocked'), REMOVE_ASSIGNEE);
+});
+
+test('test_t2_4_throw_cleanup_keeps_assignee_when_not_assigned_by_run', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] }, { ...QA, assignedByRun: false, onCall: throwOn('qa', () => new Error('x')) });
+  assert.equal(count(calls, 'blocked'), 1);
+  assert.doesNotMatch(prompt(calls, 'blocked'), REMOVE_ASSIGNEE);
+});
+
+test('test_t2_5_claim_throw_no_cleanup_partial_claim_note', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { onCall: throwOn('claim', () => new Error('mcp')) });
+  assert.ok(!has(calls, 'blocked'));
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(rep[0].reason, /^Workflow error:/);
+  assert.match(rep[0].notes.join('\n'), new RegExp(PARTIAL));
+  assert.doesNotMatch(rep[0].notes.join('\n'), /cleanup failed/);
+});
+
+test('test_t2_6_release_throw_after_lost_claim_partial_claim_note', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { lose: true, onCall: throwOn('release', () => new Error('mcp')) });
+  assert.ok(!has(calls, 'blocked'));
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(rep[0].reason, /^Workflow error:/);
+  assert.match(rep[0].notes.join('\n'), new RegExp(PARTIAL));
+});
+
+test('test_t2_7_cleanup_throws_after_stage_throw', async () => {
+  const onCall = (l, n) => {
+    throwOn('implement', () => new Error('boom'))(l, n);
+    throwOn('blocked', () => new Error('cleanup boom'))(l, n);
+  };
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { onCall });
+  assert.equal(count(calls, 'blocked'), 1);
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(rep[0].reason, /^Workflow error:/);
+  assert.match(rep[0].notes.join('\n'), new RegExp(CLEANUP_FAILED));
+});
+
+test('test_t2_8_cleanup_throws_after_normal_block', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { planBlocked: true, onCall: throwOn('blocked', () => new Error('cleanup boom')) });
+  assert.equal(count(calls, 'blocked'), 1);
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(rep[0].reason, /^Workflow error:/);
+  assert.match(rep[0].notes.join('\n'), new RegExp(CLEANUP_FAILED));
+});
+
+test('test_t2_9_run_continues_after_cleanup_failure', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1, 2] }, { planBlocked: (n) => n === 1, onCall: throwOn('blocked', () => new Error('cleanup boom'), 1) });
+  assert.equal(rep[0].status, 'blocked');
+  assert.equal(rep[1].status, 'pr');
+  assert.ok(has(calls, 'ship #2'));
+});
+
+test('test_t2_10_normal_block_is_not_cleaned_up_twice', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { planBlocked: true });
+  assert.equal(count(calls, 'blocked'), 1);
+  assert.equal(rep[0].status, 'blocked');
+  assert.doesNotMatch(rep[0].reason, /^Error:/);
+  assert.doesNotMatch(rep[0].reason, /^Workflow error:/);
+});
+
+test('test_t2_11_parallel_throw_waits_for_both_agents', async () => {
+  let implSettled = false;
+  let settledAtBlocked = null;
+  const onCall = async (l, n) => {
+    if (l.startsWith('qa')) throw new Error('qa boom');
+    if (l.startsWith('implement')) {
+      await new Promise((r) => setTimeout(r, 50));
+      implSettled = true;
+    }
+    if (l.startsWith('blocked')) settledAtBlocked = implSettled;
+  };
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { ...QA, onCall });
+  assert.equal(count(calls, 'blocked'), 1);
+  assert.equal(settledAtBlocked, true);
+  assert.match(prompt(calls, 'blocked'), /stage "Error"/);
+  assert.match(rep[0].reason, /^Error:/);
+});
+
+test('test_t2_12_non_error_or_empty_throw_is_unknown', async () => {
+  let r = await run({ ...BASE, issues: [1] }, { onCall: (l) => { if (l.startsWith('plan')) throw undefined; } });
+  assert.match(r.rep[0].reason, /^Error: unknown/);
+  r = await run({ ...BASE, issues: [1] }, { onCall: throwOn('plan', () => new Error('')) });
+  assert.match(r.rep[0].reason, /^Error: unknown/);
+});
+
+test('test_t2_15_notes_survive_a_throw', async () => {
+  const { rep } = await run(
+    { ...BASE, issues: [1] },
+    { branch: { resumed: true, commits: ['abc feat(#1): x'] }, planBlocked: true, onCall: throwOn('blocked', () => new Error('cleanup boom')) },
+  );
+  const notes = rep[0].notes.join('\n');
+  assert.match(notes, /resum|continu/i);
+  assert.match(notes, new RegExp(CLEANUP_FAILED));
 });
