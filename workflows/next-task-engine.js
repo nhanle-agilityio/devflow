@@ -135,7 +135,8 @@ const SELECT_SCHEMA = {
 const CLAIM_SCHEMA = {
   type: 'object',
   properties: {
-    taken: { type: 'boolean', description: 'True when the issue already has an assignee or the in-progress / blocked label' },
+    taken: { type: 'boolean', description: 'True when the issue has an assignee other than the authenticated user, or the in-progress / blocked / review label' },
+    assignedByRun: { type: 'boolean', description: 'True when this call added the authenticated user as assignee (false when already assigned)' },
     takenBy: { type: 'string' },
     problem: { type: 'string' },
     claims: {
@@ -143,12 +144,12 @@ const CLAIM_SCHEMA = {
       description: 'Every devflow-claim comment on the issue after ours was posted',
       items: {
         type: 'object',
-        properties: { commentId: { type: 'integer' }, claimId: { type: 'string' }, createdAt: { type: 'string' } },
-        required: ['commentId', 'claimId', 'createdAt'],
+        properties: { commentId: { type: 'integer' }, claimId: { type: 'string' }, createdAt: { type: 'string' }, author: { type: 'string', description: 'Login of the comment author' } },
+        required: ['commentId', 'claimId', 'createdAt', 'author'],
       },
     },
   },
-  required: ['taken', 'claims'],
+  required: ['taken', 'assignedByRun', 'claims'],
 }
 
 const BRANCH_SCHEMA = {
@@ -833,18 +834,18 @@ devflow config:
 ${cfgJson}
 
 Steps, in order:
-1. Read issue #${issue.number}. If it already has an assignee, or the label "${labels.inProgress}" or "${labels.blocked}", return taken=true, takenBy = the assignee login or the label name, claims = []. Change and post nothing.
-2. Otherwise add the authenticated user as assignee, add the label "${labels.inProgress}" and remove "${labels.ready}" (keep all other labels).
+1. Read issue #${issue.number}. The issue is taken only when it has an assignee other than the authenticated user, or the label "${labels.inProgress}", "${labels.blocked}" or "${labels.review}". An issue assigned only to the authenticated user with none of these labels is not taken: claim it. An issue assigned to the authenticated user and another user is taken. If it is taken, return taken=true, takenBy = the other assignee login or the label name, claims = []. Change and post nothing.
+2. Otherwise add the authenticated user as assignee only when not already assigned, and return assignedByRun=true when you added them, assignedByRun=false when they were already assigned. Add the label "${labels.inProgress}" and remove "${labels.ready}" (keep all other labels).
 3. Post a comment on the issue whose body is exactly these two lines:
 <!-- devflow-claim id=${claimId} -->
 Claimed by devflow (${claimId}).
-4. Read ALL comments of the issue again. Return in "claims" every comment whose body contains "<!-- devflow-claim id=": its comment id, the claim id parsed from that marker, and its created_at timestamp. Return taken=false.`
+4. Read ALL comments of the issue again. Return in "claims" every comment whose body contains "<!-- devflow-claim id=": its comment id, the claim id parsed from that marker, its created_at timestamp and its author login. Return taken=false.`
 }
 
-function releasePrompt(issue) {
+function releasePrompt(issue, removeAssignee) {
   return `Release a lost claim on GitHub issue #${issue.number} in ${gh.owner}/${gh.repo}. ${MCP_NOTE}
 
-Another devflow run claimed the issue first. Delete only the comment(s) on the issue whose body contains "<!-- devflow-claim id=${claimId} -->". Do not touch any other comment, the labels or the assignee: they belong to the winner. Return ok=true when none of your claim comments remain.`
+Another devflow run claimed the issue first. Delete only the comment(s) on the issue whose body contains "<!-- devflow-claim id=${claimId} -->". Do not touch any other comment or the labels: they belong to the winner. ${removeAssignee ? 'Also remove the authenticated user from the assignees of the issue (this run added them; the winner is a different user). Do not remove any other assignee.' : 'Do not touch the assignee: it belongs to the winner.'} Return ok=true when none of your claim comments remain.`
 }
 
 function branchPrompt(issue) {
@@ -1201,7 +1202,7 @@ Steps:
 Return the PR number and URL. If any step fails, return ok=false with the problem.`
 }
 
-function blockedPrompt(issue, branch, stage, reason, questions) {
+function blockedPrompt(issue, branch, stage, reason, questions, assignedByRun) {
   const qs = questions || []
   const questionsStep = qs.length
     ? `3. Post the questions as one comment on issue #${issue.number}; if a comment starting with \`<!-- devflow-questions -->\` already exists, edit it instead. The body is exactly:
@@ -1225,7 +1226,7 @@ Steps, in order:
 1. Do not make any more code changes or commits. If uncommitted changes exist, leave them; do not discard anything.
 2. ${branch ? `If \`git log ${parentRefFor(issue)}..${branch} --oneline\` shows commits, push the branch so work is not lost: \`git push -u ${remote} ${branch}\` (never force, never push to ${base}).` : 'No branch to push.'}
 ${questionsStep}
-4. On the issue add the label "${labels.blocked}" and remove "${labels.inProgress}" (keep other labels). Delete the comment(s) whose body contains "<!-- devflow-claim id=${claimId} -->" (this run's claim; a later run claims again).
+4. On the issue add the label "${labels.blocked}" and remove "${labels.inProgress}" (keep other labels). Delete the comment(s) whose body contains "<!-- devflow-claim id=${claimId} -->" (this run's claim; a later run claims again).${assignedByRun === true ? ' Also remove the authenticated user from the assignees of the issue (this run added them); do not remove any other assignee.' : ''}
 5. ${isolated ? 'Stay on the branch; this checkout is a dedicated worktree, so do not switch branches or stash.' : `\`git switch ${startBranch}\` (if the working tree is dirty, use \`git stash push -u -m devflow-blocked-${issue.number}\` first and say so in note).`}
 Return whether the branch was pushed.`
 }
@@ -1317,6 +1318,8 @@ async function runIssue(issue) {
     rootCause: null,
   }
   let branch = ''
+  // True when the Claim stage added the authenticated user as assignee; only then do cleanups remove them.
+  let assignedByRun = false
   // Facts the final report states as they happened (the skill prints them, nothing is inferred later).
   const notes = []
   const done = (r) => Object.assign(r, { notes })
@@ -1331,7 +1334,7 @@ async function runIssue(issue) {
     // A reason that is itself a tagged question (e.g. from a fix round) goes into the questions comment too.
     if (!questions && /^\[(BA|QA|Dev)\] /.test(reason)) questions = [reason]
     log(`#${issue.number} blocked at ${stage}: ${reason.split('\n')[0]}`)
-    await agent(blockedPrompt(issue, branch, stage, reason, questions), {
+    await agent(blockedPrompt(issue, branch, stage, reason, questions, assignedByRun), {
       label: `blocked #${issue.number}`,
       phase: stage,
       schema: BLOCKED_SCHEMA,
@@ -1355,13 +1358,16 @@ async function runIssue(issue) {
     log(`Skipped #${issue.number}: already claimed (${by}).`)
     return done({ issue: issue.number, status: 'skipped', reason: `already claimed (${by})` })
   }
+  assignedByRun = claim.assignedByRun === true
   const claims = Array.isArray(claim.claims) ? claim.claims : []
   if (!claims.some((c) => c.claimId === claimId)) {
     return block('Claim', `Our claim comment (${claimId}) was not found on the issue after posting it.`)
   }
   const winner = pickClaimWinner(claims)
   if (winner.claimId !== claimId) {
-    await agent(releasePrompt(issue), {
+    const ours = claims.find((c) => c.claimId === claimId)
+    const removeAssignee = assignedByRun && !!ours.author && !!winner.author && winner.author !== ours.author
+    await agent(releasePrompt(issue, removeAssignee), {
       label: `release #${issue.number}`,
       phase: 'Implement',
       schema: RELEASE_SCHEMA,
