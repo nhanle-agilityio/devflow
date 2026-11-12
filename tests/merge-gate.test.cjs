@@ -525,3 +525,212 @@ test('globToRegExp matches the engine implementation', async () => {
     }
   }
 });
+
+// ---- T4: the merge gate updates only the head of the queue ----
+const WAIT = 'deferred: waits for its turn';
+const dec = (env, n) => env.decisions().find((d) => Number(String(d.pr).replace(/\D/g, '')) === n);
+const updatedFor = (env) => env.names('pulls.updateBranch').map(([, a]) => a.pull_number);
+const runOf = (name, status, conclusion = null) => ({ name, status, conclusion, id: 1, started_at: '2026-01-01' });
+const stat = (context, state) => ({ context, state });
+const REVIEW = 'devflow/review';
+
+// T4.1
+test('test_t4_1_three_behind_prs_only_the_first_is_updated', async () => {
+  const env = makeEnv({ prs: [makePr(1), makePr(2), makePr(3)], behind: { 1: 2, 2: 2, 3: 2 } });
+  await run(env, CONFIG());
+  assert.deepEqual(updatedFor(env), [1]);
+  assert.equal(dec(env, 1).action, 'updated');
+  for (const n of [2, 3]) {
+    assert.equal(dec(env, n).action, 'deferred');
+    assert.equal(dec(env, n).reason, WAIT);
+  }
+});
+
+// T4.2
+test('test_t4_2_priority_order_picks_the_slot_holder', async () => {
+  const env = makeEnv({
+    prs: [makePr(1), makePr(5)],
+    behind: { 1: 2, 5: 2 },
+    issues: {
+      101: { state: 'open', body: '', labels: [] },
+      105: { state: 'open', body: '', labels: [{ name: 'priority:critical' }] },
+    },
+  });
+  await run(env, CONFIG());
+  assert.deepEqual(updatedFor(env), [5]);
+  assert.equal(dec(env, 5).action, 'updated');
+  assert.equal(dec(env, 1).action, 'deferred');
+});
+
+// T4.3
+test('test_t4_3_a_skipped_behind_draft_does_not_take_the_slot', async () => {
+  const env = makeEnv({ prs: [makePr(1, { draft: true }), makePr(2)], behind: { 1: 2, 2: 2 } });
+  await run(env, CONFIG());
+  assert.equal(dec(env, 1).action, 'skipped');
+  assert.match(dec(env, 1).reason, /draft/);
+  assert.equal(dec(env, 2).action, 'updated');
+  assert.deepEqual(updatedFor(env), [2]);
+});
+
+// T4.4
+const T44 = {
+  'risk:high': { pr: { labels: [{ name: 'devflow' }, { name: 'risk:high' }] } },
+  blocked: { pr: { labels: [{ name: 'devflow' }, { name: 'risk:low' }, { name: 'agent:blocked' }] } },
+  stacked: { pr: { base: { ref: 'feat/0', repo: { full_name: 'o/r' } } } },
+  'open dependency': {
+    env: { issues: { 101: { state: 'open', body: 'Depends on #50' }, 50: { state: 'open' } } },
+  },
+  'highPaths file': { env: { files: { 1: [{ filename: '.github/x.yml' }] } } },
+  conflict: { pr: { mergeable: false, mergeable_state: 'dirty' } },
+};
+for (const [rule, c] of Object.entries(T44)) {
+  test(`test_t4_4_${rule.replace(/\W+/g, '_')}_first_pr_leaves_the_slot_free`, async () => {
+    const env = makeEnv({ prs: [makePr(1, c.pr), makePr(2)], behind: { 1: 2, 2: 2 }, ...(c.env || {}) });
+    await run(env, CONFIG());
+    assert.notEqual(dec(env, 1).action, 'updated');
+    assert.equal(dec(env, 2).action, 'updated');
+    assert.deepEqual(updatedFor(env), [2]);
+  });
+}
+
+// T4.5
+test('test_t4_5_mergeable_null_does_not_take_the_slot', async () => {
+  const env = makeEnv({ prs: [makePr(1, { mergeable: null }), makePr(2)], behind: { 2: 2 } });
+  await run(env, CONFIG());
+  assert.equal(dec(env, 1).action, 'skipped');
+  assert.match(dec(env, 1).reason, /mergeability not computed yet/);
+  assert.equal(dec(env, 2).action, 'updated');
+});
+
+// T4.6
+const T46 = {
+  'pending status': { statuses: { sha1: [stat(REVIEW, 'pending')] } },
+  'queued run': { runs: { sha1: [runOf(REVIEW, 'queued')] } },
+  'in_progress run': { runs: { sha1: [runOf(REVIEW, 'in_progress')] } },
+};
+for (const [name, c] of Object.entries(T46)) {
+  test(`test_t4_6_in_flight_${name.replace(/\W+/g, '_')}_holds_the_slot`, async () => {
+    const env = makeEnv({ prs: [makePr(1), makePr(2)], behind: { 2: 2 }, ...c });
+    await run(env, CONFIG());
+    assert.equal(dec(env, 1).action, 'skipped');
+    assert.match(dec(env, 1).reason, /waiting for devflow\/review/);
+    assert.equal(dec(env, 2).action, 'deferred');
+    assert.equal(dec(env, 2).reason, WAIT);
+    assert.equal(env.names('pulls.updateBranch').length, 0);
+  });
+}
+
+// T4.7
+test('test_t4_7_up_to_date_with_failed_check_does_not_hold_the_slot', async () => {
+  const env = makeEnv({ prs: [makePr(1), makePr(2)], behind: { 2: 2 }, statuses: { sha1: [stat(REVIEW, 'failure')] } });
+  await run(env, CONFIG());
+  assert.equal(dec(env, 1).action, 'skipped');
+  assert.match(dec(env, 1).reason, /waiting for devflow\/review/);
+  assert.equal(dec(env, 2).action, 'updated');
+});
+
+// T4.8
+for (const status of [502, 422, 403]) {
+  test(`test_t4_8_update_branch_error_${status}_frees_the_slot`, async () => {
+    const env = makeEnv({ prs: [makePr(1), makePr(2)], behind: { 1: 2, 2: 2 } });
+    const orig = env.github.rest.pulls.updateBranch;
+    env.github.rest.pulls.updateBranch = async (args) => {
+      if (args.pull_number === 1) {
+        env.calls.push(['pulls.updateBranch', args]);
+        throw Object.assign(new Error(`HTTP ${status}`), { status });
+      }
+      return orig(args);
+    };
+    await run(env, CONFIG());
+    assert.equal(dec(env, 1).action, 'error');
+    assert.equal(dec(env, 2).action, 'updated');
+    assert.deepEqual(updatedFor(env), [1, 2]);
+  });
+}
+
+// T4.9
+test('test_t4_9_update_and_merge_in_one_run', async () => {
+  const env = makeEnv({ prs: [makePr(1), makePr(2)], behind: { 1: 2 }, ...green(2) });
+  await run(env, CONFIG());
+  assert.equal(dec(env, 1).action, 'updated');
+  assert.deepEqual(env.names('pulls.merge').map(([, a]) => a.pull_number), [2]);
+  assert.equal(dec(env, 2).action, 'merged');
+});
+
+// T4.10
+test('test_t4_10_no_update_after_a_merge', async () => {
+  const env = makeEnv({ prs: [makePr(1), makePr(2)], behind: { 2: 2 }, ...green(1) });
+  await run(env, CONFIG());
+  assert.equal(dec(env, 1).action, 'merged');
+  assert.equal(dec(env, 2).action, 'deferred');
+  assert.equal(dec(env, 2).reason, 'deferred: one merge per run');
+  assert.equal(env.names('pulls.updateBranch').length, 0);
+});
+
+// T4.11
+test('test_t4_11_dry_run_would_update_plus_deferred_no_calls', async () => {
+  const env = makeEnv({ prs: [makePr(1), makePr(2)], behind: { 1: 2, 2: 2 } });
+  await run(env, CONFIG({ dryRun: true }));
+  assert.equal(dec(env, 1).action, 'would update');
+  assert.equal(dec(env, 2).action, 'deferred');
+  assert.equal(dec(env, 2).reason, WAIT);
+  assert.equal(env.names('pulls.updateBranch').length, 0);
+});
+
+// T4.13
+test('test_t4_13_a_missing_check_does_not_hold_the_slot', async () => {
+  const env = makeEnv({ prs: [makePr(1), makePr(2)], behind: { 2: 2 } });
+  await run(env, CONFIG());
+  assert.equal(dec(env, 1).action, 'skipped');
+  assert.equal(dec(env, 1).reason, 'waiting for devflow/review: missing');
+  assert.equal(dec(env, 2).action, 'updated');
+  assert.deepEqual(updatedFor(env), [2]);
+});
+
+// T4.14
+const TWO = ['devflow/review', 'test'];
+const T414 = {
+  'status pending, run failure': {
+    statuses: { sha1: [stat(REVIEW, 'pending')] }, runs: { sha1: [runOf('test', 'completed', 'failure')] },
+  },
+  'swapped: status failure, run in_progress': {
+    statuses: { sha1: [stat(REVIEW, 'failure')] }, runs: { sha1: [runOf('test', 'in_progress')] },
+  },
+  'test cancelled': {
+    statuses: { sha1: [stat(REVIEW, 'pending')] }, runs: { sha1: [runOf('test', 'completed', 'cancelled')] },
+  },
+  'test status error': {
+    statuses: { sha1: [stat(REVIEW, 'pending'), stat('test', 'error')] },
+  },
+};
+for (const [name, c] of Object.entries(T414)) {
+  test(`test_t4_14_failed_next_to_running_${name.replace(/\W+/g, '_')}_does_not_hold_the_slot`, async () => {
+    const env = makeEnv({ prs: [makePr(1), makePr(2)], behind: { 2: 2 }, ...c });
+    await run(env, CONFIG({ requiredChecks: TWO }));
+    assert.equal(dec(env, 1).action, 'skipped');
+    assert.equal(dec(env, 2).action, 'updated');
+  });
+}
+
+// T4.15
+for (const status of ['waiting', 'requested']) {
+  test(`test_t4_15_${status}_run_does_not_hold_the_slot`, async () => {
+    const env = makeEnv({ prs: [makePr(1), makePr(2)], behind: { 2: 2 }, runs: { sha1: [runOf(REVIEW, status)] } });
+    await run(env, CONFIG());
+    assert.equal(dec(env, 1).action, 'skipped');
+    assert.match(dec(env, 1).reason, /waiting for devflow\/review/);
+    assert.equal(dec(env, 2).action, 'updated');
+  });
+}
+
+// T4.16
+for (const [label, names] of [['review first', TWO], ['review last', [...TWO].reverse()]]) {
+  test(`test_t4_16_running_next_to_missing_holds_the_slot_${label.replace(/\W+/g, '_')}`, async () => {
+    const env = makeEnv({ prs: [makePr(1), makePr(2)], behind: { 2: 2 }, statuses: { sha1: [stat(REVIEW, 'pending')] } });
+    await run(env, CONFIG({ requiredChecks: names }));
+    assert.equal(dec(env, 1).action, 'skipped');
+    assert.equal(dec(env, 2).action, 'deferred');
+    assert.equal(dec(env, 2).reason, WAIT);
+    assert.equal(env.names('pulls.updateBranch').length, 0);
+  });
+}
