@@ -30,7 +30,7 @@ async function run(args, opts = {}) {
     if (opts.onCall) await opts.onCall(l, n);
     if (l === 'select issues') {
       return {
-        issues: (args.issues || []).map((i) => ({ number: i, title: 't' + i, labels: opts.selectLabels ? opts.selectLabels(i) : opts.labels || [], body: 'spec docs/specs/a.md', dependsOn: [], parents: [] })),
+        issues: (args.issues || []).map((i) => ({ number: i, title: 't' + i, labels: opts.selectLabels ? opts.selectLabels(i) : opts.labels || [], body: 'spec docs/specs/a.md', dependsOn: [], parents: [], ...(opts.resumeBranch ? { resumeBranch: pick(opts.resumeBranch, i) } : {}) })),
         skipped: [],
       };
     }
@@ -1001,4 +1001,105 @@ test('test_t7_10_unaccepted_scan_hit_with_pass_verdict_starts_a_fix_round', asyn
   const seen = { n: 0 };
   const { calls } = await run({ ...BASE, issues: [1] }, { diff: () => (seen.n++ === 0 ? NOQA : ''), review: { verdict: 'pass', findings: [] } });
   assert.ok(has(calls, 'fix'));
+});
+
+// T8: ship reuses an open PR; select/branch resume it.
+const step0 = (calls) => {
+  const p = prompt(calls, 'ship');
+  const m = /(^|\n)\s*0[.)][\s\S]*?(?=\n\s*1[.)] )/.exec(p);
+  return m ? m[0] : '';
+};
+
+// T8.1
+test('test_t8_1_ship_step_0_reuses_an_open_pr', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] });
+  const s = step0(calls);
+  assert.ok(s, 'ship prompt has a step 0');
+  assert.match(s, /open PR/i);
+  assert.match(s, /o\/r/);
+  assert.match(s, /feat\/1-x/);
+  assert.match(s, /push/i);
+  assert.match(s, /base/i);
+  assert.match(s, /body/i);
+  assert.match(s, /label/i);
+  assert.match(s, /(not|never|no) (open|create)[^.\n]*(new|another)|do not open a new/i);
+  assert.match(s, /issue labels|continue/i);
+  assert.ok(prompt(calls, 'ship').indexOf(s.trim()) < prompt(calls, 'ship').search(/\n\s*1[.)] /), 'step 0 comes first');
+});
+
+// T8.2
+test('test_t8_2_ship_step_0_intended_base_follows_stacking', async () => {
+  const { calls } = await run({ ...BASE, issues: [1, 2], chain: true });
+  const c2 = calls.filter((c) => c.l.startsWith('ship')).find((c) => /#2/.test(c.l));
+  const m = /(^|\n)\s*0[.)][\s\S]*?(?=\n\s*1[.)] )/.exec(c2.prompt);
+  assert.ok(m, 'step 0 present');
+  assert.match(m[0], /feat\/1-x/);
+});
+
+// T8.3
+test('test_t8_3_reused_true_adds_a_note', async () => {
+  const { rep } = await run({ ...BASE, issues: [1] }, { ship: { prNumber: 42, reused: true } });
+  assert.equal(rep[0].status, 'pr');
+  assert.equal(rep[0].prNumber, 42);
+  assert.match(rep[0].notes.join('\n'), /reused open PR #42/);
+});
+
+// T8.4
+test('test_t8_4_ship_schema_has_reused_boolean_and_pr_number_required', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] });
+  const schema = calls.find((c) => c.l.startsWith('ship')).schema;
+  assert.equal(schema.properties.reused.type, 'boolean');
+  assert.ok(schema.required.includes('prNumber'));
+  assert.ok(!schema.required.includes('reused'));
+});
+
+// T8.5
+test('test_t8_5_reused_false_or_missing_adds_no_note', async () => {
+  for (const ship of [{ reused: false }, {}]) {
+    const { rep } = await run({ ...BASE, issues: [1] }, { ship });
+    assert.equal(rep[0].status, 'pr');
+    assert.ok(!rep[0].notes.some((n) => /^reused open PR/.test(n)));
+  }
+});
+
+// T8.6
+test('test_t8_6_reuse_never_removes_labels', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] });
+  const s = step0(calls);
+  assert.match(s, /risk:high/);
+  assert.match(s, /(never|not|without) remov/i);
+  assert.match(s, /already on/i);
+});
+
+// T8.8
+test('test_t8_8_select_keeps_an_issue_with_its_own_devflow_pr', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] });
+  const p = prompt(calls, 'select');
+  assert.match(p, /resumeBranch/);
+  assert.match(p, /Closes #<n>|Closes #/);
+  assert.match(p, /head branch/i);
+  assert.match(p, /only open PR/i);
+  assert.match(p, /devflow/);
+  assert.match(p, /any other open PR|other open PR/i);
+});
+
+// T8.9
+test('test_t8_9_branch_resumes_the_pr_branch_even_with_another_slug', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] }, { resumeBranch: 'fix/1-old-slug' });
+  const p = prompt(calls, 'branch');
+  assert.match(p, /fix\/1-old-slug/);
+  assert.match(p, /resume/i);
+  assert.match(p, /remote|origin/i);
+  assert.doesNotMatch(p, /branchPattern/);
+  const { calls: other } = await run({ ...BASE, issues: [1] });
+  assert.doesNotMatch(prompt(other, 'branch'), /fix\/1-old-slug/);
+});
+
+// T8.10
+test('test_t8_10_an_issue_in_review_is_not_selected_or_claimed', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] });
+  const sel = prompt(calls, 'select');
+  assert.match(sel, /agent:review/);
+  assert.match(sel, /even when|even if|still skipped|is skipped/i);
+  assert.match(prompt(calls, 'claim'), /agent:review/);
 });
