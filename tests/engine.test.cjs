@@ -24,7 +24,7 @@ async function run(args, opts = {}) {
   const pick = (v, n) => (typeof v === 'function' ? v(n) : v);
   const agent = async (prompt, o) => {
     const l = o.label;
-    calls.push({ l, prompt, model: o.model, agentType: o.agentType });
+    calls.push({ l, prompt, model: o.model, agentType: o.agentType, schema: o.schema });
     if (opts.reviewerMissing && o.agentType) throw new Error('Unknown agent type ' + o.agentType);
     const n = Number((/#(\d+)/.exec(l) || [])[1]);
     if (l === 'select issues') {
@@ -38,7 +38,11 @@ async function run(args, opts = {}) {
       if (pick(opts.taken, n)) return { taken: true, takenBy: 'agent:in-progress', claims: [] };
       const mine = { commentId: 10 + n, claimId: args.claimId, createdAt: '2026-01-01T00:00:05Z' };
       const other = pick(opts.lose, n) ? [{ commentId: 1, claimId: 'other-1', createdAt: '2026-01-01T00:00:01Z' }] : [];
-      return { taken: false, claims: [mine].concat(other) };
+      if (opts.myAuthor !== undefined) mine.author = opts.myAuthor;
+      if (other[0] && opts.winnerAuthor !== undefined) other[0].author = opts.winnerAuthor;
+      const out = { taken: false, claims: [mine].concat(other) };
+      if (opts.assignedByRun !== undefined) out.assignedByRun = opts.assignedByRun;
+      return out;
     }
     if (l.startsWith('release')) return { ok: true };
     if (l.startsWith('branch')) return Object.assign({ ok: true, branch: 'feat/' + n + '-x' }, pick(opts.branch, n) || {});
@@ -709,4 +713,83 @@ test('scanWeakenedChecks treats a missing or non-array ignore argument as none',
   const base = scanWeakenedChecks(text, []);
   assert.equal(base.length, 1);
   for (const bad of [undefined, null, '**', {}, 5]) assert.deepEqual(scanWeakenedChecks(text, [], bad), base);
+});
+
+// T1: claim taken rule, assignedByRun cleanup, lost-claim release
+const REMOVE_ASSIGNEE = /remove the authenticated user|unassign/i;
+
+test('test_t1_1_claim_prompt_states_taken_rule', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] });
+  const p = prompt(calls, 'claim');
+  assert.match(p, /other than the authenticated user/);
+  assert.match(p, /agent:in-progress/);
+  assert.match(p, /agent:blocked/);
+  assert.match(p, /agent:review/);
+});
+
+test('test_t1_2_claim_prompt_self_assigned_only_is_free', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] });
+  assert.match(prompt(calls, 'claim'), /only to the authenticated user[\s\S]{0,200}(not taken|claim)/i);
+});
+
+test('test_t1_3_claim_prompt_mixed_assignees_is_taken', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] });
+  assert.match(prompt(calls, 'claim'), /authenticated user and (an)?other[\s\S]{0,80}taken/i);
+});
+
+test('test_t1_4_claim_adds_self_only_when_unassigned_and_schema_requires_fields', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] });
+  const p = prompt(calls, 'claim');
+  assert.match(p, /only when (it is |they are )?not already assigned|not already assigned/i);
+  assert.match(p, /assignedByRun/);
+  const schema = calls.find((c) => c.l.startsWith('claim')).schema;
+  assert.ok(schema.required.includes('assignedByRun'));
+  assert.equal(schema.properties.assignedByRun.type, 'boolean');
+  assert.ok(schema.properties.claims.items.required.includes('author'));
+});
+
+test('test_t1_5_assigned_by_run_true_plan_block_removes_self', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { assignedByRun: true, planBlocked: true });
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(prompt(calls, 'blocked'), /remove the authenticated user from the assignees/i);
+});
+
+test('test_t1_6_assigned_by_run_true_review_block_removes_self', async () => {
+  const review = { verdict: 'changes', findings: [{ severity: 'warning', file: 'src/x.py', line: 1, problem: 'p', fix: 'f' }] };
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { assignedByRun: true, review });
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(rep[0].reason, /^Review:/);
+  assert.match(prompt(calls, 'blocked'), /remove the authenticated user from the assignees/i);
+});
+
+test('test_t1_7_assigned_by_run_false_no_assignee_removal', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { assignedByRun: false, planBlocked: true });
+  assert.equal(rep[0].status, 'blocked');
+  assert.ok(has(calls, 'blocked'));
+  assert.doesNotMatch(prompt(calls, 'blocked'), REMOVE_ASSIGNEE);
+});
+
+test('test_t1_8_assigned_by_run_missing_counts_as_false', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { planBlocked: true });
+  assert.equal(rep[0].status, 'blocked');
+  assert.doesNotMatch(prompt(calls, 'blocked'), REMOVE_ASSIGNEE);
+});
+
+test('test_t1_9_lost_claim_same_login_leaves_assignee', async () => {
+  for (const winnerAuthor of ['me', undefined]) {
+    const { rep, calls } = await run({ ...BASE, issues: [1] }, { lose: true, assignedByRun: true, myAuthor: 'me', winnerAuthor });
+    assert.equal(rep[0].reason, 'claimed by other-1');
+    assert.ok(!has(calls, 'blocked'));
+    assert.ok(has(calls, 'release'));
+    assert.doesNotMatch(prompt(calls, 'release'), REMOVE_ASSIGNEE);
+  }
+});
+
+test('test_t1_11_lost_claim_other_login_removes_own_assignee', async () => {
+  let r = await run({ ...BASE, issues: [1] }, { lose: true, assignedByRun: true, myAuthor: 'me', winnerAuthor: 'other' });
+  assert.ok(!has(r.calls, 'blocked'));
+  assert.match(prompt(r.calls, 'release'), /remove the authenticated user from the assignees/i);
+  r = await run({ ...BASE, issues: [1] }, { lose: true, assignedByRun: false, myAuthor: 'me', winnerAuthor: 'other' });
+  assert.ok(!has(r.calls, 'blocked'));
+  assert.doesNotMatch(prompt(r.calls, 'release'), REMOVE_ASSIGNEE);
 });
