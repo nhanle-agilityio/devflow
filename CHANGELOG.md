@@ -2,6 +2,11 @@
 
 All notable changes to devflow. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Claim treats an issue as taken only when it has an assignee other than the authenticated user, or the in-progress / blocked / review label; an issue assigned only to the authenticated user is claimed. The claim reports `assignedByRun`, and a blocked run (or a loser of the claim race with a different author) removes the authenticated user from the assignees only when the run added them (#28).
+
 ## [2.8.0] - 2026-11-11
 
 Hardening release for the auto-merge path: the merge gate, the weakened-checks scan, the verification step and the guard all get stricter. No config change is required; every new config key is optional.
