@@ -867,6 +867,16 @@ test('test_t2_8_cleanup_throws_after_normal_block', async () => {
   assert.match(rep[0].notes.join('\n'), new RegExp(CLEANUP_FAILED));
 });
 
+test('test_t2_8_cleanup_throws_after_normal_block_before_claim_won', async () => {
+  // Our claim comment is missing, so the issue is blocked at Claim before the claim is won.
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { claimProblem: 'claim comment not read back', onCall: throwOn('blocked', () => new Error('cleanup boom')) });
+  assert.equal(count(calls, 'blocked'), 1);
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(rep[0].reason, /^Workflow error:/);
+  assert.match(rep[0].notes.join('\n'), new RegExp(CLEANUP_FAILED));
+  assert.doesNotMatch(rep[0].notes.join('\n'), /claim may be partial/);
+});
+
 test('test_t2_9_run_continues_after_cleanup_failure', async () => {
   const { rep, calls } = await run({ ...BASE, issues: [1, 2] }, { planBlocked: (n) => n === 1, onCall: throwOn('blocked', () => new Error('cleanup boom'), 1) });
   assert.equal(rep[0].status, 'blocked');
