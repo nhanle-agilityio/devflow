@@ -6,6 +6,9 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 
 ### Fixed
 - Claim treats an issue as taken only when it has an assignee other than the authenticated user, or the in-progress / blocked / review label; an issue assigned only to the authenticated user is claimed. The claim reports `assignedByRun`, and a blocked run (or a loser of the claim race with a different author) removes the authenticated user from the assignees only when the run added them (#28).
+- Engine: a stage agent that throws after the claim was won now runs the blocked cleanup with stage `Error` (reason `Error: <first line>`; the assignee is removed only under the `assignedByRun` rule). A throw from the claim or release agent reports `Workflow error:` with the note `claim may be partial; run /devflow:doctor`; a throw from the cleanup itself reports `Workflow error:` with `cleanup failed; run /devflow:doctor`, and the run goes on with the next issue. `/devflow:doctor --fix` also removes the assignee of a stale in-progress issue, only when it is the authenticated user (#29).
+- Engine: the run limit counts issues that were worked on. An issue skipped at Claim (already taken, or the claim race lost) does not count toward `limit`, so the next selected issue is worked on; a blocked issue, or a workflow error after Claim, still counts (#34).
+- Engine: the Review loop exits on findings only. A `pass` verdict with a critical or warning finding starts a fix round, and a `changes` verdict with only suggestions ships. Any severity other than `suggestion` counts as blocking (fail closed) (#34).
 
 ## [2.8.0] - 2026-11-11
 
