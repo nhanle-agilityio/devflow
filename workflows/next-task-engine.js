@@ -149,7 +149,7 @@ const CLAIM_SCHEMA = {
       },
     },
   },
-  required: ['taken', 'claims'],
+  required: ['taken', 'assignedByRun', 'claims'],
 }
 
 const BRANCH_SCHEMA = {
