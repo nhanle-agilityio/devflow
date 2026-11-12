@@ -1362,6 +1362,7 @@ async function runIssue(issue) {
   if (claim.taken) {
     const by = claim.takenBy || 'assignee or label'
     log(`Skipped #${issue.number}: already claimed (${by}).`)
+    issue.claimSkip = true // a Claim skip is not worked on: it does not count toward the limit
     return done({ issue: issue.number, status: 'skipped', reason: `already claimed (${by})` })
   }
   assignedByRun = claim.assignedByRun === true
@@ -1380,6 +1381,7 @@ async function runIssue(issue) {
       model: 'haiku',
     })
     log(`Skipped #${issue.number}: claimed by ${winner.claimId}.`)
+    issue.claimSkip = true
     return done({ issue: issue.number, status: 'skipped', reason: `claimed by ${winner.claimId}` })
   }
 
@@ -1625,10 +1627,11 @@ async function runIssue(issue) {
         review.findings.push({ severity: 'critical', file: h.file, line: h.line, problem: `Weakened check (${h.kind}): ${h.text || h.file}`, fix: 'Remove it and fix the cause instead; keep it only if the issue itself requires it.' })
       }
       state.weakened = hits.filter((h) => acceptedHit(h, accepted)).map((h) => Object.assign({}, h, { reason: (accepted.find((a) => a.file === h.file && Number(a.line) === Number(h.line)) || {}).reason || '' }))
+      // Fail closed: only an exact 'suggestion' is non-blocking; any other severity (even 'Suggestion') blocks.
       const blocking = review.findings.filter((f) => f.severity !== 'suggestion')
       state.suggestions = review.findings.filter((f) => f.severity === 'suggestion')
-      // A pass verdict does not override a scan hit the reviewer neither reported nor accepted.
-      if ((review.verdict === 'pass' && !injected) || blocking.length === 0) break
+      // The review exits on findings only; the verdict is informational. Injected scan hits are critical findings in `blocking`.
+      if (blocking.length === 0) break
       const details = blocking
         .map((f) => `- [${f.severity}] ${f.file}:${f.line}: ${f.problem}\n  Suggested fix: ${f.fix}`)
         .join('\n')
@@ -1790,7 +1793,6 @@ for (const issue of queue) {
     continue
   }
   issue.parents = resolved
-  worked++
   let result
   try {
     result = await runIssue(issue)
@@ -1800,6 +1802,8 @@ for (const issue of queue) {
     const left = issue.inCleanup || issue.claimWon ? 'cleanup failed; run /devflow:doctor' : 'claim may be partial; run /devflow:doctor'
     result = { issue: issue.number, status: 'blocked', reason: `Workflow error: ${msg}`, notes: (issue.notes || []).concat([left]) }
   }
+  // Only an issue that was actually worked on counts toward the limit; Claim skips (taken, lost race) do not.
+  if (!issue.claimSkip) worked++
   result.notes = laneNotes.concat(result.notes || [])
   if (result.mcpDown) stopped = `${MCP_DOWN}: the run stopped at #${issue.number}`
   status[issue.number] = result.status
