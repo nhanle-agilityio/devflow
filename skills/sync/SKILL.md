@@ -68,7 +68,7 @@ Keep only trusted, unresolved, actionable threads; ignore threads you already an
 
 If a thread needs a product decision, do not decide silently: ask the user. (Unattended: leave it unresolved and list it as "needs a human".)
 
-Apply fixes as new commits, one per logical change: `fix(<scope>): address review - <what>` (scope from `commitScope`, issue number from the PR's `Closes` line). Stage files by name. Run every command in `checks`; all must pass. Push normally. Reply on every thread: "fixed in <sha>", the answer, or "won't fix" with the reason. A reply lets the gate treat a review-bot thread as answered; a trusted human's thread blocks the gate until the human resolves it, so after replying, leave it for them to resolve.
+Apply fixes as new commits, one per logical change: `fix(<scope>): address review - <what>` (scope from `commitScope`, issue number from the PR's `Closes` line). Stage files by name. Run every command in `checks`; all must pass. Push normally. Reply on every thread: "fixed in <sha>", the answer, or "won't fix" with the reason. A reply lets the gate treat a thread started by the PR author or the review bot as answered; a thread started by another trusted human (OWNER, MEMBER, COLLABORATOR) blocks the gate until that human resolves it, so after replying, leave it for them to resolve.
 
 Pushing new commits re-runs the automated review by itself (the pull request `synchronize` event). Do NOT post any re-review trigger comment.
 
