@@ -9,11 +9,38 @@ const CONFIG = (over = {}) => ({
   mergeGate: { enabled: true, dryRun: false, requiredChecks: ['devflow/review'], method: 'merge', ...over },
 });
 
+// Internal thread form: `first` / `last` comment descriptors; the graphql stub shapes them to the query asked.
+// A comment descriptor: { by, type = 'User', assoc } ; by === null means a deleted author; assoc undefined means missing.
+const cnode = (c) => {
+  const n = { author: c.by === null ? null : { login: c.by, __typename: c.type || 'User' } };
+  if (c.assoc !== undefined) n.authorAssociation = c.assoc;
+  return n;
+};
+// Legacy helper (Decision #32 Q1): the first comment is by the PR author (OWNER), `by` is the last comment's author.
 const thread = ({ resolved = false, outdated = false, by = 'reviewer' } = {}) => ({
   isResolved: resolved,
   isOutdated: outdated,
-  comments: { nodes: [{ author: { login: by } }] },
+  _first: { by: 'author', type: 'User', assoc: 'OWNER' },
+  _last: { by },
 });
+// T5 helper: first comment descriptor, last comment descriptor (default: same as first), none = no comment nodes.
+const tthread = ({ first, last, resolved = false, outdated = false, none = false } = {}) => ({
+  isResolved: resolved,
+  isOutdated: outdated,
+  _first: none ? null : first,
+  _last: none ? null : last || first,
+});
+const shapeThread = (t, query) => {
+  const out = { isResolved: t.isResolved, isOutdated: t.isOutdated };
+  const firstAlias = query.match(/(\w+)\s*:\s*comments\(\s*first\s*:\s*1\s*\)/);
+  const lastAlias = query.match(/(\w+)\s*:\s*comments\(\s*last\s*:\s*1\s*\)/);
+  const f = t._first ? [cnode(t._first)] : [];
+  const l = t._last ? [cnode(t._last)] : [];
+  if (firstAlias) out[firstAlias[1]] = { nodes: f };
+  if (lastAlias) out[lastAlias[1]] = { nodes: l };
+  if (!firstAlias || !lastAlias) out.comments = { nodes: !t._first ? [] : f.length && l.length && t._first !== t._last ? [f[0], l[0]] : l };
+  return out;
+};
 
 function makePr(number, over = {}) {
   return {
@@ -35,6 +62,7 @@ function makeEnv({
   prs = [], runs = {}, statuses = {}, behind = {}, unresolved = {}, comments = [], issues = {}, files = {},
 } = {}) {
   const calls = [];
+  const queries = [];
   const rec = (name, fn) => async (args) => {
     calls.push([name, args]);
     return fn ? fn(args) : { data: {} };
@@ -86,13 +114,14 @@ function makeEnv({
       const res = await fn(params);
       return Array.isArray(res.data) ? res.data : res.data.check_runs;
     },
-    graphql: async (_q, vars) => {
+    graphql: async (q, vars) => {
       calls.push(['graphql', vars]);
+      queries.push(q);
       const v = unresolved[vars.number] || 0;
       const nodes = Array.isArray(v)
         ? v
         : Array.from({ length: v }, () => thread({ by: 'reviewer' })).concat([thread({ resolved: true })]);
-      return { repository: { pullRequest: { reviewThreads: { nodes } } } };
+      return { repository: { pullRequest: { reviewThreads: { nodes: nodes.map((t) => shapeThread(t, q)) } } } };
     },
   };
   const summary = { text: [], rows: null };
@@ -107,7 +136,7 @@ function makeEnv({
   const context = { repo: { owner: 'o', repo: 'r' }, payload: {} };
   const names = (n) => calls.filter(([c]) => c === n);
   const decisions = () => (summary.rows || []).slice(1).map(([pr, action, reason]) => ({ pr, action, reason }));
-  return { github, core, context, calls, names, summary, messages, decisions, comments };
+  return { github, core, context, calls, queries, names, summary, messages, decisions, comments };
 }
 
 const green = (n) => ({
@@ -734,3 +763,110 @@ for (const [label, names] of [['review first', TWO], ['review last', [...TWO].re
     assert.equal(env.names('pulls.updateBranch').length, 0);
   });
 }
+
+// ---- T5: collaborator threads ----
+const REV = (assoc, type = 'User') => ({ by: 'rev', type, assoc });
+const AUTH = { by: 'author', type: 'User', assoc: 'OWNER' };
+async function gateWith(threads, prOver = {}) {
+  const env = makeEnv({ prs: [makePr(1, prOver)], unresolved: { 1: threads }, ...green(1) });
+  await run(env, CONFIG());
+  return env;
+}
+const blocks = async (threads, n = 1, prOver) => {
+  const env = await gateWith(threads, prOver);
+  const d = env.decisions()[0];
+  assert.equal(d.action, 'skipped');
+  assert.match(d.reason, new RegExp(`^${n} unanswered review threads`));
+  assert.equal(env.names('pulls.merge').length, 0);
+};
+const merges = async (threads, prOver) => {
+  const env = await gateWith(threads, prOver);
+  assert.equal(env.decisions()[0].action, 'merged');
+};
+
+test('test_t5_1_collaborator_thread_blocks_after_author_reply', async () => {
+  await blocks([tthread({ first: REV('COLLABORATOR'), last: AUTH })]);
+});
+
+test('test_t5_2_owner_and_member_also_block', async () => {
+  for (const a of ['OWNER', 'MEMBER']) await blocks([tthread({ first: REV(a), last: AUTH })]);
+});
+
+test('test_t5_3_resolved_or_outdated_does_not_block', async () => {
+  await merges([tthread({ first: REV('COLLABORATOR'), last: AUTH, resolved: true })]);
+  await merges([tthread({ first: REV('COLLABORATOR'), last: AUTH, outdated: true })]);
+});
+
+test('test_t5_4_untrusted_association_does_not_block', async () => {
+  for (const a of ['CONTRIBUTOR', 'NONE', 'FIRST_TIME_CONTRIBUTOR']) {
+    await merges([tthread({ first: { by: 'stranger', assoc: a } })]);
+  }
+});
+
+test('test_t5_5_no_author_no_association_or_no_comments_does_not_block', async () => {
+  await merges([
+    tthread({ first: { by: null, assoc: 'OWNER' }, last: AUTH }),
+    tthread({ first: { by: 'rev', type: 'User' }, last: AUTH }),
+    tthread({ none: true }),
+  ]);
+});
+
+test('test_t5_6_bot_pr_author_trusted_human_thread_blocks', async () => {
+  await blocks(
+    [tthread({ first: REV('OWNER'), last: { by: 'devflow-bot', type: 'Bot', assoc: 'NONE' } })],
+    1,
+    { user: { login: 'devflow-bot[bot]' } },
+  );
+});
+
+test('test_t5_7_claude_bot_thread_follows_todays_rule', async () => {
+  const claude = { by: 'claude', type: 'Bot', assoc: 'NONE' };
+  await blocks([tthread({ first: claude, last: REV('NONE') })]);
+  await merges([tthread({ first: claude, last: AUTH })]);
+});
+
+test('test_t5_8_bot_login_suffix_is_ignored_when_comparing', async () => {
+  await merges(
+    [tthread({ first: { by: 'claude', type: 'Bot', assoc: 'NONE' }, last: { by: 'renovate', type: 'Bot' } })],
+    { user: { login: 'renovate[bot]' } },
+  );
+});
+
+test('test_t5_9_author_started_thread_follows_todays_rule', async () => {
+  await blocks([tthread({ first: AUTH, last: REV('NONE') })]);
+  await merges([tthread({ first: AUTH, last: AUTH })]);
+});
+
+test('test_t5_10_count_includes_only_blocking_threads', async () => {
+  await blocks(
+    [
+      tthread({ first: REV('COLLABORATOR'), last: AUTH }),
+      tthread({ first: { by: 'stranger', assoc: 'NONE' } }),
+      tthread({ first: { by: 'claude', type: 'Bot', assoc: 'NONE' }, last: AUTH }),
+      tthread({ first: AUTH, last: REV('NONE') }),
+    ],
+    2,
+  );
+});
+
+test('test_t5_11_query_asks_for_type_association_first_and_last_comment', async () => {
+  const env = await gateWith([tthread({ first: REV('COLLABORATOR'), last: AUTH })]);
+  const q = env.queries.join('\n');
+  assert.match(q, /__typename/);
+  assert.match(q, /authorAssociation/);
+  assert.match(q, /comments\(\s*first\s*:\s*1\s*\)/);
+  assert.match(q, /comments\(\s*last\s*:\s*1\s*\)/);
+});
+
+test('test_t5_13_other_bots_threads_do_not_block', async () => {
+  for (const b of ['coderabbitai', 'copilot-pull-request-reviewer']) {
+    const bot = { by: b, type: 'Bot', assoc: 'NONE' };
+    await merges([tthread({ first: bot, last: bot })]);
+    await merges([tthread({ first: bot, last: REV('NONE') })]);
+  }
+});
+
+test('test_t5_14_human_named_claude_is_not_the_review_bot', async () => {
+  await merges([tthread({ first: { by: 'claude', type: 'User', assoc: 'NONE' }, last: AUTH })]);
+  await blocks([tthread({ first: { by: 'claude', type: 'User', assoc: 'COLLABORATOR' }, last: AUTH })]);
+});
