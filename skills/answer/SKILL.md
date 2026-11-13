@@ -23,12 +23,12 @@ Fail fast with a clear message if any check fails.
 
 ## 1. Find the questions
 
-Read the issue and all its comments. Find the latest comment whose body starts with `<!-- devflow-questions -->`. If there is none, say there is nothing to answer on this issue and stop. Parse its numbered questions, each tagged [BA], [QA] or [Dev].
+Read the issue and all its comments. Find the latest comment whose body starts with `<!-- devflow-questions -->` and whose author is the authenticated user or has `author_association` OWNER, MEMBER or COLLABORATOR; a questions comment from anyone else is not used. If there is none, say there is nothing to answer on this issue and stop. Parse its numbered questions, each tagged [BA], [QA] or [Dev].
 
 ## 2. Collect the answers
 
 1. From the arguments: the text after the issue number, numbered like `1: ...; 2: ...`.
-2. Otherwise from comments by humans (not bots) posted after the questions comment, matched by number.
+2. Otherwise from comments posted after the questions comment, matched by number, by the authenticated user or by authors with `author_association` OWNER, MEMBER or COLLABORATOR, never bots. The latest trusted answer per question wins. Comments from anyone else are ignored and listed in the report as `ignored: not a collaborator`.
 
 Every question needs an answer. If any is missing, list the unanswered questions and stop; change nothing.
 
@@ -58,8 +58,8 @@ Read the issue body first, then write the full body back (the MCP issue update r
 
 ## 6. Report
 
-Print a table: question, answer. Then the spec PR (or the compare link) and the issue's new labels.
+Print a table: question, answer. List ignored comments as `ignored: not a collaborator`. Then the spec PR (or the compare link) and the issue's new labels.
 
-Mention that a branch left over from the blocked run is reused or recreated automatically when the run was blocked at Plan (no commits of its own, not on the remote); a branch with commits from a run blocked after Plan is not, and must be handled by hand. The spec PR needs to be merged before `/devflow:next-task` can read the new decisions from the base branch; the issue's `## Decisions` section already carries them.
+Mention that a branch left over from the blocked run is reused or recreated automatically when the run was blocked at Plan (no commits of its own, not on the remote); a branch with commits from an earlier blocked run is resumed by the engine (no manual handling). The spec PR needs to be merged before `/devflow:next-task` can read the new decisions from the base branch; the issue's `## Decisions` section already carries them.
 
 Never merge a PR, never push to the base branch.
