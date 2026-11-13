@@ -808,7 +808,7 @@ function issueBlock(issue) {
 
 function selectPrompt() {
   const explicit = explicitIssues.length
-    ? `Explicit issues requested by the user: ${explicitIssues.map((n) => '#' + n).join(', ')}. Use exactly these (still skip, with a reason, any that is closed or already has an open PR referencing it). Do not apply the label filter to them.${chain ? ` These issues are a lane to run in exactly this order: return them in the order given and do not reorder them. Lane order is handled by the engine, so an earlier issue of the same list is NOT a parent by itself: add it to parents (inRun true, as below) only when this issue has a real \"Depends on\" line for it. Do not skip an issue only because an earlier issue of the same list is still open without a PR.` : ''}`
+    ? `Explicit issues requested by the user: ${explicitIssues.map((n) => '#' + n).join(', ')}. Use exactly these (still skip, with a reason, any that is closed, or that has an open PR referencing it except as allowed by the open-PR rule below). Do not apply the label filter to them.${chain ? ` These issues are a lane to run in exactly this order: return them in the order given and do not reorder them. Lane order is handled by the engine, so an earlier issue of the same list is NOT a parent by itself: add it to parents (inRun true, as below) only when this issue has a real \"Depends on\" line for it. Do not skip an issue only because an earlier issue of the same list is still open without a PR.` : ''}`
     : `No explicit issues. Select open issues labelled "${labels.ready}" that are NOT labelled "${labels.inProgress}", "${labels.blocked}" or "${labels.triage}".`
   return `You are selecting GitHub issues for ${gh.owner}/${gh.repo}. ${MCP_NOTE}
 
