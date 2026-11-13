@@ -98,6 +98,41 @@ test('test_t5_12_docs_describe_the_collaborator_thread_rule', () => {
   assert.match(entry, /resolved|unresolved/i);
 });
 
+// T3.8
+test('test_t3_8_docs_describe_the_trust_rule', () => {
+  const trust = /OWNER\W+MEMBER\W+(or\s+)?COLLABORATOR/;
+  const design = read('DESIGN.md');
+  const sec = (re) => {
+    const i = design.search(re);
+    assert.ok(i >= 0, `DESIGN.md has ${re}`);
+    const rest = design.slice(i + 1);
+    const e = rest.search(/^## /m);
+    return e < 0 ? design.slice(i) : design.slice(i, i + 1 + e);
+  };
+  for (const re of [/^## `\/devflow:sync/m, /^## `\/devflow:answer/m]) {
+    const s = sec(re);
+    assert.match(s, trust);
+    assert.match(s, /ignored: not a collaborator/);
+  }
+  const readme = read('README.md');
+  const rline = (re) => {
+    const l = readme.split('\n').find((x) => re.test(x));
+    assert.ok(l, `README.md has a line for ${re}`);
+    return l;
+  };
+  for (const re of [/^- `\/devflow:sync/, /^- `\/devflow:answer/]) {
+    const l = rline(re);
+    assert.match(l, trust);
+    assert.match(l, /ignored: not a collaborator/);
+  }
+  assert.match(readme, trust);
+  assert.match(readme, /ignored: not a collaborator/);
+  const entry = changelogEntry(30);
+  assert.ok(entry, 'CHANGELOG has an entry citing (#30)');
+  assert.match(entry, trust);
+  assert.match(entry, /ignored: not a collaborator/);
+});
+
 // T9.7
 test('test_t9_7_docs_describe_the_github_mcp_probe_and_prefix_warning', () => {
   const PROBE = /probe/i;
