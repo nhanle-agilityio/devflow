@@ -1091,6 +1091,8 @@ test('test_t8_8_select_keeps_an_issue_with_its_own_devflow_pr', async () => {
   assert.match(p, /only open PR/i);
   assert.match(p, /devflow/);
   assert.match(p, /any other open PR|other open PR/i);
+  assert.doesNotMatch(p, /already has an open PR referencing it\)/, 'the explicit-issues sentence does not skip unconditionally on an open PR');
+  assert.match(p, /except as allowed by the open-PR rule/i);
 });
 
 // T8.9
