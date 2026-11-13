@@ -52,6 +52,17 @@ test('test_t7_11_docs_describe_worked_limit_and_findings_only_review', () => {
   }
 });
 
+// T8.7
+test('test_t8_7_docs_describe_reusing_an_open_pr', () => {
+  const design = read('DESIGN.md');
+  const shipLines = design.split('\n').filter((l) => /\bShip\b/.test(l) && /open PR/i.test(l) && /(reus|branch)/i.test(l));
+  assert.ok(shipLines.length, 'a DESIGN.md Ship line mentions reusing an open PR for the branch');
+  const entry = changelogEntry(35);
+  assert.ok(entry, 'CHANGELOG has an entry citing (#35)');
+  assert.match(entry, /reus/i);
+  assert.match(entry, /open PR/i);
+});
+
 // T4.12
 test('test_t4_12_docs_describe_the_update_slot', () => {
   const WAIT = 'deferred: waits for its turn';

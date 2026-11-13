@@ -102,6 +102,10 @@ const SELECT_SCHEMA = {
           labels: { type: 'array', items: { type: 'string' } },
           body: { type: 'string' },
           dependsOn: { type: 'array', items: { type: 'integer' } },
+          resumeBranch: {
+            type: 'string',
+            description: `Head branch of the issue's own open ${labels.devflow} PR (the one holding "Closes #<n>"); omit when there is none`,
+          },
           parents: {
             type: 'array',
             description: 'Every open dependency this issue is stacked on (empty when all dependencies are closed)',
@@ -365,6 +369,7 @@ const SHIP_SCHEMA = {
     ok: { type: 'boolean' },
     prNumber: { type: 'integer' },
     url: { type: 'string' },
+    reused: { type: 'boolean', description: 'true when an open PR for the branch already existed and was reused instead of opening a new one' },
     unstacked: { type: 'boolean', description: 'true when the parent PR was already merged and the PR targets the base' },
     followUps: {
       type: 'array',
@@ -803,7 +808,7 @@ function issueBlock(issue) {
 
 function selectPrompt() {
   const explicit = explicitIssues.length
-    ? `Explicit issues requested by the user: ${explicitIssues.map((n) => '#' + n).join(', ')}. Use exactly these (still skip, with a reason, any that is closed or already has an open PR referencing it). Do not apply the label filter to them.${chain ? ` These issues are a lane to run in exactly this order: return them in the order given and do not reorder them. Lane order is handled by the engine, so an earlier issue of the same list is NOT a parent by itself: add it to parents (inRun true, as below) only when this issue has a real \"Depends on\" line for it. Do not skip an issue only because an earlier issue of the same list is still open without a PR.` : ''}`
+    ? `Explicit issues requested by the user: ${explicitIssues.map((n) => '#' + n).join(', ')}. Use exactly these (still skip, with a reason, any that is closed, or that has an open PR referencing it except as allowed by the open-PR rule below). Do not apply the label filter to them.${chain ? ` These issues are a lane to run in exactly this order: return them in the order given and do not reorder them. Lane order is handled by the engine, so an earlier issue of the same list is NOT a parent by itself: add it to parents (inRun true, as below) only when this issue has a real \"Depends on\" line for it. Do not skip an issue only because an earlier issue of the same list is still open without a PR.` : ''}`
     : `No explicit issues. Select open issues labelled "${labels.ready}" that are NOT labelled "${labels.inProgress}", "${labels.blocked}" or "${labels.triage}".`
   return `You are selecting GitHub issues for ${gh.owner}/${gh.repo}. ${MCP_NOTE}
 
@@ -813,7 +818,7 @@ ${cfgJson}
 ${explicit}
 
 Rules:
-- Skip an issue that already has an open pull request referencing it (search open PRs for "#<number>", check "Closes"/"Fixes" lines and branch names).
+- Skip an issue that already has an open pull request referencing it (search open PRs for "#<number>", check "Closes"/"Fixes" lines and branch names). Exception: do not skip the issue when its only open PR has the label "${labels.devflow}" and a "Closes #<number>" line for it, and the issue is not labelled "${labels.review}"; return that PR's head branch as "resumeBranch" for the issue. Any other open PR referencing the issue still skips it. An issue labelled "${labels.review}" is skipped even when its only open PR is its own ${labels.devflow} PR.
 - The issue body may contain lines "Depends on #<n>". If every such issue is closed, the issue is eligible as normal: parents = [].
 - Every dependency that is still open becomes one entry in "parents". It must be one of:
   - it has an open pull request (find open PRs whose body contains "Closes #<dep>"): {issue: <dep>, prNumber: <that PR's number>, branch: <that PR's head branch>, inRun: false};
@@ -859,7 +864,7 @@ devflow config:
 ${cfgJson}
 
 Steps, in order:
-1. Work out the branch name from branchPattern "${branchPattern}": {issue} = ${issue.number}; {type} = the value of the issue's "type:<type>" label if present, otherwise infer one of feat|fix|chore|docs|refactor|test from the title; {slug} = at most 5 words of the title, kebab-case, ASCII only, without the "[<slug>] T<n>:" prefix.
+1. ${issue.resumeBranch ? `Resume exactly the branch "${issue.resumeBranch}" (the head branch of this issue's open PR); do not derive a new branch name. When it exists only on ${remote}, fetch it first (\`git fetch ${remote} ${issue.resumeBranch}\`) and continue on it as in step 3.` : `Work out the branch name from branchPattern "${branchPattern}": {issue} = ${issue.number}; {type} = the value of the issue's "type:<type>" label if present, otherwise infer one of feat|fix|chore|docs|refactor|test from the title; {slug} = at most 5 words of the title, kebab-case, ASCII only, without the "[<slug>] T<n>:" prefix.`}
 2. Run \`git status --porcelain\`; it must be empty. If not, return ok=false with the problem.
 3. Run \`git fetch ${remote} ${fetchBranch}\` then \`git switch -c <branch> ${parentRef}\` (this also works from a detached HEAD). Before creating it, check whether the branch already exists locally (\`git rev-parse --verify -q <branch>\`) or on ${remote} (\`git ls-remote --heads ${remote} <branch>\`).
    - Exists with no commits of its own (\`git log ${parentRef}..<branch> --oneline\` empty) and not on ${remote}: an empty leftover from a run blocked at Plan; recreate it with \`git switch -C <branch> ${parentRef}\`.
@@ -1192,8 +1197,9 @@ Data:
 - ${riskLine}
 ${stacked ? `- Stacked on ${parentList(issue)}.\n` : ''}
 Steps:
+0. Look for an open PR with head ${branch} in ${gh.owner}/${gh.repo} (a PR left by an earlier run). If one exists, reuse it: push normally (step 1), retarget its base to ${prBase}${parents.length === 1 ? ` (or to ${base} when step 1b finds the parent merged)` : ''} with update_pull_request when it differs, rewrite its title and body from the data as in step 2, add the labels of step 3 without removing any label already on it (never remove "${labels.riskHigh}" or any other label already on it${parents.length === 1 ? `, except "${labels.stacked}" when step 1b finds the parent merged` : ''}), do not open a new PR, return reused=true with its number and URL, then continue with step 4 (the issue labels). Steps 2 and 3 apply only when no such PR exists; step 2b still applies. If none exists, go on with step 1 and return reused=false.
 1. \`git push -u ${remote} ${branch}\`. Never push to ${base} or any protected branch; never force-push.${parents.length === 1 ? `
-1b. Read PR #${parents[0].prNumber} with pull_request_read; it may have been merged (and its branch deleted) while this issue was built. Merged (\`merged_at\` is not null in that result): its changes are in ${base}, so in steps 2 and 3 use base ${base}, leave out the stack line and do not add the "${labels.stacked}" label, and return unstacked=true. Closed without merging: stop and return ok=false with the problem.` : ''}
+1b. Read PR #${parents[0].prNumber} with pull_request_read; it may have been merged (and its branch deleted) while this issue was built. Merged (\`merged_at\` is not null in that result): its changes are in ${base}, so in steps 0, 2 and 3 use base ${base} (on a reused PR retarget to it, remove the stack line and the "${labels.stacked}" label), leave out the stack line and do not add the "${labels.stacked}" label, and return unstacked=true. Closed without merging: stop and return ok=false with the problem.` : ''}
 2. Open a PR with head ${branch} and base ${prBase} in ${gh.owner}/${gh.repo}. Title: Conventional Commits style summary with scope "${scopeFor(issue)}", English, under 72 characters. Body as described,${isFixIssue(issue, cfg) ? ' with the sections "Root cause", "Introduced by" and "Why it was missed" filled from the Root cause data (this is a fix; write "unknown" where the data says so),' : ''} with a "Risk" section holding exactly this line: "${riskLine}"${stacked ? `, and the line "${stackLine}"` : ''}, ending with the line "Closes #${issue.number}". The body must not contain any at-sign mention of a bot or user, and no AI attribution.
 2b. Out of scope: for each out-of-scope item that describes a real problem in the product (not a note about style or a remark), search open issues in ${gh.owner}/${gh.repo} for one that already covers it; if there is none, create an issue titled "[follow-up #${issue.number}] <short summary>" with labels "${labels.triage}" only (never "${labels.ready}": a human triages it) and a body ${args.bugTemplatePath ? `from the bug template at ${args.bugTemplatePath} (keep its headings, "unknown" or "None" where you have nothing)` : 'with the sections Context, Expected, Actual, Repro, Introduced by, Risk, Acceptance criteria, Scope, Test cases and Dependencies'}; Context says it was found while working on #${issue.number}. Then comment on the new issue: suggest a priority (one of ${priorityList.join(', ')}) and a risk (${labels.riskLow} or ${labels.riskHigh}, judged against risk.highWhen and risk.highPaths; unsure means high), each with a one-line reason, and say that a human sets the labels and "${labels.ready}". Do not set those labels yourself. List every such issue in the PR body's "Out of scope" section as "- <item>: #<number>", and return them in followUps (existing=true for one that was already open). Items that are only remarks stay in the section as text.
 3. Label the new PR (a PR is an issue: use issue_write with the PR number; read its labels first, keep existing ones): ${prLabels.map((l) => '"' + l + '"').join(', ')}.
@@ -1685,6 +1691,7 @@ async function runIssue(issue) {
       model: 'sonnet', // writes the PR body reviewers read; worth more than haiku
     })
     if (!ship || !ship.ok) return block('Ship', (ship && ship.problem) || 'The ship agent died.')
+    if (ship.reused === true) notes.push(`reused open PR #${ship.prNumber}`)
     if (ship.unstacked) {
       log(`#${issue.number}: parent PR merged while this issue was built; PR #${ship.prNumber} targets ${base}, not stacked.`)
       notes.push(`parent PR #${parentsOf(issue)[0].prNumber} was merged while this issue was built; the PR targets ${base}, not stacked`)

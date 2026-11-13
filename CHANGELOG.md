@@ -12,6 +12,8 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 - Engine: the run limit counts issues that were worked on. An issue skipped at Claim (already taken, or the claim race lost) does not count toward `limit`, so the next selected issue is worked on; a blocked issue, or a workflow error after Claim, still counts (#34).
 - Engine: the Review loop exits on findings only. A `pass` verdict with a critical or warning finding starts a fix round, and a `changes` verdict with only suggestions ships. Any severity other than `suggestion` counts as blocking (fail closed) (#34).
 
+- Engine: Ship reuses an open PR for the branch. Step 0 looks for an open PR with head `<branch>`; if one exists it pushes, retargets the base when it differs, rewrites the body, adds the computed labels without removing any existing one (never `risk:high`) and opens no new PR. The ship schema gains `reused`, and the report notes `reused open PR #<n>`. Select no longer skips an issue whose only open PR is its own `devflow` PR (unless the issue is labelled `agent:review`) and returns `resumeBranch`, which the Branch stage resumes (#35).
+
 ## [2.8.0] - 2026-11-11
 
 Hardening release for the auto-merge path: the merge gate, the weakened-checks scan, the verification step and the guard all get stricter. No config change is required; every new config key is optional.
