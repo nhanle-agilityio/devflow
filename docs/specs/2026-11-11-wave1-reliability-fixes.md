@@ -86,6 +86,8 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 | Review bot match | The gate treats a thread as started by the review bot only when the first comment's author has `__typename` `Bot` and login `claude`. | A human account named `claude` is not the review bot. |
 | Where docs tests look in the changelog | `tests/docs.test.cjs` finds each task's entry by its issue number `(#NN)` anywhere in CHANGELOG.md, under `[Unreleased]` or any version heading, so the tests keep passing through T10 and after the next `[Unreleased]` section is added. | Section headings move; the issue number does not. |
 
+- 2026-11-12 (#32, Q1): The legacy `thread()` helper in tests/merge-gate.test.cjs (and makeEnv's numeric `unresolved` path) builds thread nodes with no first comment, so its two tests expecting those threads to block contradict T5.5; how should the tests be updated? → Update the legacy `thread()` helper (and so makeEnv's numeric `unresolved` path) to emit a first comment node by the PR author (`__typename` `User`, login `author`, `authorAssociation` `OWNER`), so legacy threads follow today's author-started rule; keep every existing assertion unchanged.
+
 ## Design
 
 ### Other areas
@@ -310,6 +312,7 @@ The review of devflow 2.7.0 found six reliability problems that the 2.8.0 harden
 **Test plan**
 
 - Test cases: T5.1-T5.14 (see Test matrix). Gate tests feeding GraphQL thread nodes through the stub.
+- The legacy `thread()` helper in tests/merge-gate.test.cjs (and so makeEnv's numeric `unresolved` path) emits a first comment node by the PR author (`__typename` `User`, login `author`, `authorAssociation` `OWNER`), so legacy threads follow today's author-started rule; every existing assertion stays unchanged (Decisions, #32 Q1).
 
 ### T6: Stages read the issue from GitHub themselves
 

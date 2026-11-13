@@ -62,3 +62,38 @@ test('test_t8_7_docs_describe_reusing_an_open_pr', () => {
   assert.match(entry, /reus/i);
   assert.match(entry, /open PR/i);
 });
+
+// T4.12
+test('test_t4_12_docs_describe_the_update_slot', () => {
+  const WAIT = 'deferred: waits for its turn';
+  const design = read('DESIGN.md');
+  const section = design.split(/^## /m).find((s) => /^Risk and the merge gate/i.test(s));
+  assert.ok(section, 'DESIGN.md has a "Risk and the merge gate" section');
+  assert.ok(section.includes(WAIT), 'DESIGN.md section has the deferred reason');
+  assert.match(section, /in[- ]flight/i);
+  assert.match(section, /window/i);
+  assert.match(section, /(stuck|never resolves|does not resolve|not resolve)[\s\S]{0,80}pending|pending[\s\S]{0,120}(stuck|never resolves|does not resolve|not resolve)/i);
+  assert.match(section, /re-?run|replace/i);
+  const readme = read('README.md');
+  if (/merge gate/i.test(readme)) assert.ok(readme.includes(WAIT), 'README lists the deferred reason');
+  const entry = changelogEntry(31);
+  assert.ok(entry, 'CHANGELOG has an entry citing (#31)');
+  assert.ok(entry.includes(WAIT), 'CHANGELOG entry has the deferred reason');
+});
+
+// T5.12
+test('test_t5_12_docs_describe_the_collaborator_thread_rule', () => {
+  const RULE = /collaborator/i;
+  const design = read('DESIGN.md');
+  const section = design.split(/^## /m).find((s) => /^Risk and the merge gate/i.test(s));
+  assert.ok(section, 'DESIGN.md has a "Risk and the merge gate" section');
+  assert.match(section, RULE);
+  assert.match(section, /resolved/i);
+  assert.match(section, /CONTRIBUTOR/);
+  const readme = read('README.md');
+  if (/merge gate/i.test(readme)) assert.match(readme, RULE);
+  const entry = changelogEntry(32);
+  assert.ok(entry, 'CHANGELOG has an entry citing (#32)');
+  assert.match(entry, RULE);
+  assert.match(entry, /resolved|unresolved/i);
+});

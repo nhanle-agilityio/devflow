@@ -9,11 +9,38 @@ const CONFIG = (over = {}) => ({
   mergeGate: { enabled: true, dryRun: false, requiredChecks: ['devflow/review'], method: 'merge', ...over },
 });
 
+// Internal thread form: `first` / `last` comment descriptors; the graphql stub shapes them to the query asked.
+// A comment descriptor: { by, type = 'User', assoc } ; by === null means a deleted author; assoc undefined means missing.
+const cnode = (c) => {
+  const n = { author: c.by === null ? null : { login: c.by, __typename: c.type || 'User' } };
+  if (c.assoc !== undefined) n.authorAssociation = c.assoc;
+  return n;
+};
+// Legacy helper (Decision #32 Q1): the first comment is by the PR author (OWNER), `by` is the last comment's author.
 const thread = ({ resolved = false, outdated = false, by = 'reviewer' } = {}) => ({
   isResolved: resolved,
   isOutdated: outdated,
-  comments: { nodes: [{ author: { login: by } }] },
+  _first: { by: 'author', type: 'User', assoc: 'OWNER' },
+  _last: { by },
 });
+// T5 helper: first comment descriptor, last comment descriptor (default: same as first), none = no comment nodes.
+const tthread = ({ first, last, resolved = false, outdated = false, none = false } = {}) => ({
+  isResolved: resolved,
+  isOutdated: outdated,
+  _first: none ? null : first,
+  _last: none ? null : last || first,
+});
+const shapeThread = (t, query) => {
+  const out = { isResolved: t.isResolved, isOutdated: t.isOutdated };
+  const firstAlias = query.match(/(\w+)\s*:\s*comments\(\s*first\s*:\s*1\s*\)/);
+  const lastAlias = query.match(/(\w+)\s*:\s*comments\(\s*last\s*:\s*1\s*\)/);
+  const f = t._first ? [cnode(t._first)] : [];
+  const l = t._last ? [cnode(t._last)] : [];
+  if (firstAlias) out[firstAlias[1]] = { nodes: f };
+  if (lastAlias) out[lastAlias[1]] = { nodes: l };
+  if (!firstAlias || !lastAlias) out.comments = { nodes: !t._first ? [] : f.length && l.length && t._first !== t._last ? [f[0], l[0]] : l };
+  return out;
+};
 
 function makePr(number, over = {}) {
   return {
@@ -35,6 +62,7 @@ function makeEnv({
   prs = [], runs = {}, statuses = {}, behind = {}, unresolved = {}, comments = [], issues = {}, files = {},
 } = {}) {
   const calls = [];
+  const queries = [];
   const rec = (name, fn) => async (args) => {
     calls.push([name, args]);
     return fn ? fn(args) : { data: {} };
@@ -86,13 +114,14 @@ function makeEnv({
       const res = await fn(params);
       return Array.isArray(res.data) ? res.data : res.data.check_runs;
     },
-    graphql: async (_q, vars) => {
+    graphql: async (q, vars) => {
       calls.push(['graphql', vars]);
+      queries.push(q);
       const v = unresolved[vars.number] || 0;
       const nodes = Array.isArray(v)
         ? v
         : Array.from({ length: v }, () => thread({ by: 'reviewer' })).concat([thread({ resolved: true })]);
-      return { repository: { pullRequest: { reviewThreads: { nodes } } } };
+      return { repository: { pullRequest: { reviewThreads: { nodes: nodes.map((t) => shapeThread(t, q)) } } } };
     },
   };
   const summary = { text: [], rows: null };
@@ -107,7 +136,7 @@ function makeEnv({
   const context = { repo: { owner: 'o', repo: 'r' }, payload: {} };
   const names = (n) => calls.filter(([c]) => c === n);
   const decisions = () => (summary.rows || []).slice(1).map(([pr, action, reason]) => ({ pr, action, reason }));
-  return { github, core, context, calls, names, summary, messages, decisions, comments };
+  return { github, core, context, calls, queries, names, summary, messages, decisions, comments };
 }
 
 const green = (n) => ({
@@ -524,4 +553,320 @@ test('globToRegExp matches the engine implementation', async () => {
       assert.equal(gate.globToRegExp(g).test(p), engine.globToRegExp(g).test(p), `${g} vs ${p}`);
     }
   }
+});
+
+// ---- T4: the merge gate updates only the head of the queue ----
+const WAIT = 'deferred: waits for its turn';
+const dec = (env, n) => env.decisions().find((d) => Number(String(d.pr).replace(/\D/g, '')) === n);
+const updatedFor = (env) => env.names('pulls.updateBranch').map(([, a]) => a.pull_number);
+const runOf = (name, status, conclusion = null) => ({ name, status, conclusion, id: 1, started_at: '2026-01-01' });
+const stat = (context, state) => ({ context, state });
+const REVIEW = 'devflow/review';
+
+// T4.1
+test('test_t4_1_three_behind_prs_only_the_first_is_updated', async () => {
+  const env = makeEnv({ prs: [makePr(1), makePr(2), makePr(3)], behind: { 1: 2, 2: 2, 3: 2 } });
+  await run(env, CONFIG());
+  assert.deepEqual(updatedFor(env), [1]);
+  assert.equal(dec(env, 1).action, 'updated');
+  for (const n of [2, 3]) {
+    assert.equal(dec(env, n).action, 'deferred');
+    assert.equal(dec(env, n).reason, WAIT);
+  }
+});
+
+// T4.2
+test('test_t4_2_priority_order_picks_the_slot_holder', async () => {
+  const env = makeEnv({
+    prs: [makePr(1), makePr(5)],
+    behind: { 1: 2, 5: 2 },
+    issues: {
+      101: { state: 'open', body: '', labels: [] },
+      105: { state: 'open', body: '', labels: [{ name: 'priority:critical' }] },
+    },
+  });
+  await run(env, CONFIG());
+  assert.deepEqual(updatedFor(env), [5]);
+  assert.equal(dec(env, 5).action, 'updated');
+  assert.equal(dec(env, 1).action, 'deferred');
+});
+
+// T4.3
+test('test_t4_3_a_skipped_behind_draft_does_not_take_the_slot', async () => {
+  const env = makeEnv({ prs: [makePr(1, { draft: true }), makePr(2)], behind: { 1: 2, 2: 2 } });
+  await run(env, CONFIG());
+  assert.equal(dec(env, 1).action, 'skipped');
+  assert.match(dec(env, 1).reason, /draft/);
+  assert.equal(dec(env, 2).action, 'updated');
+  assert.deepEqual(updatedFor(env), [2]);
+});
+
+// T4.4
+const T44 = {
+  'risk:high': { pr: { labels: [{ name: 'devflow' }, { name: 'risk:high' }] } },
+  blocked: { pr: { labels: [{ name: 'devflow' }, { name: 'risk:low' }, { name: 'agent:blocked' }] } },
+  stacked: { pr: { base: { ref: 'feat/0', repo: { full_name: 'o/r' } } } },
+  'open dependency': {
+    env: { issues: { 101: { state: 'open', body: 'Depends on #50' }, 50: { state: 'open' } } },
+  },
+  'highPaths file': { env: { files: { 1: [{ filename: '.github/x.yml' }] } } },
+  conflict: { pr: { mergeable: false, mergeable_state: 'dirty' } },
+};
+for (const [rule, c] of Object.entries(T44)) {
+  test(`test_t4_4_${rule.replace(/\W+/g, '_')}_first_pr_leaves_the_slot_free`, async () => {
+    const env = makeEnv({ prs: [makePr(1, c.pr), makePr(2)], behind: { 1: 2, 2: 2 }, ...(c.env || {}) });
+    await run(env, CONFIG());
+    assert.notEqual(dec(env, 1).action, 'updated');
+    assert.equal(dec(env, 2).action, 'updated');
+    assert.deepEqual(updatedFor(env), [2]);
+  });
+}
+
+// T4.5
+test('test_t4_5_mergeable_null_does_not_take_the_slot', async () => {
+  const env = makeEnv({ prs: [makePr(1, { mergeable: null }), makePr(2)], behind: { 2: 2 } });
+  await run(env, CONFIG());
+  assert.equal(dec(env, 1).action, 'skipped');
+  assert.match(dec(env, 1).reason, /mergeability not computed yet/);
+  assert.equal(dec(env, 2).action, 'updated');
+});
+
+// T4.6
+const T46 = {
+  'pending status': { statuses: { sha1: [stat(REVIEW, 'pending')] } },
+  'queued run': { runs: { sha1: [runOf(REVIEW, 'queued')] } },
+  'in_progress run': { runs: { sha1: [runOf(REVIEW, 'in_progress')] } },
+};
+for (const [name, c] of Object.entries(T46)) {
+  test(`test_t4_6_in_flight_${name.replace(/\W+/g, '_')}_holds_the_slot`, async () => {
+    const env = makeEnv({ prs: [makePr(1), makePr(2)], behind: { 2: 2 }, ...c });
+    await run(env, CONFIG());
+    assert.equal(dec(env, 1).action, 'skipped');
+    assert.match(dec(env, 1).reason, /waiting for devflow\/review/);
+    assert.equal(dec(env, 2).action, 'deferred');
+    assert.equal(dec(env, 2).reason, WAIT);
+    assert.equal(env.names('pulls.updateBranch').length, 0);
+  });
+}
+
+// T4.7
+test('test_t4_7_up_to_date_with_failed_check_does_not_hold_the_slot', async () => {
+  const env = makeEnv({ prs: [makePr(1), makePr(2)], behind: { 2: 2 }, statuses: { sha1: [stat(REVIEW, 'failure')] } });
+  await run(env, CONFIG());
+  assert.equal(dec(env, 1).action, 'skipped');
+  assert.match(dec(env, 1).reason, /waiting for devflow\/review/);
+  assert.equal(dec(env, 2).action, 'updated');
+});
+
+// T4.8
+for (const status of [502, 422, 403]) {
+  test(`test_t4_8_update_branch_error_${status}_frees_the_slot`, async () => {
+    const env = makeEnv({ prs: [makePr(1), makePr(2)], behind: { 1: 2, 2: 2 } });
+    const orig = env.github.rest.pulls.updateBranch;
+    env.github.rest.pulls.updateBranch = async (args) => {
+      if (args.pull_number === 1) {
+        env.calls.push(['pulls.updateBranch', args]);
+        throw Object.assign(new Error(`HTTP ${status}`), { status });
+      }
+      return orig(args);
+    };
+    await run(env, CONFIG());
+    assert.equal(dec(env, 1).action, 'error');
+    assert.equal(dec(env, 2).action, 'updated');
+    assert.deepEqual(updatedFor(env), [1, 2]);
+  });
+}
+
+// T4.9
+test('test_t4_9_update_and_merge_in_one_run', async () => {
+  const env = makeEnv({ prs: [makePr(1), makePr(2)], behind: { 1: 2 }, ...green(2) });
+  await run(env, CONFIG());
+  assert.equal(dec(env, 1).action, 'updated');
+  assert.deepEqual(env.names('pulls.merge').map(([, a]) => a.pull_number), [2]);
+  assert.equal(dec(env, 2).action, 'merged');
+});
+
+// T4.10
+test('test_t4_10_no_update_after_a_merge', async () => {
+  const env = makeEnv({ prs: [makePr(1), makePr(2)], behind: { 2: 2 }, ...green(1) });
+  await run(env, CONFIG());
+  assert.equal(dec(env, 1).action, 'merged');
+  assert.equal(dec(env, 2).action, 'deferred');
+  assert.equal(dec(env, 2).reason, 'deferred: one merge per run');
+  assert.equal(env.names('pulls.updateBranch').length, 0);
+});
+
+// T4.11
+test('test_t4_11_dry_run_would_update_plus_deferred_no_calls', async () => {
+  const env = makeEnv({ prs: [makePr(1), makePr(2)], behind: { 1: 2, 2: 2 } });
+  await run(env, CONFIG({ dryRun: true }));
+  assert.equal(dec(env, 1).action, 'would update');
+  assert.equal(dec(env, 2).action, 'deferred');
+  assert.equal(dec(env, 2).reason, WAIT);
+  assert.equal(env.names('pulls.updateBranch').length, 0);
+});
+
+// T4.13
+test('test_t4_13_a_missing_check_does_not_hold_the_slot', async () => {
+  const env = makeEnv({ prs: [makePr(1), makePr(2)], behind: { 2: 2 } });
+  await run(env, CONFIG());
+  assert.equal(dec(env, 1).action, 'skipped');
+  assert.equal(dec(env, 1).reason, 'waiting for devflow/review: missing');
+  assert.equal(dec(env, 2).action, 'updated');
+  assert.deepEqual(updatedFor(env), [2]);
+});
+
+// T4.14
+const TWO = ['devflow/review', 'test'];
+const T414 = {
+  'status pending, run failure': {
+    statuses: { sha1: [stat(REVIEW, 'pending')] }, runs: { sha1: [runOf('test', 'completed', 'failure')] },
+  },
+  'swapped: status failure, run in_progress': {
+    statuses: { sha1: [stat(REVIEW, 'failure')] }, runs: { sha1: [runOf('test', 'in_progress')] },
+  },
+  'test cancelled': {
+    statuses: { sha1: [stat(REVIEW, 'pending')] }, runs: { sha1: [runOf('test', 'completed', 'cancelled')] },
+  },
+  'test status error': {
+    statuses: { sha1: [stat(REVIEW, 'pending'), stat('test', 'error')] },
+  },
+};
+for (const [name, c] of Object.entries(T414)) {
+  test(`test_t4_14_failed_next_to_running_${name.replace(/\W+/g, '_')}_does_not_hold_the_slot`, async () => {
+    const env = makeEnv({ prs: [makePr(1), makePr(2)], behind: { 2: 2 }, ...c });
+    await run(env, CONFIG({ requiredChecks: TWO }));
+    assert.equal(dec(env, 1).action, 'skipped');
+    assert.equal(dec(env, 2).action, 'updated');
+  });
+}
+
+// T4.15
+for (const status of ['waiting', 'requested']) {
+  test(`test_t4_15_${status}_run_does_not_hold_the_slot`, async () => {
+    const env = makeEnv({ prs: [makePr(1), makePr(2)], behind: { 2: 2 }, runs: { sha1: [runOf(REVIEW, status)] } });
+    await run(env, CONFIG());
+    assert.equal(dec(env, 1).action, 'skipped');
+    assert.match(dec(env, 1).reason, /waiting for devflow\/review/);
+    assert.equal(dec(env, 2).action, 'updated');
+  });
+}
+
+// T4.16
+for (const [label, names] of [['review first', TWO], ['review last', [...TWO].reverse()]]) {
+  test(`test_t4_16_running_next_to_missing_holds_the_slot_${label.replace(/\W+/g, '_')}`, async () => {
+    const env = makeEnv({ prs: [makePr(1), makePr(2)], behind: { 2: 2 }, statuses: { sha1: [stat(REVIEW, 'pending')] } });
+    await run(env, CONFIG({ requiredChecks: names }));
+    assert.equal(dec(env, 1).action, 'skipped');
+    assert.equal(dec(env, 2).action, 'deferred');
+    assert.equal(dec(env, 2).reason, WAIT);
+    assert.equal(env.names('pulls.updateBranch').length, 0);
+  });
+}
+
+// ---- T5: collaborator threads ----
+const REV = (assoc, type = 'User') => ({ by: 'rev', type, assoc });
+const AUTH = { by: 'author', type: 'User', assoc: 'OWNER' };
+async function gateWith(threads, prOver = {}) {
+  const env = makeEnv({ prs: [makePr(1, prOver)], unresolved: { 1: threads }, ...green(1) });
+  await run(env, CONFIG());
+  return env;
+}
+const blocks = async (threads, n = 1, prOver) => {
+  const env = await gateWith(threads, prOver);
+  const d = env.decisions()[0];
+  assert.equal(d.action, 'skipped');
+  assert.match(d.reason, new RegExp(`^${n} unanswered review threads`));
+  assert.equal(env.names('pulls.merge').length, 0);
+};
+const merges = async (threads, prOver) => {
+  const env = await gateWith(threads, prOver);
+  assert.equal(env.decisions()[0].action, 'merged');
+};
+
+test('test_t5_1_collaborator_thread_blocks_after_author_reply', async () => {
+  await blocks([tthread({ first: REV('COLLABORATOR'), last: AUTH })]);
+});
+
+test('test_t5_2_owner_and_member_also_block', async () => {
+  for (const a of ['OWNER', 'MEMBER']) await blocks([tthread({ first: REV(a), last: AUTH })]);
+});
+
+test('test_t5_3_resolved_or_outdated_does_not_block', async () => {
+  await merges([tthread({ first: REV('COLLABORATOR'), last: AUTH, resolved: true })]);
+  await merges([tthread({ first: REV('COLLABORATOR'), last: AUTH, outdated: true })]);
+});
+
+test('test_t5_4_untrusted_association_does_not_block', async () => {
+  for (const a of ['CONTRIBUTOR', 'NONE', 'FIRST_TIME_CONTRIBUTOR']) {
+    await merges([tthread({ first: { by: 'stranger', assoc: a } })]);
+  }
+});
+
+test('test_t5_5_no_author_no_association_or_no_comments_does_not_block', async () => {
+  await merges([
+    tthread({ first: { by: null, assoc: 'OWNER' }, last: AUTH }),
+    tthread({ first: { by: 'rev', type: 'User' }, last: AUTH }),
+    tthread({ none: true }),
+  ]);
+});
+
+test('test_t5_6_bot_pr_author_trusted_human_thread_blocks', async () => {
+  await blocks(
+    [tthread({ first: REV('OWNER'), last: { by: 'devflow-bot', type: 'Bot', assoc: 'NONE' } })],
+    1,
+    { user: { login: 'devflow-bot[bot]' } },
+  );
+});
+
+test('test_t5_7_claude_bot_thread_follows_todays_rule', async () => {
+  const claude = { by: 'claude', type: 'Bot', assoc: 'NONE' };
+  await blocks([tthread({ first: claude, last: REV('NONE') })]);
+  await merges([tthread({ first: claude, last: AUTH })]);
+});
+
+test('test_t5_8_bot_login_suffix_is_ignored_when_comparing', async () => {
+  await merges(
+    [tthread({ first: { by: 'claude', type: 'Bot', assoc: 'NONE' }, last: { by: 'renovate', type: 'Bot' } })],
+    { user: { login: 'renovate[bot]' } },
+  );
+});
+
+test('test_t5_9_author_started_thread_follows_todays_rule', async () => {
+  await blocks([tthread({ first: AUTH, last: REV('NONE') })]);
+  await merges([tthread({ first: AUTH, last: AUTH })]);
+});
+
+test('test_t5_10_count_includes_only_blocking_threads', async () => {
+  await blocks(
+    [
+      tthread({ first: REV('COLLABORATOR'), last: AUTH }),
+      tthread({ first: { by: 'stranger', assoc: 'NONE' } }),
+      tthread({ first: { by: 'claude', type: 'Bot', assoc: 'NONE' }, last: AUTH }),
+      tthread({ first: AUTH, last: REV('NONE') }),
+    ],
+    2,
+  );
+});
+
+test('test_t5_11_query_asks_for_type_association_first_and_last_comment', async () => {
+  const env = await gateWith([tthread({ first: REV('COLLABORATOR'), last: AUTH })]);
+  const q = env.queries.join('\n');
+  assert.match(q, /__typename/);
+  assert.match(q, /authorAssociation/);
+  assert.match(q, /comments\(\s*first\s*:\s*1\s*\)/);
+  assert.match(q, /comments\(\s*last\s*:\s*1\s*\)/);
+});
+
+test('test_t5_13_other_bots_threads_do_not_block', async () => {
+  for (const b of ['coderabbitai', 'copilot-pull-request-reviewer']) {
+    const bot = { by: b, type: 'Bot', assoc: 'NONE' };
+    await merges([tthread({ first: bot, last: bot })]);
+    await merges([tthread({ first: bot, last: REV('NONE') })]);
+  }
+});
+
+test('test_t5_14_human_named_claude_is_not_the_review_bot', async () => {
+  await merges([tthread({ first: { by: 'claude', type: 'User', assoc: 'NONE' }, last: AUTH })]);
+  await blocks([tthread({ first: { by: 'claude', type: 'User', assoc: 'COLLABORATOR' }, last: AUTH })]);
 });

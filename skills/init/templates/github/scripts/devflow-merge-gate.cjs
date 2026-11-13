@@ -166,6 +166,9 @@ async function checksGreen({ github, context }, sha, names) {
   const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
     owner, repo, ref: sha, per_page: 100,
   });
+  let reason = null;
+  let running = false;
+  let failed = false;
   for (const name of names) {
     const mine = runs
       .filter((r) => r.name === name)
@@ -179,34 +182,60 @@ async function checksGreen({ github, context }, sha, names) {
     const runOk = latestRun && latestRun.status === 'completed' && latestRun.conclusion === 'success';
     const statusOk = latestStatus && latestStatus.state === 'success';
     if (runOk || statusOk) continue;
+    // In flight: something is running and nothing has failed. Runs `waiting`/`requested` and missing checks are not running.
+    if (latestRun && latestRun.status === 'completed') failed = true;
+    else if (latestRun && ['queued', 'in_progress'].includes(latestRun.status)) running = true;
+    if (latestStatus && ['failure', 'error'].includes(latestStatus.state)) failed = true;
+    else if (latestStatus && latestStatus.state === 'pending') running = true;
+    if (reason) continue;
     const state = latestRun
       ? latestRun.status === 'completed' ? latestRun.conclusion : latestRun.status
       : latestStatus ? latestStatus.state : 'missing';
-    return { ok: false, reason: `waiting for ${name}: ${state}` };
+    reason = `waiting for ${name}: ${state}`;
   }
-  return { ok: true };
+  if (reason) return { ok: false, reason, inFlight: running && !failed };
+  return { ok: true, inFlight: false };
 }
 
-// A thread blocks when it is unresolved, not outdated, and its last comment is not by the PR author
-// (the author's reply, e.g. from /devflow:sync, counts as an answer).
+// A thread blocks when it is unresolved, not outdated, and judged by its first comment:
+// - no comment, no author (deleted user) or no association: does not block.
+// - started by the PR author, or by the review bot (`__typename` Bot, login `claude`): blocks when its
+//   last comment is not by the PR author (the author's reply, e.g. from /devflow:sync, counts as an answer).
+// - started by any other bot: does not block.
+// - started by a human (`__typename` User, whatever the login): blocks while unresolved when the association
+//   is OWNER, MEMBER or COLLABORATOR, even after an author reply; any other association does not block.
+// Logins are compared without the `[bot]` suffix.
+const TRUSTED_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+const stripBot = (login) => (typeof login === 'string' ? login.replace(/\[bot\]$/, '') : login);
+
 async function unresolvedThreads({ github, context }, pr) {
   const { owner, repo } = context.repo;
   const res = await github.graphql(
     `query($owner:String!,$repo:String!,$number:Int!){
        repository(owner:$owner,name:$repo){
          pullRequest(number:$number){
-           reviewThreads(first:100){ nodes{ isResolved isOutdated comments(last:1){ nodes{ author{ login } } } } }
+           reviewThreads(first:100){ nodes{ isResolved isOutdated
+             first: comments(first:1){ nodes{ authorAssociation author{ __typename login } } }
+             last: comments(last:1){ nodes{ author{ login } } } } }
          }
        }
      }`,
     { owner, repo, number: pr.number },
   );
   const nodes = res?.repository?.pullRequest?.reviewThreads?.nodes || [];
-  const author = pr.user?.login;
+  const author = stripBot(pr.user?.login);
   return nodes.filter((n) => {
     if (n.isResolved || n.isOutdated) return false;
-    const last = n.comments?.nodes?.[0]?.author?.login;
-    return !(author && last === author);
+    const all = n.comments?.nodes || [];
+    const first = n.first?.nodes?.[0] ?? all[0];
+    const starter = first?.author;
+    if (!starter?.login || !first.authorAssociation) return false;
+    const startLogin = stripBot(starter.login);
+    const lastLogin = stripBot((n.last?.nodes?.[0] ?? all[all.length - 1])?.author?.login);
+    const answered = !!author && lastLogin === author;
+    if (author && startLogin === author) return !answered;
+    if (starter.__typename === 'Bot') return startLogin === 'claude' && !answered;
+    return TRUSTED_ASSOCIATIONS.includes(first.authorAssociation);
   }).length;
 }
 
@@ -339,9 +368,12 @@ async function evaluate(ctx, config, listed, state) {
   });
   const behind = cmp.data.behind_by || 0;
   if (behind > 0) {
+    // One update per run: a later behind candidate waits, since the update re-runs CI for the new head.
+    if (state.slotTaken) return { action: 'deferred', reason: 'deferred: waits for its turn' };
     if (!dryRun) {
       await github.rest.pulls.updateBranch({ owner, repo, pull_number: pr.number, expected_head_sha: pr.head.sha });
     }
+    state.slotTaken = true;
     return {
       action: dryRun ? 'would update' : 'updated',
       reason: `behind ${pr.base.ref} by ${behind}; CI will re-run`,
@@ -349,7 +381,11 @@ async function evaluate(ctx, config, listed, state) {
   }
 
   const checks = await checksGreen(ctx, pr.head.sha, mergeGate.requiredChecks);
-  if (!checks.ok) return { action: 'skipped', reason: checks.reason };
+  if (!checks.ok) {
+    // A candidate whose checks are running holds the update slot so a later branch is not updated meanwhile.
+    if (checks.inFlight) state.slotTaken = true;
+    return { action: 'skipped', reason: checks.reason };
+  }
 
   const open = await unresolvedThreads(ctx, pr);
   if (open > 0) return { action: 'skipped', reason: `${open} unanswered review threads` };
@@ -385,7 +421,7 @@ module.exports = async function gate({ github, context, core, config }) {
     }
     const dryRun = cfg.mergeGate.dryRun !== false;
     const only = Number(context.payload?.inputs?.pr) || null;
-    const state = { merged: false };
+    const state = { merged: false, slotTaken: false };
     const candidates = await listCandidates(ctx, cfg, only, state);
     const rows = [];
     for (const listed of candidates) {
