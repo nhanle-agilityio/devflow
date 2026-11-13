@@ -97,3 +97,28 @@ test('test_t5_12_docs_describe_the_collaborator_thread_rule', () => {
   assert.match(entry, RULE);
   assert.match(entry, /resolved|unresolved/i);
 });
+
+// T9.7
+test('test_t9_7_docs_describe_the_github_mcp_probe_and_prefix_warning', () => {
+  const PROBE = /probe/i;
+  const WARN = /prefix/i;
+  const design = read('DESIGN.md');
+  const sec = (re) => design.split(/^## /m).find((s) => re.test(s.split('\n')[0]));
+  const init = sec(/devflow:init/);
+  const doctor = sec(/devflow:doctor/);
+  assert.ok(init && doctor, 'DESIGN.md has init and doctor sections');
+  assert.match(init, PROBE);
+  assert.match(init, /GitHub MCP/);
+  assert.match(doctor, /prefix/i);
+  assert.match(doctor, /warn/i);
+  const readme = read('README.md');
+  if (/allow list|allow-list/i.test(readme)) {
+    assert.match(readme, PROBE);
+    assert.match(readme, WARN);
+  }
+  const entry = changelogEntry(36);
+  assert.ok(entry, 'CHANGELOG has an entry citing (#36)');
+  assert.match(entry, PROBE);
+  assert.match(entry, /prefix/i);
+  assert.match(entry, /warn/i);
+});
