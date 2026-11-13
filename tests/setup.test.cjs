@@ -196,3 +196,14 @@ test('the CLI prints the commands that need a rule by hand', () => {
   assert.ok(Array.isArray(out.permissions.allow));
   assert.equal(out.manual[0].command, 'bash -c "make x"');
 });
+
+// T6.16
+test('test_t6_16_allow_has_gh_issue_view_and_no_other_gh_rule', () => {
+  const { execFileSync } = require('node:child_process');
+  const out = JSON.parse(execFileSync('node', [path.join(__dirname, '..', 'bin', 'devflow-setup'), 'allow'], { input: JSON.stringify(CFG), encoding: 'utf8' }));
+  for (const allow of [out.permissions.allow, allowRules(CFG)]) {
+    assert.ok(allow.includes('Bash(gh issue view:*)'));
+    assert.deepEqual(allow.filter((r) => /^Bash\(gh\b/.test(r)), ['Bash(gh issue view:*)']);
+    assert.ok(!allow.includes('Bash(gh:*)') && !allow.includes('Bash(gh pr merge:*)'));
+  }
+});
