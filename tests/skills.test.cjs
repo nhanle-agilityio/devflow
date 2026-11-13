@@ -74,3 +74,10 @@ test('test_t9_6_doctor_check_3_warns_on_an_allow_list_mismatch', () => {
   assert.match(l, /\bok\b[^.]*both|both[^.]*\bok\b/i);
   assert.match(l, /check 8/i);
 });
+
+// T9.6 (review): several authenticated servers give no false warn
+test('test_t9_6_doctor_check_3_probes_each_server_and_warns_only_when_no_allowed_prefix_answers', () => {
+  const l = doctorCheck3();
+  assert.match(l, /probe[^.]*(each|every)[^.]*GitHub MCP server/i);
+  assert.match(l, /warn[^.]*only when[^.]*no allowed (GitHub MCP )?prefix belongs to a server that answers/i);
+});
