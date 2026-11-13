@@ -30,7 +30,7 @@ async function run(args, opts = {}) {
     if (opts.onCall) await opts.onCall(l, n);
     if (l === 'select issues') {
       return {
-        issues: (args.issues || []).map((i) => ({ number: i, title: 't' + i, labels: opts.selectLabels ? opts.selectLabels(i) : opts.labels || [], body: 'spec docs/specs/a.md', dependsOn: [], parents: [], ...(opts.resumeBranch ? { resumeBranch: pick(opts.resumeBranch, i) } : {}) })),
+        issues: (args.issues || []).map((i) => ({ number: i, title: 't' + i, labels: opts.selectLabels ? opts.selectLabels(i) : opts.labels || [], body: 'spec docs/specs/a.md', dependsOn: [], parents: opts.parents ? pick(opts.parents, i) : [], ...(opts.resumeBranch ? { resumeBranch: pick(opts.resumeBranch, i) } : {}) })),
         skipped: [],
       };
     }
@@ -1112,4 +1112,18 @@ test('test_t8_10_an_issue_in_review_is_not_selected_or_claimed', async () => {
   assert.match(sel, /agent:review/);
   assert.match(sel, /even when|even if|still skipped|is skipped/i);
   assert.match(prompt(calls, 'claim'), /agent:review/);
+});
+
+// T8.11 (Decision 2026-11-13): reused stacked PR retargets to the base when step 1b finds the parent merged.
+test('test_t8_11_reused_stacked_pr_retargets_to_base_when_parent_merged', async () => {
+  const parents = () => [{ issue: 9, prNumber: 90, branch: 'feat/9-p', inRun: false }];
+  const { calls } = await run({ ...BASE, issues: [1] }, { parents });
+  const p = prompt(calls, 'ship');
+  const s = step0(calls);
+  assert.match(s, /feat\/9-p/, 'step 0 names the parent branch as the normal base');
+  assert.match(s, /retarget[^.]*\bmain\b[^.]*step 1b[^.]*merged|step 1b[^.]*merged[^.]*retarget[^.]*\bmain\b/i, 'retarget to base when parent merged');
+  assert.match(s, /except[^)]*stacked[^)]*step 1b|stacked[^)]*except[^)]*step 1b/i, 'stacked label removable only then');
+  assert.match(p, /1b\.[\s\S]*in steps 0, 2 and 3/, 'step 1b covers step 0');
+  const { calls: plain } = await run({ ...BASE, issues: [1] });
+  assert.doesNotMatch(step0(plain), /step 1b/, 'no 1b clause without a parent');
 });
