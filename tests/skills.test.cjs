@@ -71,6 +71,15 @@ test('test_t3_4_sync_no_longer_says_author_reply_clears_human_threads', () => {
   );
 });
 
+// T3.4 (review): the gate counts the PR author's reply as an answer on their own threads
+test('test_t3_4_sync_reply_answers_threads_started_by_the_pr_author', () => {
+  const AUTHOR = /thread started by the PR author[^.;]*answered/i;
+  assert.match(syncStep(4), AUTHOR);
+  const design = read('DESIGN.md').split('\n').find((l) => /^4\. \*\*Review\.\*\* Only trusted authors/.test(l));
+  assert.ok(design, 'DESIGN.md has sync step 4');
+  assert.match(design, AUTHOR);
+});
+
 // T3.5
 test('test_t3_5_answer_takes_questions_and_answers_from_trusted_authors_only', () => {
   const s1 = answerStep(1);
