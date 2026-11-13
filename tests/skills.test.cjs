@@ -40,7 +40,7 @@ test('test_t3_1_sync_handles_only_trusted_thread_starters', () => {
   assert.match(s4, /list_repository_collaborators/);
   assert.match(s4, /untrusted/i);
   assert.match(s4, /first comment/i);
-  if (/github-actions\[bot\]/.test(s4)) assert.match(s4, /(not|never|no)[^.\n]*github-actions\[bot\]/i, 'github-actions[bot] is only named as not trusted');
+  assert.match(s4, /(not|never|no)[^.\n]*github-actions\[bot\]/i, 'step 4 names github-actions[bot] as not trusted');
 });
 
 // T3.2
