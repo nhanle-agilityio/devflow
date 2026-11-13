@@ -143,6 +143,9 @@ const CLAIM_SCHEMA = {
     assignedByRun: { type: 'boolean', description: 'True when this call added the authenticated user as assignee (false when already assigned)' },
     takenBy: { type: 'string' },
     problem: { type: 'string' },
+    labels: { type: 'array', items: { type: 'string' }, description: 'Label names of the issue as read in step 1, before any change' },
+    specPath: { type: 'string', description: 'The spec path the issue body links, or "" when it links none' },
+    introducedBy: { type: 'boolean', description: 'True when the issue body has an "Introduced by" heading' },
     claims: {
       type: 'array',
       description: 'Every devflow-claim comment on the issue after ours was posted',
@@ -153,7 +156,7 @@ const CLAIM_SCHEMA = {
       },
     },
   },
-  required: ['taken', 'assignedByRun', 'claims'],
+  required: ['taken', 'assignedByRun', 'claims', 'labels', 'specPath', 'introducedBy'],
 }
 
 const BRANCH_SCHEMA = {
@@ -188,8 +191,11 @@ const PLAN_SCHEMA = {
     qaFiles: { type: 'array', items: { type: 'string' }, description: 'Test files that hold the tests for the Test cases rows (owned by the QA agent)' },
     devFiles: { type: 'array', items: { type: 'string' }, description: 'Files the implementation changes (owned by the dev agent)' },
     specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
+    httpOrE2eRows: { type: 'boolean', description: 'True when the issue\'s Test cases table has a row with Level http or e2e' },
+    acceptanceCriteria: { type: 'integer', description: 'Number of top-level checkbox items in the issue\'s acceptance criteria section, as read from GitHub' },
+    problem: { type: 'string', description: `Report starting with exactly "${MCP_DOWN}" when GitHub cannot be reached; otherwise omit` },
   },
-  required: ['status', 'plan', 'questions', 'qaFiles', 'devFiles', 'specRead'],
+  required: ['status', 'plan', 'questions', 'qaFiles', 'devFiles', 'specRead', 'httpOrE2eRows', 'acceptanceCriteria'],
 }
 
 const IMPLEMENT_SCHEMA = {
@@ -218,6 +224,7 @@ const IMPLEMENT_SCHEMA = {
     },
     touchesUi: { type: 'boolean', description: 'True when the diff against the base branch changes user-facing UI' },
     blockedReason: { type: 'string' },
+    problem: { type: 'string', description: `Report starting with exactly "${MCP_DOWN}" when GitHub cannot be reached; otherwise omit` },
     specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
     manualChecks: {
       type: 'array',
@@ -247,6 +254,7 @@ const QA_SCHEMA = {
     },
     filesChanged: { type: 'array', items: { type: 'string' } },
     questions: { type: 'array', items: { type: 'string' }, description: 'Questions that block a test, each starting with "[QA] "' },
+    problem: { type: 'string', description: `Report starting with exactly "${MCP_DOWN}" when GitHub cannot be reached; otherwise omit` },
     specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
   },
   required: ['status', 'tests', 'filesChanged', 'questions', 'specRead'],
@@ -270,7 +278,7 @@ const INTEGRATE_SCHEMA = {
     ok: { type: 'boolean' },
     integrationSha: { type: 'string', description: 'git rev-parse HEAD after all parent branches are merged' },
     merged: { type: 'array', items: { type: 'string' }, description: 'The remote/branch names merged, in order' },
-    problem: { type: 'string' },
+    problem: { type: 'string', description: `Report starting with exactly "${MCP_DOWN}" when GitHub cannot be reached` },
   },
   required: ['ok', 'integrationSha', 'merged'],
 }
@@ -310,6 +318,7 @@ const VERIFY_SCHEMA = {
       },
     },
     notes: { type: 'string' },
+    problem: { type: 'string', description: `Report starting with exactly "${MCP_DOWN}" when GitHub cannot be reached; otherwise omit` },
   },
   required: ['ran', 'mode', 'steps', 'notes'],
 }
@@ -336,6 +345,9 @@ const REVIEW_SCHEMA = {
   type: 'object',
   properties: {
     verdict: { enum: ['pass', 'changes'] },
+    issueRead: { type: 'boolean', description: 'True when you read the issue from GitHub as instructed; false when you could not (then report no findings)' },
+    problem: { type: 'string', description: `Report starting with exactly "${MCP_DOWN}" when GitHub cannot be reached; otherwise omit` },
+
     acceptedWeakenings: {
       type: 'array',
       description: 'Scan hits (weakened checks) that are justified by the issue itself; each stays in the PR and makes it risk:high',
@@ -360,7 +372,7 @@ const REVIEW_SCHEMA = {
       },
     },
   },
-  required: ['verdict', 'findings'],
+  required: ['verdict', 'findings', 'issueRead'],
 }
 
 const SHIP_SCHEMA = {
@@ -403,6 +415,8 @@ const RESTORE_SCHEMA = {
 
 // Set once when the configured reviewer agent type cannot be started; later reviews use the default agent.
 let reviewerMissing = ''
+// Set when the reviewer returned issueRead false (it could not read the issue); later reviews use the default agent.
+let reviewerCannotRead = false
 
 // Integration commit per issue number (multi-stack only), set by the Integrate stage.
 const integration = {}
@@ -434,6 +448,7 @@ function parentList(issue) {
 
 // The spec path in the issue body: the first "<specDir>/<name>.md" (GitHub blob link or plain path), or ''.
 function specPathFor(issue) {
+  if (issue && issue.claimSpecPath) return issue.claimSpecPath // Claim read the issue from GitHub itself
   const dir = String(cfg.specDir || 'docs/specs').replace(/\/+$/, '')
   const re = new RegExp(dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/[^\\s)#]*\\.md')
   const m = re.exec(String((issue && issue.body) || ''))
@@ -769,6 +784,7 @@ function isFixIssue(issue, config) {
   if (names.some((l) => ['type:fix', 'type:bug', 'bug', 'fix'].indexOf(l) !== -1 || gapLabels.indexOf(l) !== -1)) return true
   const title = String((issue && issue.title) || '')
   if (/\bGap:/.test(title) || /^fix(\(|:|\b)/i.test(title)) return true
+  if (issue && issue.introducedBy === true) return true
   return /^##\s+Introduced by\b/m.test(String((issue && issue.body) || ''))
 }
 
@@ -802,8 +818,24 @@ function scopeFor(issue) {
   return (cfg.commitScope || '#{issue}').split('{issue}').join(String(issue.number))
 }
 
-function issueBlock(issue) {
-  return `Issue #${issue.number}: ${issue.title}\nLabels: ${issue.labels.join(', ') || '(none)'}\n\n${issue.body}`
+// The stages get the title only. The body (the Select copy) can be cut or stale, so the agent reads the issue itself.
+function issueBlock(issue, how) {
+  return `Issue #${issue.number}: ${issue.title}\n\nRead issue #${issue.number} in ${gh.owner}/${gh.repo} from GitHub ${how || 'with the GitHub MCP server'} (title, body, labels and comments) before anything else. GitHub is the source of truth for what the issue asks: if anything you are told here differs from the issue on GitHub, follow the issue.`
+}
+
+// Top-level "- [ ]" / "- [x]" items under the first heading or bold line containing "Acceptance criteria",
+// up to the next heading or bold line. 0 when there is no such heading.
+function countAcceptance(body) {
+  const lines = String(body || '').split('\n')
+  const boundary = (l) => /^\s{0,3}#{1,6}\s/.test(l) || /^\s*(\*\*|__)/.test(l)
+  const start = lines.findIndex((l) => boundary(l) && /acceptance criteria/i.test(l))
+  if (start === -1) return 0
+  let n = 0
+  for (let i = start + 1; i < lines.length; i++) {
+    if (boundary(lines[i])) break
+    if (/^- \[[ xX]\]/.test(lines[i])) n++
+  }
+  return n
 }
 
 function selectPrompt() {
@@ -839,7 +871,7 @@ devflow config:
 ${cfgJson}
 
 Steps, in order:
-1. Read issue #${issue.number}. The issue is taken only when it has an assignee other than the authenticated user, or the label "${labels.inProgress}", "${labels.blocked}" or "${labels.review}". An issue assigned only to the authenticated user with none of these labels is not taken: claim it. An issue assigned to the authenticated user and another user is taken. If it is taken, return taken=true, takenBy = the other assignee login or the label name, claims = []. Change and post nothing.
+1. Read issue #${issue.number}. Note the issue's label names exactly as you read them now (labels), the spec path its body links (the first \`${String(cfg.specDir || 'docs/specs').replace(/\/+$/, '')}/<name>.md\` path, "" when none; specPath) and whether its body has an "Introduced by" heading (introducedBy), and return them in every case, before you change anything. The issue is taken only when it has an assignee other than the authenticated user, or the label "${labels.inProgress}", "${labels.blocked}" or "${labels.review}". An issue assigned only to the authenticated user with none of these labels is not taken: claim it. An issue assigned to the authenticated user and another user is taken. If it is taken, return taken=true, takenBy = the other assignee login or the label name, claims = []. Change and post nothing.
 2. Otherwise add the authenticated user as assignee only when not already assigned, and return assignedByRun=true when you added them, assignedByRun=false when they were already assigned. Add the label "${labels.inProgress}" and remove "${labels.ready}" (keep all other labels).
 3. Post a comment on the issue whose body is exactly these two lines:
 <!-- devflow-claim id=${claimId} -->
@@ -897,7 +929,7 @@ Instructions:
 4. Write the plan in markdown with sections: Files to change (mark each file QA or Dev); Tests (one entry per "Test cases" row id, or per test-plan item; ${e2eRule(false)}); Risks; Order of commits (failing test first, then the implementation); Open questions (only if there are any).
 5. Post the plan on issue #${issue.number} as a comment whose first line is \`<!-- devflow-plan -->\`. If the issue already has a comment starting with that marker, edit it instead of adding another.
 6. Look for open questions in two roles. BA: something the spec, the issue and its Decisions do not answer that would change behaviour or a contract. QA: a "Test cases" row that cannot be tested as written (no clear expected result, contradicts the acceptance criteria or another row). Start each question with "[BA] " or "[QA] ". If there is any, return status "blocked" with all of them (still post the plan, with an "Open questions" section). Otherwise return status "ready" and questions = [].
-Return status, the plan text exactly as posted, questions, qaFiles, devFiles, and specRead (${specPath ? `the spec path ${specPath}, exactly as you read it` : '"none"'}).`
+Return status, the plan text exactly as posted, questions, qaFiles, devFiles, specRead (${specPath ? `the spec path ${specPath}, exactly as you read it` : '"none"'}), httpOrE2eRows (true when the issue's Test cases table, as you read it on GitHub, has a row whose Level is http or e2e) and acceptanceCriteria (the number of top-level \`- [ ]\` / \`- [x]\` items under the first heading or bold line containing "Acceptance criteria" in the issue on GitHub, up to the next heading or bold line; 0 when there is none).`
 }
 
 function integratePrompt(issue, branch) {
@@ -1053,7 +1085,7 @@ function fixPrompt(issue, branch, why, details, qaFiles) {
     qaFiles && qaFiles.length
       ? `\n- These files hold the QA agent's tests for the Test cases rows: ${JSON.stringify(qaFiles)}. Do not edit them. If you are sure a QA test is wrong (it contradicts the spec, the issue or its Decisions), return status "blocked" with blockedReason starting with "[QA] " that names the test and the contradiction.`
       : ''
-  return `Fix problems on branch ${branch} for issue #${issue.number}. Reason: ${why}.
+  return `Fix problems on branch ${branch} for issue #${issue.number}. Reason: ${why}. ${MCP_NOTE}
 
 devflow config:
 ${cfgJson}
@@ -1079,7 +1111,7 @@ function verifyPrompt(issue, branch, impl) {
     verifyCfg.browserTool === 'chrome'
       ? 'Claude in Chrome tools (load them with ToolSearch: query "claude-in-chrome")'
       : 'the Playwright MCP tools (load them with ToolSearch: query "playwright")'
-  return `Verify issue #${issue.number} on branch ${branch} against the running application.
+  return `Verify issue #${issue.number} on branch ${branch} against the running application. ${MCP_NOTE}
 
 devflow config:
 ${cfgJson}
@@ -1121,7 +1153,8 @@ function hitLine(h) {
   return `${h.file}${h.line ? ':' + h.line : ''} ${h.kind}${h.text ? ' (' + h.text.slice(0, 80) + ')' : ''}`
 }
 
-function reviewPrompt(issue, branch, state, round, hits) {
+// viaGh: the read-only reviewer agent reads the issue with gh; otherwise the default agent uses the GitHub MCP server.
+function reviewPrompt(issue, branch, state, round, hits, viaGh) {
   const parentRef = parentRefFor(issue)
   const parents = parentsOf(issue)
   const specPath = specPathFor(issue)
@@ -1134,12 +1167,13 @@ function reviewPrompt(issue, branch, state, round, hits) {
   const specNote = specPath
     ? `Read the spec with \`git show ${baseRef}:${specPath}\` and the project's CLAUDE.md.`
     : `The issue links no spec; read the project's CLAUDE.md.`
-  return `Review the change for issue #${issue.number} on branch ${branch}. You are read-only: do not edit, commit, push, or change GitHub. Review round ${round + 1}.
+  return `Review the change for issue #${issue.number} on branch ${branch}. You are read-only: do not edit, commit, push, or change GitHub. Review round ${round + 1}.${viaGh ? '' : ' ' + MCP_NOTE}
 
 devflow config:
 ${cfgJson}
 
-${issueBlock(issue)}
+${viaGh ? issueBlock(issue, `by running \`gh issue view ${issue.number} --repo ${gh.owner}/${gh.repo} --json title,body,labels\` (read-only; run no other gh command)`) : issueBlock(issue)}
+Return issueRead=true only when you read the issue from GitHub as described. If you could not read it, return issueRead=false, verdict "changes" and no findings: a review without the issue is not a review.
 
 Run \`git diff ${parentRef}...HEAD\` and \`git log ${parentRef}..HEAD --oneline\`.${stackNote} ${specNote}
 Review, in this order:
@@ -1277,6 +1311,7 @@ async function runFix(issue, branch, state, why, details) {
     model: 'sonnet',
   })
   if (!fix) return { ok: false, reason: `The fix agent died (${why}).` }
+  if (fix.problem && mcpDown(fix.problem)) return { ok: false, mcpDown: true, reason: fix.problem }
   if (fix.status === 'blocked') return { ok: false, reason: fix.blockedReason || `The fix agent reported blocked (${why}).` }
   merge(state, fix)
   const touched = overlap(fix.filesChanged, state.qaFiles)
@@ -1333,6 +1368,8 @@ async function runIssue(issue) {
   issue.claimWon = false
   issue.inCleanup = false
   const done = (r) => Object.assign(r, { notes })
+  // A stage that could not reach GitHub reports it in `problem`; the run stops as at Claim.
+  const down = (r) => !!(r && r.problem && mcpDown(r.problem))
 
   async function block(stage, reason, questions) {
     // GitHub cannot be reached: no cleanup comment or label is possible; the run stops (see Main).
@@ -1392,6 +1429,22 @@ async function runIssue(issue) {
   }
 
   issue.claimWon = true
+  // Claim read the issue from GitHub: its labels, spec path and Introduced by heading win over the Select copy.
+  {
+    const sameSet = (a, b) => a.length === b.length && a.slice().sort().join('\n') === b.slice().sort().join('\n')
+    if (Array.isArray(claim.labels)) {
+      const claimLabels = claim.labels.map(String)
+      if (!sameSet(claimLabels, issue.labels || [])) {
+        notes.push(`labels differ from the selection: ${claimLabels.join(', ')}`)
+        issue.labels = claimLabels
+      }
+    }
+    if (typeof claim.specPath === 'string' && claim.specPath) {
+      if (claim.specPath !== specPathFor(issue)) notes.push(`spec path differs from the selection: ${claim.specPath}`)
+      issue.claimSpecPath = claim.specPath
+    }
+    issue.introducedBy = claim.introducedBy === true
+  }
   try {
     // Branch
     const made = await agent(branchPrompt(issue), {
@@ -1424,6 +1477,7 @@ async function runIssue(issue) {
         schema: INTEGRATE_SCHEMA,
         model: 'sonnet',
       })
+      if (down(integ)) return block('Integrate', integ.problem)
       if (!integ || !integ.ok || !integ.integrationSha) {
         return block('Integrate', (integ && integ.problem) || 'The integrate agent failed or did not report an integration commit.')
       }
@@ -1440,6 +1494,18 @@ async function runIssue(issue) {
       model: 'sonnet',
     })
     if (!plan) return block('Plan', 'The plan agent died.')
+    if (down(plan)) return block('Plan', plan.problem)
+    // The plan read the acceptance criteria from GitHub; the Select copy's count is a cross-check only.
+    if (!Number.isInteger(plan.acceptanceCriteria)) {
+      notes.push('plan did not report the acceptance criteria count')
+    } else {
+      const sel = countAcceptance(issue.body)
+      if (plan.acceptanceCriteria !== sel) {
+        log(`#${issue.number}: acceptance criteria: plan read ${plan.acceptanceCriteria}, selection had ${sel}`)
+        notes.push(`acceptance criteria: plan read ${plan.acceptanceCriteria}, selection had ${sel}`)
+      }
+    }
+    state.httpOrE2eRows = plan.httpOrE2eRows === true
     if (plan.status === 'blocked') {
       const qs = plan.questions || []
       return block('Plan', qs.join('; ') || 'The plan agent reported blocked without questions.', qs)
@@ -1473,6 +1539,8 @@ async function runIssue(issue) {
     if (caught.length) throw caught[0]
     if (!qa) return block('Implement', 'The QA agent died.')
       if (!dev) return block('Implement', 'The implement agent died.')
+      if (down(qa)) return block('Implement', qa.problem)
+      if (down(dev)) return block('Implement', dev.problem)
       // Every open question, from both roles, goes into one comment and one block.
       const questions = (qa.questions || []).slice()
       if (dev.status === 'blocked') questions.push(`[Dev] ${dev.blockedReason || 'The implement agent reported blocked without a reason.'}`)
@@ -1511,6 +1579,7 @@ async function runIssue(issue) {
         model: 'sonnet',
       })
       if (!impl) return block('Implement', 'The implement agent died.')
+      if (down(impl)) return block('Implement', impl.problem)
       merge(state, impl)
       if (impl.status === 'blocked') {
         const reason = impl.blockedReason || 'The implement agent reported blocked without a reason.'
@@ -1543,7 +1612,7 @@ async function runIssue(issue) {
         'Find the root cause of the bug this issue fixes and return rootCause (cause, introducedBy, whyMissed). Use `git log -S`, `git blame` on the lines the fix changed and the issue text. Change code only if the cause shows the fix is incomplete.',
       )
       // Only a QA-file edit blocks; a root-cause round that died or was blocked ships with "unknown".
-      if (!fix.ok && fix.qaOverlap) return block('Implement', fix.reason)
+      if (!fix.ok && (fix.qaOverlap || fix.mcpDown)) return block('Implement', fix.reason)
       if (!fix.ok) {
         log(`#${issue.number}: root cause round failed (${fix.reason.split('\n')[0]}); shipping with "unknown".`)
         notes.push(`root cause round failed (${fix.reason.split('\n')[0]}); the PR says "unknown"`)
@@ -1557,7 +1626,7 @@ async function runIssue(issue) {
     // Verify
     const needsVerify =
       verifyCfg.modes.length > 0 &&
-      (issue.labels.indexOf(labels.e2e) !== -1 || state.touchesUi || hasHttpOrE2eRow(issue.body))
+      (issue.labels.indexOf(labels.e2e) !== -1 || state.touchesUi || hasHttpOrE2eRow(issue.body) || state.httpOrE2eRows === true)
     if (needsVerify) {
       for (let round = 0; round <= 1; round++) {
         phase('Verify')
@@ -1568,6 +1637,7 @@ async function runIssue(issue) {
           model: 'sonnet',
         })
         if (!v) return block('Verify', 'The verify agent died.')
+        if (down(v)) return block('Verify', v.problem)
         state.verification = v
         if (!v.ran) {
           const why = String(v.notes || '').split('\n')[0].trim() || 'no reason given'
@@ -1612,17 +1682,29 @@ async function runIssue(issue) {
       // The plugin's reviewer agent (agents/reviewer.md) when available; the default subagent otherwise.
       const reviewOpts = { label: `review #${issue.number} (round ${round + 1})`, phase: 'Review', schema: REVIEW_SCHEMA, model: 'opus' }
       let review
-      if (nt.reviewerAgent && !reviewerMissing) {
+      // The reviewer agent reads the issue with gh; without gh, or once it could not read the issue, the default agent reads it with the MCP server.
+      if (nt.reviewerAgent && ghCli && !reviewerMissing && !reviewerCannotRead) {
         try {
-          review = await agent(reviewPrompt(issue, branch, state, round, hits), Object.assign({ agentType: nt.reviewerAgent }, reviewOpts))
+          review = await agent(reviewPrompt(issue, branch, state, round, hits, true), Object.assign({ agentType: nt.reviewerAgent }, reviewOpts))
         } catch (e) {
           reviewerMissing = `reviewer agent ${nt.reviewerAgent} unavailable (${e && e.message ? e.message : e}); reviewed with the default agent`
           log(`#${issue.number}: ${reviewerMissing}`)
           notes.push(reviewerMissing)
         }
+        if (review && !down(review) && review.issueRead === false) {
+          reviewerCannotRead = true
+          log(`#${issue.number}: the reviewer could not read the issue; reviewing round ${round + 1} with the default agent.`)
+          review = undefined
+        }
       }
-      if (review === undefined) review = await agent(reviewPrompt(issue, branch, state, round, hits), reviewOpts)
+      if (review === undefined) {
+        const why = !ghCli ? 'gh is not installed' : reviewerCannotRead ? 'the reviewer could not read the issue' : ''
+        if (why && notes.indexOf(`review ran on the default agent: ${why}`) === -1) notes.push(`review ran on the default agent: ${why}`)
+        review = await agent(reviewPrompt(issue, branch, state, round, hits, false), reviewOpts)
+        if (review && !down(review) && review.issueRead === false) return block('Review', 'the review could not read the issue')
+      }
       if (!review) return block('Review', 'The review agent died.')
+      if (down(review)) return block('Review', review.problem)
       // Every hit is critical unless the reviewer accepted it; an accepted hit makes the PR risk:high at Ship.
       const accepted = Array.isArray(review.acceptedWeakenings) ? review.acceptedWeakenings : []
       let injected = 0
