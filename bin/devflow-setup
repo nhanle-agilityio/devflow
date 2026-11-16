@@ -121,6 +121,8 @@ function allowPlan(config, opts = {}) {
   const manual = [];
   rules.add(`Bash(git push -u ${remote}:*)`);
   rules.add(`Bash(git push ${remote}:*)`);
+  // The read-only reviewer reads the issue with this and nothing else from gh.
+  rules.add('Bash(gh issue view:*)');
   const commands = []
     .concat((Array.isArray(c.checks) ? c.checks : []).map((x) => x && x.run))
     .concat(c.verify && c.verify.devServer ? [c.verify.devServer.run] : [])
