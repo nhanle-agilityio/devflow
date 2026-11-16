@@ -21,7 +21,8 @@ const QA = { qaFiles: ['tests/test_a.py'], devFiles: ['src/x.py'] };
 async function run(args, opts = {}) {
   const calls = [];
   const logs = [];
-  const pick = (v, n) => (typeof v === 'function' ? v(n) : v);
+  const pick = (v, n, x) => (typeof v === 'function' ? v(n, x) : v);
+  const checkCalls = {};
   const agent = async (prompt, o) => {
     const l = o.label;
     calls.push({ l, prompt, model: o.model, agentType: o.agentType, schema: o.schema });
@@ -30,7 +31,7 @@ async function run(args, opts = {}) {
     if (opts.onCall) await opts.onCall(l, n);
     if (l === 'select issues') {
       return {
-        issues: (args.issues || []).map((i) => ({ number: i, title: 't' + i, labels: opts.selectLabels ? opts.selectLabels(i) : opts.labels || [], body: 'spec docs/specs/a.md', dependsOn: [], parents: opts.parents ? pick(opts.parents, i) : [], ...(opts.resumeBranch ? { resumeBranch: pick(opts.resumeBranch, i) } : {}) })),
+        issues: (args.issues || []).map((i) => ({ number: i, title: 't' + i, labels: opts.selectLabels ? opts.selectLabels(i) : opts.labels || [], body: opts.body !== undefined ? pick(opts.body, i) : 'spec docs/specs/a.md', dependsOn: [], parents: opts.parents ? pick(opts.parents, i) : [], ...(opts.resumeBranch ? { resumeBranch: pick(opts.resumeBranch, i) } : {}) })),
         skipped: [],
       };
     }
@@ -42,14 +43,24 @@ async function run(args, opts = {}) {
       if (opts.myAuthor !== undefined) mine.author = opts.myAuthor;
       if (other[0] && opts.winnerAuthor !== undefined) other[0].author = opts.winnerAuthor;
       const out = { taken: false, claims: [mine].concat(other) };
+      // T6: the claim reports the labels, spec path and fix-introduced flag it read from GitHub; by default they equal the Select copy's.
+      out.labels = opts.claimLabels !== undefined ? pick(opts.claimLabels, n) : opts.selectLabels ? opts.selectLabels(n) : opts.labels || [];
+      out.specPath = '';
+      out.introducedBy = false;
+      Object.assign(out, pick(opts.claimOut, n) || {});
       if (opts.assignedByRun !== undefined) out.assignedByRun = opts.assignedByRun;
       return out;
     }
     if (l.startsWith('release')) return { ok: true };
+    if (l.startsWith('integrate')) return Object.assign({ ok: true, integrationSha: 'abc1234def', merged: ['a', 'b'] }, pick(opts.integrateOut, n) || {});
     if (l.startsWith('branch')) return Object.assign({ ok: true, branch: 'feat/' + n + '-x' }, pick(opts.branch, n) || {});
     if (l.startsWith('plan')) {
-      if (pick(opts.planBlocked, n)) return { status: 'blocked', plan: 'P', questions: ['[BA] q1', '[QA] q2'], qaFiles: [], devFiles: [], specRead: 'docs/specs/a.md' };
-      return { status: 'ready', plan: 'PLAN' + n, questions: [], qaFiles: opts.qaFiles || [], devFiles: opts.devFiles || ['src/x.py'], specRead: 'docs/specs/a.md' };
+      const t6 = { acceptanceCriteria: 0, httpOrE2eRows: false };
+      const planRes = pick(opts.planBlocked, n)
+        ? Object.assign({ status: 'blocked', plan: 'P', questions: ['[BA] q1', '[QA] q2'], qaFiles: [], devFiles: [], specRead: 'docs/specs/a.md' }, t6, pick(opts.planOut, n) || {})
+        : Object.assign({ status: 'ready', plan: 'PLAN' + n, questions: [], qaFiles: opts.qaFiles || [], devFiles: opts.devFiles || ['src/x.py'], specRead: 'docs/specs/a.md' }, t6, pick(opts.planOut, n) || {});
+      for (const k of Object.keys(planRes)) if (planRes[k] === undefined) delete planRes[k];
+      return planRes;
     }
     if (l.startsWith('qa')) {
       return Object.assign({ status: 'done', tests: [{ rowId: 'T1.1', test: 'test_t1_1' }], filesChanged: opts.qaFiles || [], questions: [], specRead: 'docs/specs/a.md' }, opts.qaOut || {});
@@ -66,7 +77,11 @@ async function run(args, opts = {}) {
         pick(opts.devOut, n) || {},
       );
     }
-    if (l.startsWith('check')) return { passed: true, failures: [] };
+    if (l.startsWith('check')) {
+      checkCalls[n] = (checkCalls[n] || 0) + 1;
+      if (opts.checkFirstFails && checkCalls[n] === 1) return { passed: false, failures: [{ check: 'test', output: 'boom' }] };
+      return { passed: true, failures: [] };
+    }
     if (l.startsWith('verify')) return Object.assign({ ran: true, mode: 'http', steps: [], notes: '' }, pick(opts.verify, n) || {});
     // The scan agent runs bin/devflow-scan and returns its hits; the stub scans opts.diff with the same helpers.
     if (l.startsWith('scan')) {
@@ -77,8 +92,8 @@ async function run(args, opts = {}) {
       return { scanned: true, hits: h.scanWeakenedChecks(text || '', h.checkConfigGlobs(args.config.checks)) };
     }
     if (l.startsWith('review')) {
-      const r = pick(opts.review, n);
-      return r ? JSON.parse(JSON.stringify(r)) : { verdict: 'pass', findings: [] };
+      const r = pick(opts.review, n, o.agentType);
+      return Object.assign({ issueRead: true }, r ? JSON.parse(JSON.stringify(r)) : { verdict: 'pass', findings: [] });
     }
     if (l.startsWith('ship')) return Object.assign({ ok: true, prNumber: 100 + n, url: 'u' + n }, pick(opts.ship, n) || {});
     if (l.startsWith('blocked')) return { ok: true, pushed: false };
@@ -1128,4 +1143,257 @@ test('test_t8_11_reused_stacked_pr_retargets_to_base_when_parent_merged', async 
   assert.match(p, /1b\.[\s\S]*in steps 0, 2 and 3/, 'step 1b covers step 0');
   const { calls: plain } = await run({ ...BASE, issues: [1] });
   assert.doesNotMatch(step0(plain), /step 1b/, 'no 1b clause without a parent');
+});
+
+// ---------------------------------------------------------------------------------------------
+// T6 (#33): stages read the issue from GitHub themselves
+// ---------------------------------------------------------------------------------------------
+
+const MARK = 'MARKER-7f3a';
+const MCP_RE = /Use the GitHub MCP server for every GitHub operation/;
+const PARENTS2 = () => [
+  { issue: 8, prNumber: 80, branch: 'feat/8-p', inRun: false },
+  { issue: 9, prNumber: 90, branch: 'feat/9-p', inRun: false },
+];
+const noteText = (rep, i = 0) => (rep[i].notes || []).join('\n');
+const readsFromGithub = /read[^.\n]*#1[^.\n]*o\/r[^.\n]*from GitHub/i;
+// A run that reaches Integrate, Plan, QA, Implement, Fix, Verify and Review.
+const SEVEN_OPTS = { ...QA, body: 'spec docs/specs/a.md\n' + MARK, labels: ['needs-e2e', 'risk:low'], parents: PARENTS2, checkFirstFails: true };
+const sevenArgs = (extra = {}) => ({ ...BASE, config: VERIFY_CFG, issues: [1], ...extra });
+const SEVEN = ['integrate', 'plan', 'qa', 'implement', 'fix', 'verify', 'review'];
+
+// T6.1
+test('test_t6_1_seven_prompts_drop_the_select_body', async () => {
+  const { rep, calls } = await run(sevenArgs(), SEVEN_OPTS);
+  assert.equal(rep[0].status, 'pr');
+  for (const l of SEVEN) {
+    assert.ok(has(calls, l), `${l} was called`);
+    assert.ok(!calls.filter((c) => c.l.startsWith(l)).some((c) => c.prompt.includes(MARK)), `${l} prompt has no Select body`);
+  }
+  assert.ok(prompt(calls, 'select').length > 0);
+});
+
+// T6.2
+test('test_t6_2_seven_prompts_say_to_read_the_issue_from_github', async () => {
+  const { calls } = await run(sevenArgs({ ghCli: false }), SEVEN_OPTS);
+  for (const l of SEVEN) {
+    const p = prompt(calls, l);
+    assert.match(p, /#1/, l);
+    assert.match(p, /o\/r/, l);
+    assert.match(p, readsFromGithub, `${l} tells the agent to read the issue from GitHub`);
+    assert.match(p, /source of truth/i, l);
+    assert.match(p, /\bt1\b/, `${l} keeps the title inline`);
+  }
+});
+
+// T6.3
+test('test_t6_3_select_still_gets_the_full_body_and_the_engine_parses_it', async () => {
+  const body = [
+    'Spec: https://github.com/o/r/blob/main/docs/specs/x.md',
+    'Depends on #9',
+    '| Id | Criterion | Case | Given / When / Then | Level | Priority |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| T1.1 | c | happy | g | http | must |',
+    'Risk: low - tiny change',
+  ].join('\n');
+  const { rep, calls } = await run({ ...BASE, config: VERIFY_CFG, issues: [1] }, { body, labels: ['risk:low'], claimOut: { specPath: '' }, planOut: { specRead: 'docs/specs/x.md' }, devOut: { specRead: 'docs/specs/x.md' } });
+  assert.equal(rep[0].status, 'pr');
+  assert.match(prompt(calls, 'select'), /full body/);
+  assert.match(prompt(calls, 'plan'), /docs\/specs\/x\.md/, 'spec path from the Select copy');
+  assert.ok(has(calls, 'verify'), 'http level row from the Select copy triggers verify');
+  assert.match(prompt(calls, 'ship'), /Risk: low - tiny change/, 'risk reason from the Select copy');
+});
+
+// T6.4
+test('test_t6_4_plan_schema_requires_an_integer_acceptance_criteria', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] });
+  const schema = calls.find((c) => c.l.startsWith('plan')).schema;
+  assert.ok(schema.required.includes('acceptanceCriteria'));
+  assert.equal(schema.properties.acceptanceCriteria.type, 'integer');
+  assert.ok(schema.required.includes('httpOrE2eRows'));
+  assert.equal(schema.properties.httpOrE2eRows.type, 'boolean');
+});
+
+const AC = (n, extra = '') => `spec docs/specs/a.md\n## Acceptance criteria\n${Array.from({ length: n }, (_, i) => `- [ ] item ${i}`).join('\n')}\n${extra}`;
+const acNote = (rep, i = 0) => (rep[i].notes || []).filter((x) => x.startsWith('acceptance criteria:'));
+
+// T6.5
+test('test_t6_5_count_mismatch_notes_and_logs_and_the_run_continues', async () => {
+  const body = 'spec docs/specs/a.md\n## Acceptance criteria\n- [ ] a\n- [x] b\n';
+  const { rep, logs } = await run({ ...BASE, issues: [1] }, { body, planOut: { acceptanceCriteria: 3 } });
+  assert.equal(rep[0].status, 'pr');
+  assert.match(noteText(rep), /acceptance criteria: plan read 3, selection had 2/);
+  assert.ok(logs.some((l) => /3/.test(l) && /2/.test(l) && /acceptance/i.test(l)), 'a log line has both counts');
+});
+
+// T6.6
+test('test_t6_6_matching_counts_add_no_note', async () => {
+  const body = 'spec docs/specs/a.md\n## Acceptance criteria\n- [ ] a\n- [x] b\n';
+  const { rep } = await run({ ...BASE, issues: [1] }, { body, planOut: { acceptanceCriteria: 2 } });
+  assert.equal(rep[0].status, 'pr');
+  assert.deepEqual(acNote(rep), []);
+});
+
+// T6.7
+test('test_t6_7_counts_top_level_items_up_to_the_next_heading', async () => {
+  const body = 'spec docs/specs/a.md\n**Acceptance criteria**\n\n- [ ] a\n- [x] b\n  - [ ] sub\n\n## Scope\n- [ ] z\n';
+  const { rep } = await run({ ...BASE, issues: [1] }, { body, planOut: { acceptanceCriteria: 2 } });
+  assert.deepEqual(acNote(rep), []);
+  assert.doesNotMatch(noteText(rep), /plan did not report/);
+});
+
+// T6.8
+test('test_t6_8_capital_x_case_insensitive_heading_and_other_bullets', async () => {
+  const body = 'spec docs/specs/a.md\n### ACCEPTANCE CRITERIA\n- [X] a\n- [ ] b\n* [ ] c\n1. [ ] d\n';
+  const { rep } = await run({ ...BASE, issues: [1] }, { body, planOut: { acceptanceCriteria: 2 } });
+  assert.deepEqual(acNote(rep), []);
+});
+
+// T6.9
+test('test_t6_9_only_the_first_matching_heading_counts', async () => {
+  const body = 'spec docs/specs/a.md\n## Acceptance criteria\n- [ ] a\n## Acceptance criteria (more)\n- [ ] b\n- [ ] c\n- [ ] d\n';
+  const { rep } = await run({ ...BASE, issues: [1] }, { body, planOut: { acceptanceCriteria: 1 } });
+  assert.deepEqual(acNote(rep), []);
+});
+
+// T6.10
+test('test_t6_10_no_heading_counts_zero', async () => {
+  const body = 'spec docs/specs/a.md\n- [ ] stray\n';
+  let r = await run({ ...BASE, issues: [1] }, { body, planOut: { acceptanceCriteria: 0 } });
+  assert.deepEqual(acNote(r.rep), []);
+  r = await run({ ...BASE, issues: [1] }, { body, planOut: { acceptanceCriteria: 2 } });
+  assert.ok(acNote(r.rep).includes('acceptance criteria: plan read 2, selection had 0'), noteText(r.rep));
+});
+
+// T6.11
+test('test_t6_11_plan_omits_or_mistypes_the_count', async () => {
+  for (const v of [undefined, '2', 2.5]) {
+    const { rep } = await run({ ...BASE, issues: [1] }, { body: AC(2), planOut: { acceptanceCriteria: v } });
+    assert.equal(rep[0].status, 'pr', JSON.stringify(v));
+    assert.match(noteText(rep), /plan did not report the acceptance criteria count/, JSON.stringify(v));
+  }
+});
+
+// T6.12
+test('test_t6_12_count_is_compared_when_plan_blocks', async () => {
+  const { rep } = await run({ ...BASE, issues: [1] }, { body: AC(2), planBlocked: true, planOut: { acceptanceCriteria: 5 } });
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(noteText(rep), /acceptance criteria: plan read 5, selection had 2/);
+});
+
+// T6.14
+test('test_t6_14_review_reads_with_gh_or_runs_on_the_default_agent', async () => {
+  let r = await run({ ...BASE, issues: [1] });
+  let rv = r.calls.find((c) => c.l.startsWith('review'));
+  assert.equal(rv.agentType, 'devflow:reviewer');
+  assert.ok(rv.prompt.includes('gh issue view 1 --repo o/r'));
+  assert.ok(rv.schema.required.includes('issueRead'));
+  assert.equal(rv.schema.properties.issueRead.type, 'boolean');
+  assert.doesNotMatch(noteText(r.rep), /review ran on the default agent/);
+  r = await run({ ...BASE, issues: [1], ghCli: false });
+  rv = r.calls.find((c) => c.l.startsWith('review'));
+  assert.equal(rv.agentType, undefined);
+  assert.match(rv.prompt, /GitHub MCP server/);
+  assert.match(noteText(r.rep), /review ran on the default agent: gh is not installed/);
+});
+
+// The reviewer cannot read the issue; the default agent reports one finding in its first round, then passes.
+function blindThenFinding() {
+  let seen = 0;
+  return (n, type) => (type ? { verdict: 'pass', findings: [], issueRead: false } : { verdict: 'pass', findings: seen++ === 0 ? [FINDING] : [], issueRead: true });
+}
+const FINDING = { severity: 'warning', file: 'src/x.py', line: 1, problem: 'p', fix: 'f' };
+// T6.15
+test('test_t6_15_reviewer_could_not_read_the_issue_reruns_on_the_default_agent', async () => {
+  const reviewFn = blindThenFinding();
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { review: reviewFn });
+  const reviews = calls.filter((c) => c.l.startsWith('review'));
+  assert.equal(reviews[0].agentType, 'devflow:reviewer');
+  assert.equal(reviews[1].agentType, undefined);
+  assert.match(reviews[1].l, /round 1/, 'same round');
+  assert.ok(has(calls, 'fix'), 'the default agent finding decided the loop');
+  assert.match(noteText(rep), /review ran on the default agent: the reviewer could not read the issue/);
+});
+
+// T6.17
+test('test_t6_17_a_stage_that_cannot_reach_github_stops_the_run', async () => {
+  const DOWN = 'GitHub MCP unavailable: tools missing';
+  const cases = {
+    plan: { planOut: { problem: DOWN } },
+    fix: { checkFirstFails: true, fixOut: { problem: DOWN } },
+    review: { review: { verdict: 'pass', findings: [], problem: DOWN } },
+  };
+  for (const [stage, opts] of Object.entries(cases)) {
+    const { rep, calls } = await run({ ...BASE, issues: [1, 2], ghCli: false }, opts);
+    assert.equal(rep[0].mcpDown, true, stage);
+    assert.equal(rep[0].status, 'blocked', stage);
+    assert.ok(!has(calls, 'blocked'), `${stage}: no blocked cleanup`);
+    assert.equal(rep[1].status, 'skipped', stage);
+    assert.match(rep[1].reason, /GitHub MCP unavailable: the run stopped at #1/, stage);
+    assert.ok(!has(calls, 'claim #2'), stage);
+  }
+  // The MCP note is in every stage prompt, and in a default-agent review but not in a devflow:reviewer review.
+  const down = await run(sevenArgs({ ghCli: false }), SEVEN_OPTS);
+  for (const l of SEVEN) assert.match(prompt(down.calls, l), MCP_RE, l);
+  const up = await run({ ...BASE, issues: [1] });
+  const rv = up.calls.find((c) => c.l.startsWith('review'));
+  assert.equal(rv.agentType, 'devflow:reviewer');
+  assert.doesNotMatch(rv.prompt, MCP_RE);
+  assert.match(rv.prompt, /gh issue view/);
+});
+
+test('test_t6_17_schemas_of_the_seven_stages_allow_problem', async () => {
+  const { calls } = await run(sevenArgs(), SEVEN_OPTS);
+  for (const l of SEVEN) {
+    const c = calls.find((x) => x.l.startsWith(l));
+    assert.ok(c && c.schema.properties.problem, `${l} schema has problem`);
+  }
+});
+
+// T6.18
+test('test_t6_18_claim_labels_decide_risk', async () => {
+  let r = await run({ ...BASE, issues: [1] }, { labels: ['risk:low'], claimLabels: ['risk:high'] });
+  assert.equal(r.rep[0].status, 'pr');
+  assert.match(prompt(r.calls, 'ship'), /Risk: high/);
+  assert.match(noteText(r.rep), /labels differ from the selection: risk:high/);
+  const cs = r.calls.find((c) => c.l.startsWith('claim')).schema;
+  for (const k of ['labels', 'specPath', 'introducedBy']) assert.ok(cs.required.includes(k), k);
+  r = await run({ ...BASE, issues: [1] }, { labels: ['risk:low'], claimLabels: ['risk:low'] });
+  assert.match(prompt(r.calls, 'ship'), /Risk: low/);
+  assert.doesNotMatch(noteText(r.rep), /labels differ from the selection/);
+});
+
+// T6.19
+test('test_t6_19_plans_http_or_e2e_flag_triggers_verify', async () => {
+  const body = 'spec docs/specs/a.md\nno table here';
+  let r = await run({ ...BASE, config: VERIFY_CFG, issues: [1] }, { body, planOut: { httpOrE2eRows: true } });
+  assert.ok(has(r.calls, 'verify'));
+  r = await run({ ...BASE, config: VERIFY_CFG, issues: [1] }, { body, planOut: { httpOrE2eRows: false } });
+  assert.ok(!has(r.calls, 'verify'));
+});
+
+// T6.20
+test('test_t6_20_claims_spec_path_wins_over_a_cut_select_copy', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { ...QA, body: 'no spec link here', claimOut: { specPath: 'docs/specs/a.md', introducedBy: true } });
+  assert.equal(rep[0].status, 'pr');
+  for (const l of ['plan', 'implement', 'qa', 'review']) {
+    assert.match(prompt(calls, l), /docs\/specs\/a\.md/, l);
+    assert.doesNotMatch(prompt(calls, l), /The issue links no spec/, l);
+  }
+  assert.match(prompt(calls, 'ship'), /Root cause/);
+  assert.match(noteText(rep), /spec path differs from the selection: docs\/specs\/a\.md/);
+});
+
+// T6.21
+test('test_t6_21_default_agent_fallback_sticks_and_fails_closed', async () => {
+  let r = await run({ ...BASE, issues: [1] }, { review: blindThenFinding() });
+  // Round 1: reviewer (blind) then default agent with a finding; the fix runs; round 2 goes straight to the default agent.
+  let reviews = r.calls.filter((c) => c.l.startsWith('review'));
+  assert.equal(reviews.filter((c) => c.agentType).length, 1, 'one reviewer call in total');
+  assert.ok(reviews.length >= 3 && reviews.slice(1).every((c) => !c.agentType));
+  assert.match(reviews[reviews.length - 1].l, /round 2/);
+  r = await run({ ...BASE, issues: [1] }, { review: () => ({ verdict: 'pass', findings: [], issueRead: false }) });
+  assert.equal(r.rep[0].status, 'blocked');
+  assert.match(r.rep[0].reason, /Review: the review could not read the issue/);
+  assert.ok(has(r.calls, 'blocked'));
 });

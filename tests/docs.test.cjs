@@ -157,3 +157,17 @@ test('test_t9_7_docs_describe_the_github_mcp_probe_and_prefix_warning', () => {
   assert.match(entry, /prefix/i);
   assert.match(entry, /warn/i);
 });
+
+// T6.13
+test('test_t6_13_docs_describe_stages_reading_the_issue_from_github', () => {
+  const readFrom = /read[^.\n]*issue[^.\n]*from GitHub/i;
+  const parsing = /Select[^.\n]*(copy|body)[^.\n]*(only|pars)|pars[^.\n]*Select[^.\n]*(copy|body)/i;
+  const design = read('DESIGN.md');
+  assert.match(design, readFrom);
+  assert.match(design, parsing);
+  assert.match(read('README.md'), /Bash\(gh issue view:\*\)/);
+  const entry = changelogEntry(33);
+  assert.ok(entry, 'CHANGELOG has an entry citing (#33)');
+  assert.match(entry, readFrom);
+  assert.match(entry, parsing);
+});
