@@ -1508,3 +1508,102 @@ test('test_t4_10_result_has_path', async () => {
   assert.equal(rep[1].status, 'pr');
   assert.equal(rep[1].path, 'full');
 });
+
+// ---------------------------------------------------------------------------------------------
+// T5 (#56): Ship records the review trace and run markers; block comments carry a marker
+// ---------------------------------------------------------------------------------------------
+
+const CHANGES = { verdict: 'changes', findings: [{ severity: 'critical', file: 'src/x.py', line: 1, problem: 'p', fix: 'f' }] };
+const PASS = { verdict: 'pass', findings: [] };
+// A reviewer that asks for changes until call number `passOn` (1-based), counting its calls.
+const reviewPassOn = (passOn, counter) => () => (++counter.n >= passOn ? PASS : CHANGES);
+const MARKER_RE = /<!-- devflow-run (\{.*\}) -->/;
+
+// T5.1
+test('test_t5_1_ship_review_section_off', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { review: PASS });
+  assert.equal(rep[0].status, 'pr');
+  const ship = prompt(calls, 'ship');
+  assert.ok(ship.includes('## Review'));
+  assert.ok(ship.includes('Review: pass after 1 round(s) - local devflow reviewer in this run (GitHub review: off)'));
+  assert.ok(ship.includes('Path: full'));
+});
+
+// T5.2
+test('test_t5_2_ship_review_section_on_short', async () => {
+  const c = { n: 0 };
+  const cfg = { ...CFG, review: { github: true }, nextTask: { maxReviewRounds: 2 } };
+  const { rep, calls } = await run({ ...BASE, config: cfg, issues: [1] }, { ...SHORT_OPTS, review: reviewPassOn(2, c), diff: '' });
+  assert.equal(rep[0].status, 'pr');
+  const ship = prompt(calls, 'ship');
+  assert.ok(ship.includes('pass after 2 round(s)'));
+  assert.ok(ship.includes('(GitHub review: on)'));
+  assert.ok(ship.includes('Path: short (Plan and Verify skipped)'));
+});
+
+// T5.3
+test('test_t5_3_ship_verify_values', async () => {
+  const shipOf = async (opts) => {
+    const r = await run({ ...BASE, config: VERIFY_CFG, issues: [1] }, opts);
+    assert.equal(r.rep[0].status, 'pr');
+    return prompt(r.calls, 'ship');
+  };
+  // full path, Verify ran
+  let ship = await shipOf({ labels: VERIFY_LABELS, body: SHORT_BODY });
+  assert.ok(ship.includes('Verify: ran'), 'ran');
+  // short path with UI: skipped
+  ship = await shipOf({ ...SHORT_OPTS, devOut: { touchesUi: true } });
+  assert.ok(ship.includes('Verify: skipped (short path)'), 'skipped');
+  // short path without UI: not needed
+  ship = await shipOf({ ...SHORT_OPTS, devOut: { touchesUi: false } });
+  assert.ok(ship.includes('Verify: not needed'), 'not needed');
+  // full path where Verify could not run
+  ship = await shipOf({ labels: VERIFY_LABELS, body: SHORT_BODY, verify: { ran: false, notes: 'verify lock busy' } });
+  assert.ok(ship.includes('Verify: could not run'), 'could not run');
+});
+
+// T5.4
+test('test_t5_4_ship_run_marker', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] }, { ...SHORT_OPTS, claimOut: { claims: [{ commentId: 11, claimId: 'C-me', createdAt: '2026-11-17T10:00:00Z' }] } });
+  const ship = prompt(calls, 'ship');
+  assert.ok(ship.includes('<!-- devflow-run {"path":"short","reviewRounds":1,"claimedAt":"2026-11-17T10:00:00Z"} -->'));
+});
+
+// T5.5
+test('test_t5_5_run_marker_claimed_at_null', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] }, { ...SHORT_OPTS, claimOut: { claims: [{ commentId: 11, claimId: 'C-me' }] } });
+  const m = MARKER_RE.exec(prompt(calls, 'ship'));
+  assert.ok(m, 'marker present');
+  const data = JSON.parse(m[1]);
+  assert.equal(data.claimedAt, null);
+  assert.ok(m[1].includes('"claimedAt":null'));
+  assert.equal(data.path, 'short');
+  assert.equal(data.reviewRounds, 1);
+});
+
+// T5.6
+test('test_t5_6_result_has_review_rounds', async () => {
+  const c = { n: 0 };
+  const cfg = { ...CFG, nextTask: { maxReviewRounds: 2 } };
+  const { rep } = await run({ ...BASE, config: cfg, issues: [1] }, { review: reviewPassOn(2, c), diff: '' });
+  assert.equal(c.n, 2);
+  assert.equal(rep[0].status, 'pr');
+  assert.equal(rep[0].reviewRounds, 2);
+});
+
+// T5.7
+test('test_t5_7_one_blocked_marker_per_block', async () => {
+  const MARK = '<!-- devflow-blocked -->';
+  const count = (s) => s.split(MARK).length - 1;
+  // with questions: the questions comment carries it as line 2
+  let r = await run({ ...BASE, issues: [1] }, { planBlocked: true });
+  let b = prompt(r.calls, 'blocked');
+  assert.equal(count(b), 1, 'exactly one marker with questions');
+  assert.ok(b.includes('<!-- devflow-questions -->\n' + MARK + '\n'), 'marker is line 2 after the questions marker');
+  // without questions: the reason comment carries it, no questions marker body
+  r = await run({ ...BASE, config: { ...CFG, nextTask: { maxReviewRounds: 1 } }, issues: [1] }, { review: CHANGES, diff: '' });
+  assert.equal(r.rep[0].status, 'blocked');
+  b = prompt(r.calls, 'blocked');
+  assert.equal(count(b), 1, 'exactly one marker without questions');
+  assert.ok(!b.includes('<!-- devflow-questions -->\n'), 'no questions comment body');
+});
