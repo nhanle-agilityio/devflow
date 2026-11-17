@@ -216,3 +216,63 @@ test('test_t9_6_doctor_check_3_probes_each_server_and_warns_only_when_no_allowed
   assert.match(l, /probe[^.]*(each|every)[^.]*GitHub MCP server/i);
   assert.match(l, /warn[^.]*only when[^.]*no allowed (GitHub MCP )?prefix belongs to a server that answers/i);
 });
+
+// ---- T3 (wave2-lighter-flow, #54): init and doctor review flag, upgrade offer, empty-checks warning ----
+const initText54 = () => read('skills/init/SKILL.md');
+const doctorCheck1 = () => {
+  const l = read('skills/doctor/SKILL.md').split('\n').find((x) => /^1\. /.test(x));
+  assert.ok(l, 'doctor check 1 exists');
+  return l;
+};
+const initChecksStep54 = () => {
+  const l = initText54().split('\n').find((x) => /^\s*-\s+`mergeGate\.requiredChecks`/.test(x));
+  assert.ok(l, 'init has a mergeGate.requiredChecks proposal step');
+  return l;
+};
+const emptyWarnLines54 = (text) => text.split('\n').filter((l) => /mergeGate\.enabled/.test(l) && /effective/i.test(l) && /requiredChecks|required list/i.test(l));
+
+// T3.1
+test('test_t3_1_init_asks_review_github', () => {
+  const text = initText54();
+  assert.match(text, /review\.github/);
+  assert.match(text, /`false`|\bfalse\b/);
+  assert.match(text, /AskUserQuestion/);
+  const step = initChecksStep54();
+  assert.match(step, /devflow\/review/);
+  assert.match(step, /review\.github/);
+  assert.match(step, /only when[^.]*true|when[^.]*(true|yes)[^.]*only|if[^.]*true/i);
+});
+
+// T3.2
+test('test_t3_2_empty_checks_warning_in_init_and_doctor', () => {
+  const init = initText54();
+  const doctor1 = doctorCheck1();
+  for (const [name, text] of [['init', init], ['doctor check 1', doctor1]]) {
+    assert.match(text, /mergeGate\.enabled/, `${name} mentions mergeGate.enabled`);
+    assert.match(text, /requiredChecks/, `${name} mentions requiredChecks`);
+    assert.match(text, /\.github\/workflows\//, `${name} mentions .github/workflows/`);
+    assert.match(text, /name:/, `${name} mentions name:`);
+  }
+  assert.match(read('skills/doctor/SKILL.md'), /mergeGate\.enabled/);
+});
+
+// T3.3
+test('test_t3_3_warning_regardless_of_flag', () => {
+  for (const [name, text] of [['init', initText54()], ['doctor', read('skills/doctor/SKILL.md')]]) {
+    const lines = emptyWarnLines54(text);
+    assert.ok(lines.length > 0, `${name} has the empty effective list warning`);
+    const rule = lines.join('\n');
+    assert.match(rule, /effective/i);
+    assert.match(rule, /refuse/i);
+    assert.doesNotMatch(rule, /(only|just) (when|if)[^.]*review\.github[^.]*(false|off)/i);
+    assert.doesNotMatch(rule, /(when|if)[^.]*review\.github (is )?(false|off)[^.]*(warn)/i);
+  }
+});
+
+// T3.4
+test('test_t3_4_upgrade_offers_review_flag', () => {
+  const up = section(initText54(), /^## Upgrade/m, /^## (?!Upgrade)/m);
+  assert.match(up, /review\.github: true/);
+  assert.match(up, /claude-code-review\.yml/);
+  assert.match(up, /after a yes/i);
+});
