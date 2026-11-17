@@ -2,7 +2,7 @@
 
 A Claude Code plugin (2.9.0; `version` in `plugin.json` and `marketplace.json`, history in `CHANGELOG.md`) with nine project-agnostic commands, plus `/devflow:init` (and `init --upgrade`) for setup:
 
-1. **`/devflow:spec`** — idea → analyse → grill-me → spec PR (risk per task) → Gate 1 (human merges; this approves the risk levels) → GitHub issues labelled ready and `risk:low|high`.
+1. **`/devflow:spec`** — idea → analyse → grill-me → QA matrix → epic issue + one sub-issue per task (risk per task; the human sets the ready label). With `--file`: spec PR (risk per task) → Gate 1 (human merges; this approves the risk levels) → GitHub issues labelled ready and `risk:low|high`.
 2. **`/devflow:next-task`** — pick up to N ready issues → claim → branch → plan on the issue → implement (QA and dev agents in parallel when the plan allows it, else test first) → checks → verify → review → open PR labelled with its risk, stacked on a parent PR when needed. Runs in the user's checkout, or in its own worktree with `--isolated`; `--chain` runs a lane.
 3. **`/devflow:dispatch`** — split the ready issues into non-colliding lanes and start one background session per lane.
 4. **`/devflow:sync`** — keep those PRs mergeable: retarget, update behind branches, resolve conflicts, address review threads.
@@ -153,9 +153,13 @@ The config is written with `devflowVersion` = the installed plugin version. The 
 
 **`/devflow:init --upgrade`.** For a project that already ran init (clean tree, config present). Reads the plugin version and the project's `devflowVersion`; compares byte for byte every installed template (the three workflows, `devflow-merge-gate.cjs`, `devflow.schema.json`, which upgrade keeps managing; a reusable caller is compared with `callers/` at the new tag, so upgrading moves the tag; templates never installed are skipped) and lists the drifted ones and the config keys missing from the project. Because devflow cannot tell whether the project edited a file after install, every drifted file gets a diff and its own yes; a declined file stays. The gate workflow's `workflow_run` list is kept. After the yes: branch `chore/devflow-upgrade-<version>`, copy the accepted files, set `devflowVersion`, validate the config against the new schema, commit `chore(devflow): upgrade templates to devflow <version>`, push, open a PR labelled `devflow` + `risk:high` (it touches `.github/**` and `.claude/**`, so a human merges; a compare link if PR creation fails). Never merges, never pushes to the base.
 
-## `/devflow:spec <idea or path to a brief>`
+## `/devflow:spec <idea or path to a brief> [--file]`
 
-`disable-model-invocation: true`. Designed to run in a cloud session (claude.ai/code) on the repo, works locally too. Steps, each announced with its number:
+`disable-model-invocation: true`. Designed to run in a cloud session (claude.ai/code) on the repo, works locally too. Steps 1 and 2 are shared; then one of two modes.
+
+**Epic mode (default).** No spec file and no PR. After analyse, grill and the QA matrix: build the bodies of the epic (`templates/epic.md`: Goal, Design, `## Decisions`, Tasks table with risk and depends-on) and of one sub-issue per task (`templates/issue.md`, Context line `Epic: #<epic>`), with issue numbers filled at their widest expected width, and measure each by JavaScript string `length`; if one exceeds 65,000 characters nothing is created and the user is told to use `--file`. Then search by exact title (trimmed, case-sensitive, open or closed) and reuse matches without editing them; create the epic `[<slug>] <title>` labelled `type:epic` only, then the sub-issues `[<slug>] T<n>: <title>` in dependency order, labelled risk (`labels.riskLow` or `labels.riskHigh`), `labels.e2e` when needed and `type:<type>`, never the ready label. Link each sub-issue with `sub_issue_write` (method `add`, existing links skipped; a failed link is reported and does not stop the run) and write the issue numbers into the epic's Tasks table. The final message says the human approves each sub-issue by setting `labels.ready`.
+
+**`--file` mode.** The steps of 2.9.0, each announced with its number (the spec link replaces the `Epic:` line in the issues, which carry `labels.ready`):
 
 1. **Analyse.** Read `.claude/devflow.json`, `CLAUDE.md`, and the code the idea touches. Produce a short analysis: current behaviour, affected areas (backend/frontend/infra/data), risks, unknowns. Do not write files yet.
 2. **Grill.** Invoke the `grill-me` skill on the idea plus the analysis. Keep going until every unknown is decided or explicitly deferred. If `grill-me` is not available, run the same interview inline: one question at a time, each with a recommended answer.
