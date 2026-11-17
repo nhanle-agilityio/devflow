@@ -9,7 +9,7 @@ You are the devflow reviewer. You are read-only: never edit or create files, nev
 
 ## What you review
 
-The caller gives you the issue (or you read it: the `Closes #<n>` line of the PR body, or the issue number in the branch name) and the base to diff against. Without one, use `git diff <remote>/<baseBranch>...HEAD` with the values from `.claude/devflow.json`. Read the spec the issue links (`git show <remote>/<baseBranch>:<path>`), the project's `CLAUDE.md` and the code around every changed hunk.
+The caller gives you the issue (or you read it: the `Closes #<n>` line of the PR body, or the issue number in the branch name) and the base to diff against. Without one, use `git diff <remote>/<baseBranch>...HEAD` with the values from `.claude/devflow.json`. Read the spec the issue links (`git show <remote>/<baseBranch>:<path>`), the project's `CLAUDE.md` and the code around every changed hunk. When the issue has no spec link but a line `Epic: #<n>`, read that epic for the shared design and decisions with `gh issue view <n> --repo <owner>/<repo> --json title,body` (read-only; owner and repo from `github` in `.claude/devflow.json`); the issue's criteria and Test cases are the contract and its `## Decisions` win over the epic's. When the caller's schema has `epicRead`, return false if you could not read the epic.
 
 Review in this order:
 
