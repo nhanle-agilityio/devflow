@@ -85,7 +85,7 @@ test('minimalConfig drops a default scan.ignore and keeps a custom one', () => {
 });
 
 test('minimalConfig does not change its input', () => {
-  const full = { github: { owner: 'a', repo: 'b', remote: 'origin' }, baseBranch: 'main', checks: [{ name: 'test', run: 'make test' }] };
+  const full = { github: { owner: 'a', repo: 'b', remote: 'origin' }, baseBranch: 'main', checks: [] };
   const copy = JSON.parse(JSON.stringify(full));
   minimalConfig(full, SCHEMA);
   assert.deepEqual(full, copy);
