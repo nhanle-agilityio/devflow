@@ -6,6 +6,7 @@ const gate = require('../skills/init/templates/github/scripts/devflow-merge-gate
 const BASE = 'main';
 const CONFIG = (over = {}) => ({
   baseBranch: BASE,
+  review: { github: true }, // T2.9: existing fixtures run with the GitHub review on, as in 2.9.0
   mergeGate: { enabled: true, dryRun: false, requiredChecks: ['devflow/review'], method: 'merge', ...over },
 });
 
@@ -869,4 +870,124 @@ test('test_t5_13_other_bots_threads_do_not_block', async () => {
 test('test_t5_14_human_named_claude_is_not_the_review_bot', async () => {
   await merges([tthread({ first: { by: 'claude', type: 'User', assoc: 'NONE' }, last: AUTH })]);
   await blocks([tthread({ first: { by: 'claude', type: 'User', assoc: 'COLLABORATOR' }, last: AUTH })]);
+});
+
+// ---- T2 (wave2-lighter-flow, issue #53): effective required checks ----
+const REFUSAL = 'no required checks (devflow/review is ignored while review.github is off); refusing to merge';
+const T2CONFIG = (github, over = {}) => ({
+  baseBranch: BASE,
+  ...(github === undefined ? {} : { review: { github } }),
+  mergeGate: { enabled: true, dryRun: false, requiredChecks: ['devflow/review', 'test'], method: 'merge', ...over },
+});
+const ciRun = (n, conclusion = 'success', status = 'completed') => ({
+  runs: { [`sha${n}`]: [{ name: 'test', status, conclusion, id: 5, started_at: '2026-01-01' }] },
+});
+
+// T2.1
+test('test_t2_1_effective_checks_flag_on', () => {
+  const cfg = { review: { github: true }, mergeGate: { requiredChecks: ['devflow/review', 'test'] } };
+  assert.deepEqual(gate.effectiveRequiredChecks(cfg), ['devflow/review', 'test']);
+});
+
+// T2.2
+test('test_t2_2_effective_checks_flag_off_or_absent', () => {
+  const checks = ['devflow/review', 'test'];
+  const off = { review: { github: false }, mergeGate: { requiredChecks: checks } };
+  assert.deepEqual(gate.effectiveRequiredChecks(off), ['test']);
+  const absent = gate.withDefaults({ mergeGate: { requiredChecks: checks } });
+  assert.deepEqual(gate.effectiveRequiredChecks(absent), ['test']);
+});
+
+// T2.3
+test('test_t2_3_merges_on_ci_when_review_off', async () => {
+  const live = makeEnv({ prs: [makePr(1)], ...ciRun(1) });
+  await run(live, T2CONFIG(false));
+  assert.equal(live.names('pulls.merge').length, 1);
+  assert.equal(live.decisions()[0].action, 'merged');
+  const dry = makeEnv({ prs: [makePr(1)], ...ciRun(1) });
+  await run(dry, T2CONFIG(false, { dryRun: true }));
+  assert.equal(dry.decisions()[0].action, 'would merge');
+  assert.equal(dry.names('pulls.merge').length, 0);
+});
+
+// T2.4
+test('test_t2_4_no_merge_when_ci_not_green', async () => {
+  for (const [conclusion, status] of [['failure', 'completed'], [null, 'in_progress']]) {
+    const env = makeEnv({ prs: [makePr(1)], ...ciRun(1, conclusion, status) });
+    await run(env, T2CONFIG(false));
+    assert.equal(env.names('pulls.merge').length, 0);
+    assert.notEqual(env.decisions()[0].action, 'merged');
+  }
+});
+
+// T2.5
+test('test_t2_5_stale_review_status_ignored_when_off', async () => {
+  const env = makeEnv({
+    prs: [makePr(1)],
+    ...ciRun(1),
+    statuses: { sha1: [{ context: 'devflow/review', state: 'failure' }] },
+  });
+  await run(env, T2CONFIG(false));
+  assert.equal(env.decisions()[0].action, 'merged');
+  assert.equal(env.names('pulls.merge').length, 1);
+});
+
+// T2.6 and T2.7 shared assertion
+async function assertRefuses(config) {
+  for (const dryRun of [false, true]) {
+    const env = makeEnv({
+      prs: [makePr(1, { mergeable: false, mergeable_state: 'dirty' }), makePr(2)],
+      behind: { 2: 3 },
+      ...ciRun(2),
+    });
+    await run(env, { ...config, mergeGate: { ...config.mergeGate, dryRun } });
+    assert.equal(mutated(env).length, 0, `no mutating call (dryRun=${dryRun})`);
+    const d = env.decisions();
+    assert.equal(d.length, 2, 'a row per candidate');
+    for (const row of d) {
+      assert.equal(row.action, 'skipped');
+      assert.equal(row.reason, REFUSAL);
+    }
+    assert.ok(env.summary.rows, 'summary written');
+  }
+}
+
+// T2.6
+test('test_t2_6_refuses_when_only_review_check_and_off', async () => {
+  await assertRefuses(T2CONFIG(false, { requiredChecks: ['devflow/review'] }));
+  const noList = T2CONFIG(false);
+  delete noList.mergeGate.requiredChecks;
+  await assertRefuses(noList);
+});
+
+// T2.7
+test('test_t2_7_refuses_empty_required_checks_either_flag', async () => {
+  await assertRefuses(T2CONFIG(true, { requiredChecks: [] }));
+  await assertRefuses(T2CONFIG(false, { requiredChecks: [] }));
+});
+
+// T2.8
+test('test_t2_8_review_status_requires_bot_creator_when_on', async () => {
+  const mk = (login) => ({
+    prs: [makePr(1)],
+    statuses: { sha1: [{ creator: { login }, context: 'devflow/review', state: 'success' }] },
+  });
+  const cfg = T2CONFIG(true, { requiredChecks: ['devflow/review'] });
+  const user = makeEnv(mk('alice'));
+  await run(user, cfg);
+  assert.equal(user.names('pulls.merge').length, 0);
+  const bot = makeEnv(mk('github-actions[bot]'));
+  await run(bot, cfg);
+  assert.equal(bot.names('pulls.merge').length, 1);
+});
+
+// T2.9: the shared CONFIG fixture now sets review.github: true; every test above this block runs against it.
+test('test_t2_9_flag_on_matches_290', async () => {
+  assert.equal(CONFIG().review.github, true);
+  const env = makeEnv({ prs: [makePr(1)], ...green(1) });
+  await run(env, CONFIG());
+  assert.equal(env.decisions()[0].action, 'merged');
+  const none = makeEnv({ prs: [makePr(1)] });
+  await run(none, CONFIG());
+  assert.notEqual(none.decisions()[0].action, 'merged');
 });

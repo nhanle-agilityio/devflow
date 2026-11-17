@@ -3,7 +3,9 @@
 // Merges at most one `devflow` + `risk:low` PR per run, and only when everything is green.
 // Candidates are tried in priority order (the linked issue's labels.priority label, then PR number);
 // priority only changes the order, never the rules.
-// Config: .claude/devflow.json (baseBranch, github, labels, mergeGate). Claude itself never merges.
+// Config: .claude/devflow.json (baseBranch, github, labels, review, mergeGate). Claude itself never merges.
+// While review.github is off the devflow/review check is ignored; with no other required check left the gate
+// refuses to merge anything (see effectiveRequiredChecks).
 
 const fs = require('fs');
 
@@ -32,9 +34,19 @@ function withDefaults(raw) {
     baseBranch: c.baseBranch || DEFAULTS.baseBranch,
     labels: { ...DEFAULTS.labels, ...(c.labels || {}) },
     risk: { ...(c.risk || {}) },
+    review: { github: false, ...(c.review || {}) },
     mergeGate: { ...DEFAULTS.mergeGate, ...(c.mergeGate || {}) },
   };
 }
+
+// The checks the gate waits for: mergeGate.requiredChecks, without devflow/review while review.github is off.
+function effectiveRequiredChecks(config) {
+  const list = Array.isArray(config.mergeGate?.requiredChecks) ? config.mergeGate.requiredChecks : [];
+  return config.review?.github === true ? list : list.filter((n) => n !== REVIEW_CONTEXT);
+}
+
+const NO_CHECKS_REASON =
+  `no required checks (${REVIEW_CONTEXT} is ignored while review.github is off); refusing to merge`;
 
 // Glob to anchored RegExp: ** crosses "/", * and ? do not. "**/" also matches zero directories.
 // Copy of globToRegExp in workflows/next-task-engine.js (the gate cannot import it); tests keep them equal.
@@ -380,7 +392,7 @@ async function evaluate(ctx, config, listed, state) {
     };
   }
 
-  const checks = await checksGreen(ctx, pr.head.sha, mergeGate.requiredChecks);
+  const checks = await checksGreen(ctx, pr.head.sha, effectiveRequiredChecks(config));
   if (!checks.ok) {
     // A candidate whose checks are running holds the update slot so a later branch is not updated meanwhile.
     if (checks.inFlight) state.slotTaken = true;
@@ -424,6 +436,12 @@ module.exports = async function gate({ github, context, core, config }) {
     const state = { merged: false, slotTaken: false };
     const candidates = await listCandidates(ctx, cfg, only, state);
     const rows = [];
+    // Never merge with zero required checks: change nothing and report every candidate as skipped.
+    if (effectiveRequiredChecks(cfg).length === 0) {
+      for (const listed of candidates) rows.push({ pr: listed.number, action: 'skipped', reason: NO_CHECKS_REASON });
+      await writeSummary(core, rows, dryRun);
+      return;
+    }
     for (const listed of candidates) {
       try {
         const d = await evaluate(ctx, cfg, listed, state);
@@ -440,6 +458,7 @@ module.exports = async function gate({ github, context, core, config }) {
 };
 
 module.exports.withDefaults = withDefaults;
+module.exports.effectiveRequiredChecks = effectiveRequiredChecks;
 module.exports.globToRegExp = globToRegExp;
 module.exports.priorityRank = priorityRank;
 module.exports.orderCandidates = orderCandidates;
