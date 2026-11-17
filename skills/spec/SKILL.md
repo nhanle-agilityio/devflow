@@ -86,7 +86,7 @@ A separate QA agent turns the acceptance criteria into a test matrix. It works f
 
 ### F3. Spec PR
 
-Commit with `docs(spec): <title>` (stage the files by name). Push the branch and open a PR to `baseBranch` titled `spec: <title>`; body = summary, a task table with columns task id, title, depends-on, size, risk and risk reason, and when step 4 ran, one line with the test matrix size and the QA questions resolved and still open. No need to ask before pushing the spec branch or opening this PR.
+Commit with `docs(spec): <title>` (stage the files by name). Push the branch and open a PR to `baseBranch` titled `spec: <title>`; body = summary, a task table with columns task id, title, depends-on, size, risk and risk reason, and when F2 ran, one line with the test matrix size and the QA questions resolved and still open. No need to ask before pushing the spec branch or opening this PR.
 
 ### F4. Gate 1
 
