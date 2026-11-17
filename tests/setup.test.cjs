@@ -85,7 +85,7 @@ test('minimalConfig drops a default scan.ignore and keeps a custom one', () => {
 });
 
 test('minimalConfig does not change its input', () => {
-  const full = { github: { owner: 'a', repo: 'b', remote: 'origin' }, baseBranch: 'main', checks: [] };
+  const full = { github: { owner: 'a', repo: 'b', remote: 'origin' }, baseBranch: 'main', checks: [{ name: 'test', run: 'make test' }] };
   const copy = JSON.parse(JSON.stringify(full));
   minimalConfig(full, SCHEMA);
   assert.deepEqual(full, copy);
@@ -206,4 +206,74 @@ test('test_t6_16_allow_has_gh_issue_view_and_no_other_gh_rule', () => {
     assert.deepEqual(allow.filter((r) => /^Bash\(gh\b/.test(r)), ['Bash(gh issue view:*)']);
     assert.ok(!allow.includes('Bash(gh:*)') && !allow.includes('Bash(gh pr merge:*)'));
   }
+});
+
+// --- T1.1-T1.3: the review.github config key (a small validator for the schema subset the schema uses) ---
+function validate(schema, value, at = '$') {
+  const errs = [];
+  if (schema.enum && !schema.enum.some((v) => JSON.stringify(v) === JSON.stringify(value))) errs.push(`${at}: not in enum`);
+  const t = schema.type;
+  if (t) {
+    const actual = Array.isArray(value) ? 'array' : value === null ? 'null' : Number.isInteger(value) ? 'integer' : typeof value;
+    const ok = t === actual || (t === 'number' && actual === 'integer');
+    if (!ok) return [`${at}: expected ${t}, got ${actual}`];
+  }
+  if (typeof value === 'string' && schema.minLength !== undefined && value.length < schema.minLength) errs.push(`${at}: too short`);
+  if (typeof value === 'number' && schema.minimum !== undefined && value < schema.minimum) errs.push(`${at}: below minimum`);
+  if (Array.isArray(value)) {
+    if (schema.minItems !== undefined && value.length < schema.minItems) errs.push(`${at}: too few items`);
+    if (schema.items) value.forEach((v, i) => errs.push(...validate(schema.items, v, `${at}[${i}]`)));
+  }
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    for (const k of schema.required || []) if (!(k in value)) errs.push(`${at}: missing ${k}`);
+    const props = schema.properties || {};
+    for (const [k, v] of Object.entries(value)) {
+      if (props[k]) errs.push(...validate(props[k], v, `${at}.${k}`));
+      else if (schema.additionalProperties === false) errs.push(`${at}: unexpected ${k}`);
+    }
+  }
+  return errs;
+}
+const stripJsonc = (text) => {
+  let out = '';
+  let inStr = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      out += c;
+      if (c === '\\') out += text[++i];
+      else if (c === '"') inStr = false;
+    } else if (c === '"') { inStr = true; out += c; }
+    else if (c === '/' && text[i + 1] === '/') { while (i < text.length && text[i] !== '\n') i++; out += '\n'; }
+    else out += c;
+  }
+  return out.replace(/,(\s*[}\]])/g, '$1');
+};
+const BASE = { github: { owner: 'acme', repo: 'shop' }, baseBranch: 'main', checks: [{ name: 'test', run: 'make test' }] };
+const repoFile = (p) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
+
+// T1.1
+test('test_t1_1_schema_accepts_review_github', () => {
+  assert.deepEqual(validate(SCHEMA, { ...BASE, review: { github: true } }), []);
+  assert.deepEqual(validate(SCHEMA, { ...BASE, review: { github: false } }), []);
+  const g = SCHEMA.properties.review.properties.github;
+  assert.equal(g.type, 'boolean');
+  assert.equal(g.default, false);
+});
+
+// T1.2
+test('test_t1_2_schema_rejects_extra_or_string', () => {
+  assert.notDeepEqual(validate(SCHEMA, { ...BASE, review: { github: true, foo: 1 } }), []);
+  assert.notDeepEqual(validate(SCHEMA, { ...BASE, review: { github: 'true' } }), []);
+  assert.equal(SCHEMA.properties.review?.additionalProperties, false);
+});
+
+// T1.3
+test('test_t1_3_configs_without_review_still_validate', () => {
+  assert.deepEqual(validate(SCHEMA, BASE), []);
+  const example = JSON.parse(stripJsonc(repoFile('skills/init/templates/devflow.json')));
+  assert.deepEqual(validate(SCHEMA, example), []);
+  assert.deepEqual(validate(SCHEMA, JSON.parse(repoFile('.claude/devflow.json'))), []);
+  assert.match(repoFile('skills/init/templates/devflow.json'), /review\.github|"review"\s*:\s*\{\s*"github"/);
+  assert.equal(example.review && example.review.github, false, 'the example sets review.github to its default');
 });
