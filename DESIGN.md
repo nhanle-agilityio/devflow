@@ -20,7 +20,7 @@ Nothing in the plugin knows about a specific stack. Project mechanics live in `.
 
 - **Deterministic where it matters.** The loop and the order of stages in `next-task` are a Workflow script (`workflows/next-task-engine.js`), not prose. Safety rules are hooks, not instructions.
 - **Claude never merges.** The plugin opens PRs and pushes its own feature branches, never merges, never pushes to the base branch, never force-pushes (except `--force-with-lease` on its own branch). Who merges is decided by risk: a human for `risk:high` and unlabelled PRs; the merge gate Action (outside Claude, own token) for `risk:low` PRs once its checks are green.
-- **Risk is judged early and enforced late.** The spec judges each task against `risk.highWhen` / `risk.highPaths` (unsure → high) and the human approves the levels at Gate 1. The engine only ever escalates to high, deterministically, when changed files match `risk.highPaths`. A missing label counts as high.
+- **Risk is judged early and enforced late.** The spec judges each task against `risk.highWhen` / `risk.highPaths` (unsure → high) and the human approves the levels by setting the ready label on each sub-issue (epic mode) or at Gate 1 (`--file`). The engine only ever escalates to high, deterministically, when changed files match `risk.highPaths`. A missing label counts as high.
 - **No reliance on GitHub paid features.** Target repos may be private on GitHub Free: no branch protection, no required checks, no native auto-merge. The merge gate is a plain Action that does the checking itself.
 - **Model tiers.** Opus plans and reviews; Sonnet writes the per-issue plan, implements and ships (it writes the PR body reviewers read); Haiku runs mechanical steps (selecting, claiming, branching, running checks, blocked clean-up).
 - **GitHub via the GitHub MCP server** (issues, labels, PRs, comments). `gh` is optional, never required. Adding a missing label to an issue creates it.
@@ -327,7 +327,7 @@ Output: a table check → `ok` / `warn` / `fail` → what to do, a line per fix 
 
 ## Risk and the merge gate
 
-Risk flows: spec task (`risk` + reason, approved at Gate 1) → issue label and `Risk:` line → engine (escalate to high on `risk.highPaths`; unlabelled = high) → PR label and body line → gate (acts only on `risk:low`).
+Risk flows: spec task (`risk` + reason, approved by the ready label on the sub-issue, or at Gate 1 with `--file`) → issue label and `Risk:` line → engine (escalate to high on `risk.highPaths`; unlabelled = high) → PR label and body line → gate (acts only on `risk:low`).
 
 **Merge gate** = `.github/workflows/devflow-merge-gate.yml` + `.github/scripts/devflow-merge-gate.cjs`, installed by `/devflow:init`. It exists because target repos may be private on GitHub Free. Runs on `workflow_run` completion (CI workflows and "Claude Code Review"), `status`, and manual `workflow_dispatch` (optional PR number). The workflow lives on the default branch (those triggers only run from there) and uses `DEVFLOW_GATE_TOKEN`, a fine-grained PAT (Contents + Pull requests read/write, this repo only), because pushes and merges made with `GITHUB_TOKEN` do not trigger CI. Config is read from `.claude/devflow.json` at `baseBranch`. It does nothing unless `mergeGate.enabled`; with `dryRun` (default) it only reports.
 
