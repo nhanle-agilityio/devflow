@@ -1267,7 +1267,18 @@ Out of scope recorded so far: ${JSON.stringify(state.outOfScope)}
 Manual checks (rows checked by hand): ${JSON.stringify(state.manualChecks)}. A "must" Test cases row that is neither covered by a test nor in this list with result pass is a warning that names the row; a manual check with result fail is a warning too.`
 }
 
-function shipPrompt(issue, branch, state, risk) {
+function shipPrompt(issue, branch, state, risk, trace) {
+  const tr = Object.assign({ path: 'full', reviewRounds: 0, claimedAt: null }, trace)
+  const ghReview = cfg.review && cfg.review.github === true ? 'on' : 'off'
+  const verifyValue = state.verification && state.verification.ran
+    ? 'ran'
+    : state.verifyProblem
+      ? 'could not run'
+      : state.verify === 'skipped (short path)'
+        ? 'skipped (short path)'
+        : 'not needed'
+  const pathValue = tr.path === 'short' ? 'short (Plan and Verify skipped)' : 'full'
+  const runMarker = `<!-- devflow-run ${JSON.stringify({ path: tr.path === 'short' ? 'short' : 'full', reviewRounds: tr.reviewRounds, claimedAt: tr.claimedAt })} -->`
   const prBase = prBaseFor(issue)
   const parents = parentsOf(issue)
   const stacked = parents.length > 0
@@ -1304,12 +1315,17 @@ Data:
 - Out of scope: ${JSON.stringify(state.outOfScope)} (review already confirmed none of these is required by the acceptance criteria)${isFixIssue(issue, cfg) ? `
 - Root cause: ${(state.rootCause && state.rootCause.cause) || 'unknown'}; Introduced by: ${(state.rootCause && state.rootCause.introducedBy) || 'unknown'}; Why it was missed: ${(state.rootCause && state.rootCause.whyMissed) || 'unknown'}` : ''}
 - ${riskLine}
+- Review trace (a "## Review" section of exactly these three lines):
+Review: pass after ${tr.reviewRounds} round(s) - local devflow reviewer in this run (GitHub review: ${ghReview})
+Path: ${pathValue}
+Verify: ${verifyValue}
+- Run marker (its own line in the PR body, verbatim): ${runMarker}
 ${stacked ? `- Stacked on ${parentList(issue)}.\n` : ''}
 Steps:
 0. Look for an open PR with head ${branch} in ${gh.owner}/${gh.repo} (a PR left by an earlier run). If one exists, reuse it: push normally (step 1), retarget its base to ${prBase}${parents.length === 1 ? ` (or to ${base} when step 1b finds the parent merged)` : ''} with update_pull_request when it differs, rewrite its title and body from the data as in step 2, add the labels of step 3 without removing any label already on it (never remove "${labels.riskHigh}" or any other label already on it${parents.length === 1 ? `, except "${labels.stacked}" when step 1b finds the parent merged` : ''}), do not open a new PR, return reused=true with its number and URL, then continue with step 4 (the issue labels). Steps 2 and 3 apply only when no such PR exists; step 2b still applies. If none exists, go on with step 1 and return reused=false.
 1. \`git push -u ${remote} ${branch}\`. Never push to ${base} or any protected branch; never force-push.${parents.length === 1 ? `
 1b. Read PR #${parents[0].prNumber} with pull_request_read; it may have been merged (and its branch deleted) while this issue was built. Merged (\`merged_at\` is not null in that result): its changes are in ${base}, so in steps 0, 2 and 3 use base ${base} (on a reused PR retarget to it, remove the stack line and the "${labels.stacked}" label), leave out the stack line and do not add the "${labels.stacked}" label, and return unstacked=true. Closed without merging: stop and return ok=false with the problem.` : ''}
-2. Open a PR with head ${branch} and base ${prBase} in ${gh.owner}/${gh.repo}. Title: Conventional Commits style summary with scope "${scopeFor(issue)}", English, under 72 characters. Body as described,${isFixIssue(issue, cfg) ? ' with the sections "Root cause", "Introduced by" and "Why it was missed" filled from the Root cause data (this is a fix; write "unknown" where the data says so),' : ''} with a "Risk" section holding exactly this line: "${riskLine}"${stacked ? `, and the line "${stackLine}"` : ''}, ending with the line "Closes #${issue.number}". The body must not contain any at-sign mention of a bot or user, and no AI attribution.
+2. Open a PR with head ${branch} and base ${prBase} in ${gh.owner}/${gh.repo}. Title: Conventional Commits style summary with scope "${scopeFor(issue)}", English, under 72 characters. Body as described,${isFixIssue(issue, cfg) ? ' with the sections "Root cause", "Introduced by" and "Why it was missed" filled from the Root cause data (this is a fix; write "unknown" where the data says so),' : ''} with a "Risk" section holding exactly this line: "${riskLine}"${stacked ? `, and the line "${stackLine}"` : ''}, with a "## Review" section holding exactly the three trace lines from the data, the run marker line from the data on a line of its own, ending with the line "Closes #${issue.number}". The body must not contain any at-sign mention of a bot or user, and no AI attribution.
 2b. Out of scope: for each out-of-scope item that describes a real problem in the product (not a note about style or a remark), search open issues in ${gh.owner}/${gh.repo} for one that already covers it; if there is none, create an issue titled "[follow-up #${issue.number}] <short summary>" with labels "${labels.triage}" only (never "${labels.ready}": a human triages it) and a body ${args.bugTemplatePath ? `from the bug template at ${args.bugTemplatePath} (keep its headings, "unknown" or "None" where you have nothing)` : 'with the sections Context, Expected, Actual, Repro, Introduced by, Risk, Acceptance criteria, Scope, Test cases and Dependencies'}; Context says it was found while working on #${issue.number}. Then comment on the new issue: suggest a priority (one of ${priorityList.join(', ')}) and a risk (${labels.riskLow} or ${labels.riskHigh}, judged against risk.highWhen and risk.highPaths; unsure means high), each with a one-line reason, and say that a human sets the labels and "${labels.ready}". Do not set those labels yourself. List every such issue in the PR body's "Out of scope" section as "- <item>: #<number>", and return them in followUps (existing=true for one that was already open). Items that are only remarks stay in the section as text.
 3. Label the new PR (a PR is an issue: use issue_write with the PR number; read its labels first, keep existing ones): ${prLabels.map((l) => '"' + l + '"').join(', ')}.
 4. On issue #${issue.number} add the label "${labels.review}" and remove "${labels.inProgress}" (keep other labels).${risk.escalation ? ` Also add "${labels.riskHigh}" to the issue and remove "${labels.riskLow}" (the change was escalated to high).` : ''}
@@ -1322,13 +1338,14 @@ function blockedPrompt(issue, branch, stage, reason, questions, assignedByRun) {
   const questionsStep = qs.length
     ? `3. Post the questions as one comment on issue #${issue.number}; if a comment starting with \`<!-- devflow-questions -->\` already exists, edit it instead. The body is exactly:
 <!-- devflow-questions -->
+<!-- devflow-blocked -->
 **Open questions for #${issue.number}** (blocked at ${stage}${branch ? `, branch \`${branch}\`` : ''})
 
 ${qs.map((q, i) => `${i + 1}. ${q}`).join('\n')}
 
 Answer with /devflow:answer #${issue.number}, or reply on this issue with numbered answers.
 (No at-sign mentions of bots.)`
-    : `3. Comment on issue #${issue.number}: the stage ("${stage}"), the reason, and the concrete question or decision a human must provide to unblock it${branch ? `, and the branch name ${branch}` : ''}. No at-sign mentions of bots.`
+    : `3. Comment on issue #${issue.number}; the first line of the comment is exactly \`<!-- devflow-blocked -->\`, then the stage ("${stage}"), the reason, and the concrete question or decision a human must provide to unblock it${branch ? `, and the branch name ${branch}` : ''}. No at-sign mentions of bots.`
   return `Issue #${issue.number} is blocked at stage "${stage}". Clean up. ${MCP_NOTE}
 
 devflow config:
@@ -1444,7 +1461,9 @@ async function runIssue(issue) {
   issue.claimWon = false
   issue.inCleanup = false
   let pathKind = ''
-  const done = (r) => Object.assign(r, pathKind ? { path: pathKind } : {}, { notes })
+  let reviewRounds = 0
+  let claimedAt = null
+  const done = (r) => Object.assign(r, pathKind ? { path: pathKind } : {}, reviewRounds > 0 ? { reviewRounds } : {}, { notes })
   // A stage that could not reach GitHub reports it in `problem`; the run stops as at Claim.
   const down = (r) => !!(r && r.problem && mcpDown(r.problem))
 
@@ -1506,6 +1525,7 @@ async function runIssue(issue) {
   }
 
   issue.claimWon = true
+  claimedAt = winner && typeof winner.createdAt === 'string' && winner.createdAt ? winner.createdAt : null
   // Claim read the issue from GitHub: its labels, spec path and Introduced by heading win over the Select copy.
   {
     const sameSet = (a, b) => a.length === b.length && a.slice().sort().join('\n') === b.slice().sort().join('\n')
@@ -1788,6 +1808,7 @@ async function runIssue(issue) {
       // The plugin's reviewer agent (agents/reviewer.md) when available; the default subagent otherwise.
       const reviewOpts = { label: `review #${issue.number} (round ${round + 1})`, phase: 'Review', schema: REVIEW_SCHEMA, model: 'opus' }
       let review
+      reviewRounds++
       // The reviewer agent reads the issue with gh; without gh, or once it could not read the issue, the default agent reads it with the MCP server.
       if (nt.reviewerAgent && ghCli && !reviewerMissing && !reviewerCannotRead) {
         try {
@@ -1874,7 +1895,7 @@ async function runIssue(issue) {
 
     // Ship
     phase('Ship')
-    const ship = await agent(shipPrompt(issue, branch, state, risk), {
+    const ship = await agent(shipPrompt(issue, branch, state, risk, { path: pathKind || 'full', reviewRounds, claimedAt }), {
       label: `ship #${issue.number}`,
       phase: 'Ship',
       schema: SHIP_SCHEMA,

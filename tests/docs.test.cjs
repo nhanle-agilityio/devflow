@@ -259,6 +259,17 @@ test('test_t4_11_docs_describe_short_path', () => {
   assert.match(entry, /short path/i);
 });
 
+// T5.8
+test('test_t5_8_docs_describe_markers', () => {
+  for (const f of ['DESIGN.md', 'CHANGELOG.md']) {
+    const text = read(f);
+    assert.match(text, /## Review/, `${f} mentions the ## Review section`);
+    assert.match(text, /devflow-run/, `${f} mentions devflow-run`);
+    assert.match(text, /devflow-blocked/, `${f} mentions devflow-blocked`);
+  }
+  assert.ok(changelogEntry(56), 'CHANGELOG has an entry citing (#56)');
+});
+
 // T6.10
 test('test_t6_10_docs_describe_source_rule', () => {
   for (const f of ['DESIGN.md', 'README.md', 'CHANGELOG.md']) {
