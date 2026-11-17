@@ -19,7 +19,7 @@ export const meta = {
 
 // Test hook: the pure helpers below are function declarations (hoisted), so tests get them without a run.
 // They take every input as a parameter and never touch the run state.
-if (args && args.exports === true) return { parseDiff, scanWeakenedChecks, checkConfigGlobs, globToRegExp, priorityRank, orderIssues, isFixIssue, pathFor, hasHttpOrE2eRow }
+if (args && args.exports === true) return { parseDiff, scanWeakenedChecks, checkConfigGlobs, globToRegExp, priorityRank, orderIssues, isFixIssue, pathFor, hasHttpOrE2eRow, epicFor }
 
 // Run through /devflow:next-task only: it does the preflight and builds args. Calling this workflow
 // directly (e.g. /devflow:next-task-engine) arrives without args, so stop with a clear message.
@@ -191,6 +191,7 @@ const PLAN_SCHEMA = {
     qaFiles: { type: 'array', items: { type: 'string' }, description: 'Test files that hold the tests for the Test cases rows (owned by the QA agent)' },
     devFiles: { type: 'array', items: { type: 'string' }, description: 'Files the implementation changes (owned by the dev agent)' },
     specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
+    epicRead: { type: 'boolean', description: 'Epic issues only: false when the epic named by the issue\'s Epic: line is missing, closed, a pull request or could not be read; true when it was read' },
     httpOrE2eRows: { type: 'boolean', description: 'True when the issue\'s Test cases table has a row with Level http or e2e' },
     acceptanceCriteria: { type: 'integer', description: 'Number of top-level checkbox items in the issue\'s acceptance criteria section, as read from GitHub' },
     problem: { type: 'string', description: `Report starting with exactly "${MCP_DOWN}" when GitHub cannot be reached; otherwise omit` },
@@ -226,6 +227,7 @@ const IMPLEMENT_SCHEMA = {
     blockedReason: { type: 'string' },
     problem: { type: 'string', description: `Report starting with exactly "${MCP_DOWN}" when GitHub cannot be reached; otherwise omit` },
     specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
+    epicRead: { type: 'boolean', description: 'Epic issues only: false when the epic named by the issue\'s Epic: line is missing, closed, a pull request or could not be read; true when it was read' },
     manualChecks: {
       type: 'array',
       description: 'Test cases rows that cannot be automated (manual or review checklist), checked by hand',
@@ -256,6 +258,7 @@ const QA_SCHEMA = {
     questions: { type: 'array', items: { type: 'string' }, description: 'Questions that block a test, each starting with "[QA] "' },
     problem: { type: 'string', description: `Report starting with exactly "${MCP_DOWN}" when GitHub cannot be reached; otherwise omit` },
     specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
+    epicRead: { type: 'boolean', description: 'Epic issues only: false when the epic named by the issue\'s Epic: line is missing, closed, a pull request or could not be read; true when it was read' },
   },
   required: ['status', 'tests', 'filesChanged', 'questions', 'specRead'],
 }
@@ -346,6 +349,7 @@ const REVIEW_SCHEMA = {
   properties: {
     verdict: { enum: ['pass', 'changes'] },
     issueRead: { type: 'boolean', description: 'True when you read the issue from GitHub as instructed; false when you could not (then report no findings)' },
+    epicRead: { type: 'boolean', description: 'Epic issues only: false when the epic named by the issue\'s Epic: line is missing, closed, a pull request or could not be read; true when it was read' },
     problem: { type: 'string', description: `Report starting with exactly "${MCP_DOWN}" when GitHub cannot be reached; otherwise omit` },
 
     acceptedWeakenings: {
@@ -466,6 +470,50 @@ function pickClaimWinner(claims) {
 
 function readSpec(impl, path) {
   return String((impl && impl.specRead) || '').indexOf(path) !== -1
+}
+
+// The epic number from the first line "Epic: #<n>" of the issue body, or 0.
+function epicFor(issue) {
+  const m = /^Epic: #(\d+)/m.exec(String((issue && issue.body) || ''))
+  return m ? Number(m[1]) : 0
+}
+
+// Where a stage reads the contract from: a spec path wins, else the epic, else the issue alone.
+function sourceFor(issue) {
+  const path = specPathFor(issue)
+  if (path) return { kind: 'spec', path }
+  const n = epicFor(issue)
+  return n ? { kind: 'epic', n } : { kind: 'none' }
+}
+
+// specRead must name the spec path, or the epic as a whole token (#42 does not match #420).
+function readSource(result, src) {
+  if (src.kind === 'spec') return readSpec(result, src.path)
+  if (src.kind === 'epic') return new RegExp(`#${src.n}(?!\\d)`).test(String((result && result.specRead) || ''))
+  return true
+}
+
+// An epic stage that could not read the epic blocks the issue.
+function epicUnread(result, src) {
+  return src.kind === 'epic' && !!result && result.epicRead === false
+}
+function epicReason(src) {
+  return `epic #${src.n} could not be read`
+}
+
+function epicStep(n, how) {
+  return `The issue has the line "Epic: #${n}" and links no spec. Before anything else read epic #${n} ${how}: take the shared design and decisions from it, and the acceptance criteria and Test cases from the issue. Where the issue's "## Decisions" and the epic's differ, the issue's win. If the epic is missing, closed, a pull request or cannot be read, return epicRead=false. The issue is the source of truth for expected behaviour, not the current code.`
+}
+const EPIC_MCP = 'with the GitHub MCP server (issue_read, method get)'
+function epicGh(n) {
+  return `with \`gh issue view ${n} --repo ${gh.owner}/${gh.repo} --json title,body\` (read-only; run no other gh command)`
+}
+
+// The part of a stage's Return line about what it read.
+function readReturn(src) {
+  if (src.kind === 'spec') return `specRead (the spec path ${src.path}, exactly as you read it)`
+  if (src.kind === 'epic') return `specRead ("epic #${src.n}"), epicRead (true when you read epic #${src.n}, false when you could not)`
+  return 'specRead ("none")'
 }
 
 // How tests point at their Test cases row. The issue's own pattern wins over the default.
@@ -911,8 +959,11 @@ Issue labels: ${issue.labels.join(', ')}`
 
 function planPrompt(issue, branch) {
   const specPath = specPathFor(issue)
+  const src = sourceFor(issue)
   const qaMode = nt.parallelQa === true
-  const step1 = specPath
+  const step1 = src.kind === 'epic'
+    ? epicStep(src.n, EPIC_MCP)
+    : specPath
     ? `Before anything else run \`git show ${baseRef}:${specPath}\` and read the whole spec. Then read the issue's acceptance criteria. The spec and issue are the source of truth for expected behaviour, not the current code.`
     : `The issue links no spec, so the issue text is the contract. Read its acceptance criteria.`
   return `Plan the work for GitHub issue #${issue.number} on branch ${branch} (already checked out). You only plan: do not edit code, do not commit, do not push. ${MCP_NOTE}
@@ -929,7 +980,7 @@ Instructions:
 4. Write the plan in markdown with sections: Files to change (mark each file QA or Dev); Tests (one entry per "Test cases" row id, or per test-plan item; ${e2eRule(false)}); Risks; Order of commits (failing test first, then the implementation); Open questions (only if there are any).
 5. Post the plan on issue #${issue.number} as a comment whose first line is \`<!-- devflow-plan -->\`. If the issue already has a comment starting with that marker, edit it instead of adding another.
 6. Look for open questions in two roles. BA: something the spec, the issue and its Decisions do not answer that would change behaviour or a contract. QA: a "Test cases" row that cannot be tested as written (no clear expected result, contradicts the acceptance criteria or another row). Start each question with "[BA] " or "[QA] ". If there is any, return status "blocked" with all of them (still post the plan, with an "Open questions" section). Otherwise return status "ready" and questions = [].
-Return status, the plan text exactly as posted, questions, qaFiles, devFiles, specRead (${specPath ? `the spec path ${specPath}, exactly as you read it` : '"none"'}), httpOrE2eRows (true when the issue's Test cases table, as you read it on GitHub, has a row whose Level is http or e2e) and acceptanceCriteria (the number of top-level \`- [ ]\` / \`- [x]\` items under the first heading or bold line containing "Acceptance criteria" in the issue on GitHub, up to the next heading or bold line; 0 when there is none).`
+Return status, the plan text exactly as posted, questions, qaFiles, devFiles, ${readReturn(src)}, httpOrE2eRows (true when the issue's Test cases table, as you read it on GitHub, has a row whose Level is http or e2e) and acceptanceCriteria (the number of top-level \`- [ ]\` / \`- [x]\` items under the first heading or bold line containing "Acceptance criteria" in the issue on GitHub, up to the next heading or bold line; 0 when there is none).`
 }
 
 function integratePrompt(issue, branch) {
@@ -977,7 +1028,10 @@ function implementPrompt(issue, branch, planText, own) {
         ? `created from ${baseRef} with the branches of ${parentList(issue)} merged in, integration commit ${parentRef}`
         : `created from ${parentRef}`
   const specPath = specPathFor(issue)
-  const step1 = specPath
+  const src = sourceFor(issue)
+  const step1 = src.kind === 'epic'
+    ? epicStep(src.n, EPIC_MCP)
+    : specPath
     ? `Before anything else run \`git show ${baseRef}:${specPath}\` and read the whole spec. Then read the issue's acceptance criteria. The spec and issue are the source of truth for expected behaviour, not the current code.`
     : `The issue links no spec, so the issue text is the contract. Read its acceptance criteria. The issue is the source of truth for expected behaviour, not the current code.`
   return `Implement GitHub issue #${issue.number} on branch ${branch} (already checked out, ${origin}). ${MCP_NOTE}
@@ -1001,7 +1055,7 @@ Instructions:
 5. Stay inside the issue's scope. Anything else you notice goes into "outOfScope", unchanged in the code.
 6. If a requirement is ambiguous in a way that changes behaviour or a contract and the spec does not answer it, do NOT guess: return status "blocked" with blockedReason stating the question. For minor ambiguity, decide, and record the decision in "assumptions".
 7. Do not push, open a PR, or touch GitHub labels.
-Return: status, a short summary, the commits you made ("<sha> <message>"), files changed, assumptions, outOfScope, touchesUi (true when the diff against ${parentRef} changes user-facing UI), specRead (${specPath ? `the spec path ${specPath}, exactly as you read it` : '"none"'}), and manualChecks ([] when there are no such rows).`}`
+Return: status, a short summary, the commits you made ("<sha> <message>"), files changed, assumptions, outOfScope, touchesUi (true when the diff against ${parentRef} changes user-facing UI), ${readReturn(src)}, and manualChecks ([] when there are no such rows).`}`
 }
 
 // Fix issues: the PR must say why the bug happened.
@@ -1022,7 +1076,10 @@ function resumeNote(issue) {
 function devModeBlock(issue, own) {
   const parentRef = parentRefFor(issue)
   const specPath = specPathFor(issue)
-  const step1 = specPath
+  const src = sourceFor(issue)
+  const step1 = src.kind === 'epic'
+    ? epicStep(src.n, EPIC_MCP)
+    : specPath
     ? `Before anything else run \`git show ${baseRef}:${specPath}\` and read the whole spec. Then read the issue's acceptance criteria. The spec and issue are the source of truth for expected behaviour, not the current code.`
     : `The issue links no spec, so the issue text is the contract. Read its acceptance criteria.`
   return `
@@ -1037,12 +1094,15 @@ Instructions:
 6. Stay inside the issue's scope. Anything else you notice goes into "outOfScope", unchanged in the code. ${MANUAL_RULE}${rootCauseNote(issue)}
 7. If a requirement is ambiguous in a way that changes behaviour or a contract and the spec and Decisions do not answer it, do NOT guess: return status "blocked" with blockedReason stating the question. For minor ambiguity, decide, and record the decision in "assumptions".
 8. Do not push, open a PR, or touch GitHub labels.
-Return: status, a short summary, commits = [], every file you changed, assumptions, outOfScope, touchesUi (true when your change, compared with ${parentRef}, changes user-facing UI), specRead (${specPath ? `the spec path ${specPath}, exactly as you read it` : '"none"'}), and manualChecks ([] when there are no such rows).`
+Return: status, a short summary, commits = [], every file you changed, assumptions, outOfScope, touchesUi (true when your change, compared with ${parentRef}, changes user-facing UI), ${readReturn(src)}, and manualChecks ([] when there are no such rows).`
 }
 
 function qaPrompt(issue, branch, planText, own) {
   const specPath = specPathFor(issue)
-  const step1 = specPath
+  const src = sourceFor(issue)
+  const step1 = src.kind === 'epic'
+    ? epicStep(src.n, EPIC_MCP)
+    : specPath
     ? `Before anything else run \`git show ${baseRef}:${specPath}\` and read the whole spec. Then read the issue's acceptance criteria and its "Test cases" table.`
     : `The issue links no spec, so the issue text is the contract. Read its acceptance criteria and its "Test cases" table.`
   return `You are the QA half of a parallel pair for GitHub issue #${issue.number} on branch ${branch} (already checked out). A dev agent is writing the implementation at the same time, in the same checkout. ${MCP_NOTE}
@@ -1062,7 +1122,7 @@ Instructions:
 4. Only create or edit these files: ${JSON.stringify(own.qaFiles)}. Never touch any other file.
 5. Do NOT commit, stage or stash anything: the workflow commits your tests first. The tests are expected to fail until the change exists; you may run them to check they are collected and fail for the right reason (a missing behaviour, not a syntax or import error of your own).
 6. If a row cannot be tested as written (no clear expected result, contradicts the acceptance criteria or another row), do not invent the expectation: add a question starting with "[QA] " and return status "blocked". Otherwise questions = [].
-Return status, tests (row id and test name), filesChanged (the files you created or edited), questions, and specRead (${specPath ? `the spec path ${specPath}, exactly as you read it` : '"none"'}).`
+Return status, tests (row id and test name), filesChanged (the files you created or edited), questions, and ${readReturn(src)}.`
 }
 
 function commitPrompt(issue, branch, own, qa, dev) {
@@ -1092,6 +1152,7 @@ Report passed=true only if all of them exit 0. For each failing check return its
 }
 
 function fixPrompt(issue, branch, why, details, qaFiles) {
+  const src = sourceFor(issue)
   const qaRule =
     qaFiles && qaFiles.length
       ? `\n- These files hold the QA agent's tests for the Test cases rows: ${JSON.stringify(qaFiles)}. Do not edit them. If you are sure a QA test is wrong (it contradicts the spec, the issue or its Decisions), return status "blocked" with blockedReason starting with "[QA] " that names the test and the contradiction.`
@@ -1112,7 +1173,7 @@ Instructions:
 - Commit with Conventional Commits in English, scope "${scopeFor(issue)}", staging files by name. Never rewrite existing commits. Do not push.
 - If you cannot fix it without a decision the spec does not make, return status "blocked" with blockedReason. ${DECISIONS_NOTE}
 When a problem says an out-of-scope item is required by the acceptance criteria, implement it (test first) and copy that item exactly into "outOfScopeDone".
-Return the same structure as the implement stage; "commits" lists only the commits you made now. In "specRead" put the spec path if you read the spec (for example with \`git show ${baseRef}:<path>\`), otherwise "none".`
+Return the same structure as the implement stage; "commits" lists only the commits you made now. ${src.kind === 'epic' ? `In "specRead" put "epic #${src.n}" and in "epicRead" whether you read it: ${epicStep(src.n, EPIC_MCP)}` : 'In "specRead" put the spec path if you read the spec (for example with \\`git show ${baseRef}:<path>\\`), otherwise "none".'}`
 }
 
 function verifyPrompt(issue, branch, impl) {
@@ -1169,13 +1230,16 @@ function reviewPrompt(issue, branch, state, round, hits, viaGh) {
   const parentRef = parentRefFor(issue)
   const parents = parentsOf(issue)
   const specPath = specPathFor(issue)
+  const src = sourceFor(issue)
   const stackNote =
     parents.length === 1
       ? ` This PR is stacked on PR #${parents[0].prNumber}; the parent's changes are excluded from this diff, review only what is new.`
       : parents.length > 1
         ? ` The branches of ${parentList(issue)} were merged into this branch at ${parentRef}; their changes are excluded from this diff, review only what is new.`
         : ''
-  const specNote = specPath
+  const specNote = src.kind === 'epic'
+    ? `${epicStep(src.n, viaGh ? epicGh(src.n) : EPIC_MCP)} Also read the project's CLAUDE.md. Return epicRead=false when you could not read the epic.`
+    : specPath
     ? `Read the spec with \`git show ${baseRef}:${specPath}\` and the project's CLAUDE.md.`
     : `The issue links no spec; read the project's CLAUDE.md.`
   return `Review the change for issue #${issue.number} on branch ${branch}. You are read-only: do not edit, commit, push, or change GitHub. Review round ${round + 1}.${viaGh ? '' : ' ' + MCP_NOTE}
@@ -1323,6 +1387,7 @@ async function runFix(issue, branch, state, why, details) {
   })
   if (!fix) return { ok: false, reason: `The fix agent died (${why}).` }
   if (fix.problem && mcpDown(fix.problem)) return { ok: false, mcpDown: true, reason: fix.problem }
+  if (epicUnread(fix, sourceFor(issue))) return { ok: false, reason: epicReason(sourceFor(issue)) }
   if (fix.status === 'blocked') return { ok: false, reason: fix.blockedReason || `The fix agent reported blocked (${why}).` }
   merge(state, fix)
   const touched = overlap(fix.filesChanged, state.qaFiles)
@@ -1500,7 +1565,9 @@ async function runIssue(issue) {
     }
 
     // Plan: posted on the issue; nobody approves it. Open questions block the issue before any code is written.
+    const srcAll = sourceFor(issue)
     const specPathForPlan = pathKind === 'short' ? '' : specPathFor(issue)
+    const srcPlan = pathKind === 'short' ? { kind: 'none' } : srcAll
     let plan
     if (pathKind === 'short') {
       plan = { plan: SHORT_PLAN, qaFiles: [], devFiles: [] }
@@ -1513,6 +1580,7 @@ async function runIssue(issue) {
       })
       if (!plan) return block('Plan', 'The plan agent died.')
       if (down(plan)) return block('Plan', plan.problem)
+      if (epicUnread(plan, srcPlan)) return block('Plan', epicReason(srcPlan))
       // The plan read the acceptance criteria from GitHub; the Select copy's count is a cross-check only.
       if (!Number.isInteger(plan.acceptanceCriteria)) {
         notes.push('plan did not report the acceptance criteria count')
@@ -1529,6 +1597,7 @@ async function runIssue(issue) {
         return block('Plan', qs.join('; ') || 'The plan agent reported blocked without questions.', qs)
       }
       if (specPathForPlan && !readSpec(plan, specPathForPlan)) return block('Plan', `Plan did not read the spec ${specPathForPlan}`)
+      if (srcPlan.kind === 'epic' && !readSource(plan, srcPlan)) return block('Plan', `Plan did not read epic #${srcPlan.n}`)
     }
 
     const own = { qaFiles: plan.qaFiles || [], devFiles: plan.devFiles || [] }
@@ -1560,6 +1629,8 @@ async function runIssue(issue) {
       if (!dev) return block('Implement', 'The implement agent died.')
       if (down(qa)) return block('Implement', qa.problem)
       if (down(dev)) return block('Implement', dev.problem)
+      if (epicUnread(qa, srcPlan)) return block('Implement', epicReason(srcPlan))
+      if (epicUnread(dev, srcPlan)) return block('Implement', epicReason(srcPlan))
       // Every open question, from both roles, goes into one comment and one block.
       const questions = (qa.questions || []).slice()
       if (dev.status === 'blocked') questions.push(`[Dev] ${dev.blockedReason || 'The implement agent reported blocked without a reason.'}`)
@@ -1570,6 +1641,7 @@ async function runIssue(issue) {
       const devIn = overlap(dev.filesChanged, own.qaFiles)
       if (devIn.length) return block('Implement', `The dev agent changed QA test files: ${devIn.join(', ')}.`)
       if (specPathForPlan && !readSpec(qa, specPathForPlan)) return block('Implement', `The QA agent did not read the spec ${specPathForPlan}`)
+      if (srcPlan.kind === 'epic' && !readSource(qa, srcPlan)) return block('Implement', `The QA agent did not read epic #${srcPlan.n}`)
 
       const committed = await agent(commitPrompt(issue, branch, own, qa, dev), {
         label: `commit #${issue.number}`,
@@ -1599,6 +1671,7 @@ async function runIssue(issue) {
       })
       if (!impl) return block('Implement', 'The implement agent died.')
       if (down(impl)) return block('Implement', impl.problem)
+      if (epicUnread(impl, srcAll)) return block('Implement', epicReason(srcAll))
       merge(state, impl)
       if (impl.status === 'blocked') {
         const reason = impl.blockedReason || 'The implement agent reported blocked without a reason.'
@@ -1606,8 +1679,20 @@ async function runIssue(issue) {
       }
     }
 
-    // The spec must have been read: one corrective fix, then block.
+    // The spec (or the epic) must have been read: one corrective fix, then block.
     const specPath = specPathFor(issue)
+    if (srcAll.kind === 'epic' && !readSource(impl, srcAll)) {
+      log(`#${issue.number}: Implement did not report reading epic #${srcAll.n}; running one corrective fix.`)
+      const fix = await runFix(
+        issue,
+        branch,
+        state,
+        'the implementation was written without reading the epic',
+        `Read epic #${srcAll.n} (GitHub MCP issue_read, method get), compare its shared design and decisions and the issue's criteria with the change on this branch, and fix any difference. Return specRead = "epic #${srcAll.n}" and epicRead.`,
+      )
+      if (!fix.ok) return block('Implement', fix.reason)
+      if (!readSource(fix.result, srcAll)) return block('Implement', `Implement did not read epic #${srcAll.n}`)
+    }
     if (specPath && !readSpec(impl, specPath)) {
       log(`#${issue.number}: Implement did not report reading ${specPath}; running one corrective fix.`)
       const fix = await runFix(
@@ -1722,10 +1807,12 @@ async function runIssue(issue) {
         const why = !ghCli ? 'gh is not installed' : reviewerCannotRead ? 'the reviewer could not read the issue' : ''
         if (why && notes.indexOf(`review ran on the default agent: ${why}`) === -1) notes.push(`review ran on the default agent: ${why}`)
         review = await agent(reviewPrompt(issue, branch, state, round, hits, false), reviewOpts)
+        if (review && !down(review) && epicUnread(review, srcAll)) return block('Review', epicReason(srcAll))
         if (review && !down(review) && review.issueRead === false) return block('Review', 'the review could not read the issue')
       }
       if (!review) return block('Review', 'The review agent died.')
       if (down(review)) return block('Review', review.problem)
+      if (epicUnread(review, srcAll)) return block('Review', epicReason(srcAll))
       // Every hit is critical unless the reviewer accepted it; an accepted hit makes the PR risk:high at Ship.
       const accepted = Array.isArray(review.acceptedWeakenings) ? review.acceptedWeakenings : []
       let injected = 0
