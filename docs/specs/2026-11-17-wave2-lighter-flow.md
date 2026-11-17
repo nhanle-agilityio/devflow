@@ -73,6 +73,8 @@ Today: `/devflow:spec` writes `docs/specs/<date>-<slug>.md`, opens a spec PR, wa
 
 - 2026-11-17 (#52, Q1): QA commit e669dc2 changed the fixture in 'minimalConfig does not change its input' (tests/setup.test.cjs) from `checks: []` to a non-empty `checks`, which the issue does not ask for; and should 33d5b4a be split into feat(#52) and docs(#52) commits? → Restore the fixture to `checks: []` with a new commit `test(#52)`; if that test then fails, report it as a finding and do not adapt the fixture. Do not rewrite or split 33d5b4a: no history rewrite and no force push; the docs stay in that commit.
 
+- 2026-11-17 (#63, Q1): test_t12_6_guard_unchanged in tests/skills.test.cjs requires an empty `git diff origin/main...HEAD -- hooks/guard.py` with no expiry, so later guard fixes would fail it; and should 65264e0 be split into a code commit and a docs commit? → Remove test_t12_6_guard_unchanged from tests/skills.test.cjs; T12.6 is checked by the reviewer on the PR diff (`hooks/guard.py` must not be among the changed files), not by a permanent test. Do not rewrite or split 65264e0: no history rewrite and no force push; the docs stay in that commit.
+
 ## Design
 
 ### Config
@@ -637,7 +639,7 @@ Tests are named `test_t<task>_<n>_<description>` as given per row; where a `node
 | T12.3 | T12 | delete commands | error | Given SKILL.md / When searched / Then it contains `git worktree remove`, `git branch -d`, `git branch -D <branch>` (printed for the user), `git push <remote> --delete` and `github.remote`, and not `git worktree remove --force`. Name: test_t12_3_doctor_safe_delete_commands | unit | must |
 | T12.4 | T12 | closed-unmerged per-branch yes | happy | Given SKILL.md / When searched / Then the per-branch confirmation for closed PRs is present. Name: test_t12_4_closed_unmerged_per_branch_yes | unit | should |
 | T12.5 | T12 | auto-delete setting | happy | Given SKILL.md and README.md / When searched / Then SKILL.md contains `delete_branch_on_merge`, `warn`, `unknown`; README recommends "Automatically delete head branches". Name: test_t12_5_auto_delete_setting_reported | unit | must |
-| T12.6 | T12 | guard unchanged | happy | Given the task branch / When the hook suite runs and `git diff <base>...HEAD -- hooks/guard.py` is checked / Then all pass and the diff is empty. Name: test_t12_6_guard_unchanged | integration | must |
+| T12.6 | T12 | guard unchanged | happy | Given the PR diff / When the hook suite runs and the reviewer checks the changed files / Then all pass and `hooks/guard.py` is not among the changed files. Checked by the reviewer on the PR diff, not by a permanent test (no `test_t12_6_guard_unchanged`). (updated by /devflow:answer) | integration | must |
 | T12.7 | T12 | docs | happy | Given README.md, DESIGN.md, CHANGELOG.md / When searched / Then each contains `--fix` and `merged`, and the CHANGELOG cites T12's issue. Name: test_t12_7_docs_describe_cleanup | unit | must |
 | T13.1 | T13 | version | happy | Given the release branch / When `node --test tests/version.test.cjs` runs / Then it passes with `3.0.0` everywhere. Name: test_t13_1_version_3_0_0 | unit | must |
 | T13.2 | T13 | CHANGELOG section | happy | Given CHANGELOG.md / When parsed / Then a heading matches `## [3.0.0] - YYYY-MM-DD`, `[Unreleased]` has no entries, and the T1-T12 issue numbers appear under 3.0.0. Name: test_t13_2_changelog_3_0_0_entries | unit | must |
