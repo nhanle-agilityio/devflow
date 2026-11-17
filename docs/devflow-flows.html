@@ -853,6 +853,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       <span class="item"><span class="lbl dvf">devflow</span>trên mọi PR do plugin mở</span>
       <span class="item"><span class="lbl stk">stacked</span>PR dựa trên PR devflow khác</span>
       <span class="item"><span class="lbl e2e">needs-e2e</span>bắt Verify chạy</span>
+      <span class="item"><span class="lbl rlow">risk:low</span>đường ngắn: không Plan, không Verify, không agent QA; khác thì đường đầy đủ</span>
       <span class="item"><span class="lbl type">type:gap</span>issue do /devflow:accept tạo, kèm agent:ready</span>
     </div>
   </div>
@@ -1063,6 +1064,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     'trên mọi PR do plugin mở': 'on every PR the plugin opens',
     'PR dựa trên PR devflow khác': 'PR based on another devflow PR',
     'bắt Verify chạy': 'forces Verify to run',
+    'đường ngắn: không Plan, không Verify, không agent QA; khác thì đường đầy đủ': 'short path: no Plan, no Verify, no QA agent; anything else takes the full path',
     // ---- 2.6 refresh ----
     'Chấm sáng là một ý tưởng đang di chuyển. Nó chỉ dừng lại chờ ở các ô màu cam: merge spec (Gate 1), merge PR (Gate 2: merge gate với risk:low, bạn với risk:high) và publish release (bạn). Sau Gate 2, accept → release kiểm tra những gì đã ship rồi cắt release.': 'The glowing dot is an idea on the move. It only waits at the orange boxes: merging the spec (Gate 1), merging the PR (Gate 2: the merge gate for risk:low, you for risk:high) and publishing the release (you). After Gate 2, accept → release checks what shipped and then cuts the release.',
     'sau merge': 'after merge',
