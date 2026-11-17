@@ -189,3 +189,31 @@ test('test_t1_12_docs_describe_review_flag', () => {
   assert.match(unreleased, /\(#52\)/);
   assert.match(unreleased, /review\.github/);
 });
+
+// T2.10 (wave2-lighter-flow, issue #53): the gate callers keep their triggers
+test('test_t2_10_gate_triggers_kept', () => {
+  const callers = [
+    ['.github/workflows/devflow-merge-gate-caller.yml', ['test']],
+    ['skills/init/templates/github/workflows/devflow-merge-gate.yml', ['CI']],
+  ];
+  for (const [f, ci] of callers) {
+    const text = read(f);
+    const on = text.slice(text.search(/^on:/m)).split(/^jobs:/m)[0];
+    const wr = on.match(/workflow_run:[\s\S]*?workflows:\s*\[([^\]]*)\]/);
+    assert.ok(wr, `${f} has workflow_run.workflows`);
+    const names = wr[1].split(',').map((x) => x.trim().replace(/^["']|["']$/g, ''));
+    for (const n of [...ci, 'Claude Code Review']) assert.ok(names.includes(n), `${f} lists ${n}`);
+    assert.match(on, /^ {2}status:/m, `${f} keeps status`);
+    assert.match(on, /^ {2}workflow_dispatch:/m, `${f} keeps workflow_dispatch`);
+  }
+});
+
+// T2.11
+test('test_t2_11_docs_describe_effective_list', () => {
+  for (const f of ['README.md', 'DESIGN.md', 'CHANGELOG.md']) {
+    const text = read(f);
+    assert.match(text, /effective/i, `${f} mentions the effective list`);
+    assert.match(text, /refusing to merge/, `${f} mentions refusing to merge`);
+  }
+  assert.ok(changelogEntry(53), 'CHANGELOG has an entry citing (#53)');
+});
