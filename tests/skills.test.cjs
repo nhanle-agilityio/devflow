@@ -331,3 +331,90 @@ test('test_t12_5_auto_delete_setting_reported', () => {
   assert.match(text, /\bunknown\b/);
   assert.match(read('README.md'), /Automatically delete head branches/);
 });
+
+// Helpers for T7: split skills/spec/SKILL.md into sections by heading.
+function specSection(re) {
+  const lines = read('skills/spec/SKILL.md').split('\n');
+  const start = lines.findIndex((l) => /^#{1,6}\s/.test(l) && re.test(l));
+  if (start < 0) return '';
+  const level = lines[start].match(/^#+/)[0].length;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    const m = lines[i].match(/^(#+)\s/);
+    if (m && m[1].length <= level) { end = i; break; }
+  }
+  return lines.slice(start, end).join('\n');
+}
+const epicModeText = () => specSection(/epic mode/i);
+const fileModeText = () => specSection(/`?--file`? mode/i);
+const finalMessageText = () => specSection(/final message/i);
+
+// T7.1
+test('test_t7_1_epic_template_sections', () => {
+  const text = read('skills/spec/templates/epic.md');
+  assert.match(text, /Goal/);
+  assert.match(text, /Design/);
+  assert.match(text, /## Decisions/);
+  const header = text.split('\n').find((l) => /^\|/.test(l) && /risk/i.test(l) && /depends[ -]?on/i.test(l));
+  assert.ok(header, 'Tasks table header has risk and depends-on columns');
+});
+
+// T7.2
+test('test_t7_2_epic_mode_titles_and_epic_line', () => {
+  const skill = read('skills/spec/SKILL.md');
+  assert.ok(skill.includes('[<slug>]'));
+  assert.ok(skill.includes('T<n>:'));
+  assert.ok(skill.includes('type:epic'));
+  const issue = read('skills/spec/templates/issue.md');
+  assert.ok(issue.includes('Epic: #'));
+  assert.match(issue, /spec/i);
+  assert.match(issue, /\[[^\]]*spec[^\]]*\]\(/i, 'issue.md has the spec link variant');
+  assert.ok(issue.includes('Depends on #'));
+});
+
+// T7.3
+test('test_t7_3_sub_issue_labels_no_ready', () => {
+  const epic = epicModeText();
+  assert.ok(epic, 'SKILL.md has an Epic mode section');
+  for (const k of ['labels.riskLow', 'labels.riskHigh', 'labels.e2e', 'type:']) {
+    assert.ok(epic.includes(k), `epic mode mentions ${k}`);
+  }
+  assert.ok(!epic.includes('labels.ready'), 'epic mode does not mention labels.ready');
+  assert.ok(finalMessageText().includes('labels.ready'), 'final message mentions labels.ready');
+});
+
+// T7.4
+test('test_t7_4_links_with_sub_issue_write', () => {
+  const skill = read('skills/spec/SKILL.md');
+  assert.match(skill, /sub_issue_write/);
+  assert.match(skill, /\badd\b/);
+});
+
+// T7.5
+test('test_t7_5_size_check_before_create', () => {
+  const epic = epicModeText();
+  assert.ok(epic, 'SKILL.md has an Epic mode section');
+  assert.ok(epic.includes('65,000'));
+  assert.match(epic, /\blength\b/);
+  assert.ok(epic.includes('--file'));
+  const check = epic.indexOf('65,000');
+  const create = epic.search(/(?<!sub_)issue_write/);
+  assert.ok(create >= 0, 'epic mode has a create step using issue_write');
+  assert.ok(check < create, 'size check comes before the create step');
+});
+
+// T7.6
+test('test_t7_6_file_mode_keeps_290_steps', () => {
+  const text = fileModeText();
+  assert.ok(text, 'SKILL.md has a --file mode section');
+  assert.match(text, /Gate 1/);
+  assert.match(text, /spec PR/i);
+  assert.ok(text.includes('labels.ready'));
+});
+
+// T7.7
+test('test_t7_7_final_message_ready', () => {
+  const text = finalMessageText();
+  assert.ok(text, 'SKILL.md has a Final message step');
+  assert.ok(text.includes('labels.ready'));
+});
