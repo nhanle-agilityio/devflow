@@ -217,3 +217,16 @@ test('test_t2_11_docs_describe_effective_list', () => {
   }
   assert.ok(changelogEntry(53), 'CHANGELOG has an entry citing (#53)');
 });
+
+// T3.5 (#54)
+test('test_t3_5_docs_describe_init_prompt', () => {
+  for (const f of ['README.md', 'DESIGN.md', 'CHANGELOG.md']) {
+    const text = read(f);
+    assert.match(text, /review\.github/, `${f} mentions review.github`);
+    assert.match(text, /--upgrade/, `${f} mentions --upgrade`);
+  }
+  const entry = changelogEntry(54);
+  assert.ok(entry, 'CHANGELOG has an entry citing (#54)');
+  assert.match(entry, /review\.github/);
+  assert.match(entry, /--upgrade/);
+});
