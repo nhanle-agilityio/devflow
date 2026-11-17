@@ -99,6 +99,18 @@
         "method": { "enum": ["merge"], "default": "merge", "description": "Merge commits are required for stacked PRs." }
       }
     },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "GitHub review settings.",
+      "properties": {
+        "github": {
+          "type": "boolean",
+          "default": false,
+          "description": "True runs the GitHub review workflow (status devflow/review, claude-code-action) on pull requests. False (default): the workflow makes no Claude call and creates no status; the engine's local review (devflow:reviewer) still runs. The workflow reads this from the default-branch or baseBranch copy of the config, never the PR head."
+        }
+      }
+    },
     "testing": {
       "type": "object",
       "additionalProperties": false,
