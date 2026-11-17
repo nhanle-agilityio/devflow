@@ -230,3 +230,13 @@ test('test_t3_5_docs_describe_init_prompt', () => {
   assert.match(entry, /review\.github/);
   assert.match(entry, /--upgrade/);
 });
+
+// T12.7
+test('test_t12_7_docs_describe_cleanup', () => {
+  for (const f of ['README.md', 'DESIGN.md', 'CHANGELOG.md']) {
+    const text = read(f);
+    assert.match(text, /--fix/, `${f} mentions --fix`);
+    assert.match(text, /merged/, `${f} mentions merged`);
+  }
+  assert.ok(changelogEntry(63), 'CHANGELOG has an entry citing (#63)');
+});
