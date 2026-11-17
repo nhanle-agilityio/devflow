@@ -1173,7 +1173,7 @@ Instructions:
 - Commit with Conventional Commits in English, scope "${scopeFor(issue)}", staging files by name. Never rewrite existing commits. Do not push.
 - If you cannot fix it without a decision the spec does not make, return status "blocked" with blockedReason. ${DECISIONS_NOTE}
 When a problem says an out-of-scope item is required by the acceptance criteria, implement it (test first) and copy that item exactly into "outOfScopeDone".
-Return the same structure as the implement stage; "commits" lists only the commits you made now. ${src.kind === 'epic' ? `In "specRead" put "epic #${src.n}" and in "epicRead" whether you read it: ${epicStep(src.n, EPIC_MCP)}` : 'In "specRead" put the spec path if you read the spec (for example with \\`git show ${baseRef}:<path>\\`), otherwise "none".'}`
+Return the same structure as the implement stage; "commits" lists only the commits you made now. ${src.kind === 'epic' ? `In "specRead" put "epic #${src.n}" and in "epicRead" whether you read it: ${epicStep(src.n, EPIC_MCP)}` : `In "specRead" put the spec path if you read the spec (for example with \`git show ${baseRef}:<path>\`), otherwise "none".`}`
 }
 
 function verifyPrompt(issue, branch, impl) {
