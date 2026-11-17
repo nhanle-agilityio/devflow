@@ -2,6 +2,11 @@
 
 All notable changes to devflow. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Config key `review.github` (boolean, default `false`): the GitHub review workflow (`devflow-review.yml` and the `claude-code-review.yml` template) starts with a `flag` step that reads `.claude/devflow.json` through the API (the default-branch copy to learn `baseBranch`, then the copy at `baseBranch`, which wins; never the PR head) and runs every other step only when `review.github` is `true`. With the flag off the job still succeeds, makes no Claude call, creates no `devflow/review` status (not even pending) and writes `devflow review is off (review.github is not true)` to the step summary; when no copy can be read it is off with a warning. With the flag on every step runs under the 2.9.0 conditions. Inputs, secrets and permissions are unchanged. Accepted trade-off: with the flag off no independent party confirms the local review (`devflow:reviewer`) (#52)
+
 ## [2.9.0] - 2026-11-16
 
 Wave 1 reliability fixes from the 2.7.0 review: claim and cleanup edge cases, a quieter and safer merge gate, trusted-author handling in sync and answer, stages that read the issue from GitHub, and init and doctor checks for the GitHub MCP server.

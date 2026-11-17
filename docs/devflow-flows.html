@@ -1721,6 +1721,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     mgReset();
     mgR.start(async (sleep) => {
       mgLog('run 1', t('workflow_run: "Claude Code Review" vừa xong → cổng thức dậy, đọc devflow.json ở base, duyệt PR cũ nhất trước', 'workflow_run: "Claude Code Review" finished → the gate wakes, reads devflow.json at base, walks PRs oldest first'), '--haiku');
+      mgLog('review', t('review.github (mặc định false): workflow review chỉ chạy khi cờ là true ở devflow.json trên baseBranch; tắt thì không gọi Claude, không tạo status devflow/review, và review local (devflow:reviewer) là review duy nhất', 'review.github (default false): the review workflow runs only when the flag is true in devflow.json on baseBranch; when off it makes no Claude call and no devflow/review status, and the local review (devflow:reviewer) is the only review'), '--haiku');
       await sleep(900);
       await mgWalk(sleep, 40, -1);
       const after = $$('#mg-after .pf');

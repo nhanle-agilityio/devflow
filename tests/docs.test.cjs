@@ -171,3 +171,21 @@ test('test_t6_13_docs_describe_stages_reading_the_issue_from_github', () => {
   assert.match(entry, readFrom);
   assert.match(entry, parsing);
 });
+
+// T1.12 (wave2-lighter-flow, issue #52)
+test('test_t1_12_docs_describe_review_flag', () => {
+  for (const f of ['README.md', 'DESIGN.md', 'docs/devflow-flows.html', 'CHANGELOG.md']) {
+    assert.match(read(f), /review\.github/, `${f} mentions review.github`);
+  }
+  const design = read('DESIGN.md');
+  assert.ok(
+    design.split('\n').some((l) => /review\.github/.test(l) && /devflow:reviewer/.test(l)) ||
+      /review\.github[\s\S]{0,1500}devflow:reviewer|devflow:reviewer[\s\S]{0,1500}review\.github/.test(design),
+    'DESIGN.md states the trade-off with devflow:reviewer',
+  );
+  const log = read('CHANGELOG.md');
+  const unreleased = log.slice(log.indexOf('## [Unreleased]'), log.indexOf('\n## [', log.indexOf('## [Unreleased]') + 1));
+  assert.ok(log.includes('## [Unreleased]'), 'CHANGELOG has [Unreleased]');
+  assert.match(unreleased, /\(#52\)/);
+  assert.match(unreleased, /review\.github/);
+});
