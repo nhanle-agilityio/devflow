@@ -71,6 +71,8 @@ Today: `/devflow:spec` writes `docs/specs/<date>-<slug>.md`, opens a spec PR, wa
 | CHANGELOG | Each task adds its entry under `## [Unreleased]` citing its issue number; the release task moves them to `3.0.0` and writes the upgrade note. | Keep a Changelog. |
 | Tests for prompt and skill text | Deterministic code (gate script, engine logic, `bin/`) gets behaviour tests. Skill and prompt text gets only contract-point asserts a later stage depends on (marker strings, the `Epic:` line, flag names), never wording. | Brief constraint. |
 
+- 2026-11-17 (#52, Q1): QA commit e669dc2 changed the fixture in 'minimalConfig does not change its input' (tests/setup.test.cjs) from `checks: []` to a non-empty `checks`, which the issue does not ask for; and should 33d5b4a be split into feat(#52) and docs(#52) commits? → Restore the fixture to `checks: []` with a new commit `test(#52)`; if that test then fails, report it as a finding and do not adapt the fixture. Do not rewrite or split 33d5b4a: no history rewrite and no force push; the docs stay in that commit.
+
 ## Design
 
 ### Config
