@@ -276,3 +276,58 @@ test('test_t3_4_upgrade_offers_review_flag', () => {
   assert.match(up, /claude-code-review\.yml/);
   assert.match(up, /after a yes/i);
 });
+
+// ---- T12: doctor cleans up branches of merged devflow PRs ----
+const doctorText63 = () => read('skills/doctor/SKILL.md');
+const doctorCheck5 = () => section(doctorText63(), /^5\. /m, /^6\. /m);
+
+// T12.1
+test('test_t12_1_doctor_lists_merged_leftovers', () => {
+  const c5 = doctorCheck5();
+  assert.match(c5, /merged_at/);
+  assert.match(c5, /devflow/);
+  assert.match(c5, /worktree/i);
+  assert.match(c5, /local branch/i);
+  assert.match(c5, /remote/i);
+});
+
+// T12.2
+test('test_t12_2_doctor_rechecks_before_delete', () => {
+  const c5 = doctorCheck5();
+  assert.match(c5, /baseBranch/);
+  assert.match(c5, /protectedBranches/);
+  assert.match(c5, /open PR/i);
+  assert.match(c5, /\bbase\b/i);
+  assert.match(c5, /\bhead\b/i);
+  assert.match(c5, /current branch/i);
+  assert.match(c5, /current directory|directory doctor runs in/i);
+});
+
+// T12.3
+test('test_t12_3_doctor_safe_delete_commands', () => {
+  const text = doctorText63();
+  assert.match(text, /git worktree remove/);
+  assert.match(text, /git branch -d/);
+  assert.match(text, /git branch -D <branch>/);
+  assert.match(text, /git push <remote> --delete/);
+  assert.match(text, /github\.remote/);
+  assert.doesNotMatch(text, /git worktree remove[^\n`]*--force/);
+});
+
+// T12.4
+test('test_t12_4_closed_unmerged_per_branch_yes', () => {
+  const c5 = doctorCheck5();
+  assert.match(c5, /closed/i);
+  assert.match(c5, /per branch|per-branch|each branch|every branch/i);
+  assert.match(c5, /\byes\b/i);
+});
+
+// T12.5
+test('test_t12_5_auto_delete_setting_reported', () => {
+  const text = doctorText63();
+  assert.match(text, /delete_branch_on_merge/);
+  assert.match(text, /Automatically delete head branches/);
+  assert.match(text, /\bwarn\b/);
+  assert.match(text, /\bunknown\b/);
+  assert.match(read('README.md'), /Automatically delete head branches/);
+});
