@@ -1508,3 +1508,106 @@ test('test_t4_10_result_has_path', async () => {
   assert.equal(rep[1].status, 'pr');
   assert.equal(rep[1].path, 'full');
 });
+
+// ---- T6 (wave2 #57): the epic as the spec source ----
+const EPIC_BODY = 'Context\nEpic: #42\n\n## Acceptance criteria\n- [ ] a\n';
+const EPIC_READ = { specRead: 'epic #42', epicRead: true };
+const EPIC_OPTS = { body: EPIC_BODY, planOut: EPIC_READ, devOut: EPIC_READ, qaOut: EPIC_READ };
+const SPEC_FILE = /docs\/specs\/[\w.-]+\.md/;
+
+// T6.1
+test('test_t6_1_epic_for_basic', async () => {
+  const { epicFor } = await helpers();
+  assert.equal(epicFor({ body: 'Epic: #42' }), 42);
+  assert.equal(epicFor({ body: 'no epic here' }), 0);
+});
+
+// T6.2
+test('test_t6_2_epic_for_anchored_first_match', async () => {
+  const { epicFor } = await helpers();
+  assert.equal(epicFor({ body: 'See Epic: #42' }), 0);
+  assert.equal(epicFor({ body: 'Epic: #7\nEpic: #9' }), 7);
+  assert.equal(epicFor({ body: 'Context\nEpic: #12\n' }), 12);
+});
+
+// T6.3
+test('test_t6_3_prompts_use_epic_source', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1], ghCli: true }, { ...QA, ...EPIC_OPTS, checkFirstFails: true });
+  assert.equal(rep[0].status, 'pr');
+  for (const l of ['plan', 'implement', 'qa', 'fix', 'review']) {
+    const p = prompt(calls, l);
+    assert.ok(p, `${l} prompt exists`);
+    assert.match(p, /#42/, `${l} mentions the epic`);
+    assert.match(p, /## Decisions/, `${l} says the issue's Decisions win`);
+    assert.doesNotMatch(p, SPEC_FILE, `${l} names no spec path`);
+  }
+  for (const l of ['plan', 'implement', 'qa', 'fix']) assert.match(prompt(calls, l), /issue_read/, `${l} reads the epic with issue_read`);
+  assert.match(prompt(calls, 'review'), /gh issue view 42/);
+});
+
+// T6.4
+test('test_t6_4_spec_read_whole_token', async () => {
+  let r = await run({ ...BASE, issues: [1] }, { ...EPIC_OPTS, planOut: { specRead: '#420', epicRead: true } });
+  assert.equal(r.rep[0].status, 'blocked');
+  assert.match(r.rep[0].reason, /^Plan/);
+  r = await run({ ...BASE, issues: [1] }, { ...EPIC_OPTS, planOut: { specRead: 'epic #42.', epicRead: true } });
+  assert.equal(r.rep[0].status, 'pr');
+});
+
+// T6.5
+test('test_t6_5_implement_missing_epic_read_fix_then_block', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { ...EPIC_OPTS, devOut: { specRead: '', epicRead: true } });
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(rep[0].reason, /^Implement/);
+  assert.equal(calls.filter((c) => c.l.startsWith('fix')).length, 1, 'exactly one corrective fix');
+});
+
+// T6.6
+test('test_t6_6_unreadable_epic_blocks', async () => {
+  const r = await run({ ...BASE, issues: [1] }, { ...EPIC_OPTS, planOut: { specRead: 'none', epicRead: false } });
+  assert.equal(r.rep[0].status, 'blocked');
+  assert.match(r.rep[0].reason, /epic #42 could not be read/);
+  const ok = await run({ ...BASE, issues: [1], ghCli: true }, { ...QA, ...EPIC_OPTS, checkFirstFails: true });
+  for (const l of ['plan', 'implement', 'qa', 'fix', 'review']) {
+    const c = ok.calls.find((x) => x.l.startsWith(l));
+    assert.ok(c && c.schema, `${l} has a schema`);
+    assert.equal(c.schema.properties.epicRead.type, 'boolean', `${l} schema lists epicRead`);
+  }
+  // An unreadable epic reported by a later stage blocks too.
+  const d = await run({ ...BASE, issues: [1] }, { ...EPIC_OPTS, devOut: { specRead: 'epic #42', epicRead: false } });
+  assert.equal(d.rep[0].status, 'blocked');
+  assert.match(d.rep[0].reason, /epic #42 could not be read/);
+});
+
+// T6.7
+test('test_t6_7_spec_path_wins_over_epic', async () => {
+  const body = 'Spec: docs/specs/2026-11-17-x.md\nEpic: #42\n';
+  const specOpts = { body, claimOut: { specPath: '' }, planOut: { specRead: 'docs/specs/2026-11-17-x.md' }, devOut: { specRead: 'docs/specs/2026-11-17-x.md' } };
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, specOpts);
+  assert.equal(rep[0].status, 'pr');
+  for (const l of ['plan', 'implement']) {
+    assert.match(prompt(calls, l), /docs\/specs\/2026-11-17-x\.md/, `${l} references the spec file`);
+    assert.doesNotMatch(prompt(calls, l), /epicRead|read epic/i, `${l} does not read the epic`);
+  }
+  // specRead is checked against the path, not the epic number.
+  const r = await run({ ...BASE, issues: [1] }, { ...specOpts, planOut: { specRead: 'epic #42' } });
+  assert.equal(r.rep[0].status, 'blocked');
+  assert.match(r.rep[0].reason, /^Plan/);
+});
+
+// T6.8
+test('test_t6_8_issue_alone_source', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { body: 'Just an issue\n', claimOut: { specPath: '' }, planOut: { specRead: 'none' }, devOut: { specRead: 'none' } });
+  assert.equal(rep[0].status, 'pr');
+  for (const l of ['plan', 'implement']) {
+    assert.doesNotMatch(prompt(calls, l), SPEC_FILE, `${l} asks no spec read`);
+    assert.doesNotMatch(prompt(calls, l), /epicRead|read epic/i, `${l} asks no epic read`);
+  }
+});
+
+// T6.9
+test('test_t6_9_reviewer_reads_epic', () => {
+  const text = fs.readFileSync(path.join(__dirname, '..', 'agents', 'reviewer.md'), 'utf8');
+  assert.match(text, /Epic:/);
+  assert.match(text, /gh issue view/);
+});

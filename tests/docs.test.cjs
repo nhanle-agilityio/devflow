@@ -258,3 +258,11 @@ test('test_t4_11_docs_describe_short_path', () => {
   assert.ok(entry, 'CHANGELOG has an entry citing (#55)');
   assert.match(entry, /short path/i);
 });
+
+// T6.10
+test('test_t6_10_docs_describe_source_rule', () => {
+  for (const f of ['DESIGN.md', 'README.md', 'CHANGELOG.md']) {
+    assert.match(read(f), /Epic: #/, `${f} mentions the Epic: line`);
+  }
+  assert.ok(changelogEntry(57), 'CHANGELOG has an entry citing (#57)');
+});
