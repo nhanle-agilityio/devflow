@@ -403,6 +403,14 @@ test('test_t7_5_size_check_before_create', () => {
   assert.ok(check < create, 'size check comes before the create step');
 });
 
+// T7.9 (decision Q1: reused epic's Tasks table is the only edit to a reused issue)
+test('test_t7_9_reuse_step_excepts_epic_tasks_table', () => {
+  const epic = epicModeText();
+  const step = epic.split('\n').find((l) => /^1\.\s.*exact match/.test(l)) || '';
+  assert.ok(step, 'reuse step found');
+  assert.match(step, /except[^.]*Tasks table/i);
+});
+
 // T7.6
 test('test_t7_6_file_mode_keeps_290_steps', () => {
   const text = fileModeText();
