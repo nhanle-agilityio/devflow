@@ -6,11 +6,11 @@ Never write the at-sign handle of the review bot into the body.
 
 ## Context
 
-<!-- Use exactly one of the two lines below. -->
+<!-- Use exactly one of the two lines below. Epic mode (default): keep the first line as it is, starting at column 0, and delete the second. With --file: delete the first and keep the second. -->
 
-Epic mode (default): `Epic: #<epic>`
+Epic: #<epic>
 
-With `--file`: Part of the spec [<spec title>](<link to the spec file on the base branch>) (task T<n>). Spec PR: #<pr>.
+Part of the spec [<spec title>](<link to the spec file on the base branch>) (task T<n>). Spec PR: #<pr>.
 
 <!-- Two or three sentences: what this task delivers and why, in the spec's words. -->
 
