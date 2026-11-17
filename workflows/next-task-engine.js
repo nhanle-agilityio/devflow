@@ -19,7 +19,7 @@ export const meta = {
 
 // Test hook: the pure helpers below are function declarations (hoisted), so tests get them without a run.
 // They take every input as a parameter and never touch the run state.
-if (args && args.exports === true) return { parseDiff, scanWeakenedChecks, checkConfigGlobs, globToRegExp, priorityRank, orderIssues, isFixIssue }
+if (args && args.exports === true) return { parseDiff, scanWeakenedChecks, checkConfigGlobs, globToRegExp, priorityRank, orderIssues, isFixIssue, pathFor, hasHttpOrE2eRow }
 
 // Run through /devflow:next-task only: it does the preflight and builds args. Calling this workflow
 // directly (e.g. /devflow:next-task-engine) arrives without args, so stop with a clear message.
@@ -956,6 +956,17 @@ ${checks}
 If you cannot resolve a conflict or the checks cannot be made to pass without a decision, run \`git merge --abort\` if a merge is in progress, leave nothing half-done, and return ok=false with the conflicting files and the question in problem. Do not push and do not touch GitHub labels.`
 }
 
+// The path an issue takes: 'short' for risk:low without risk:high, needs-e2e or an http/e2e Test cases row.
+// Takes the devflow config for the label names, so it works before the run's `labels` exist.
+function pathFor(issue, config) {
+  const l = Object.assign({ riskLow: 'risk:low', riskHigh: 'risk:high', e2e: 'needs-e2e' }, config && config.labels)
+  const names = (issue && issue.labels) || []
+  if (names.indexOf(l.riskLow) === -1 || names.indexOf(l.riskHigh) !== -1 || names.indexOf(l.e2e) !== -1) return 'full'
+  return hasHttpOrE2eRow(issue && issue.body) ? 'full' : 'short'
+}
+
+const SHORT_PLAN = 'none (short path: no plan stage)'
+
 function implementPrompt(issue, branch, planText, own) {
   const parents = parentsOf(issue)
   const parentRef = parentRefFor(issue)
@@ -976,8 +987,8 @@ ${cfgJson}
 
 ${issueBlock(issue)}
 
-Plan (already posted on the issue). Follow this plan; if you must deviate, say why in "assumptions":
-${planText}
+${planText === SHORT_PLAN ? `There is no plan: this issue takes the short path (risk:low), so no plan stage ran and no plan was posted. Work from the issue and the spec: ${planText}.` : `Plan (already posted on the issue). Follow this plan; if you must deviate, say why in "assumptions":
+${planText}`}
 ${own ? devModeBlock(issue, own) : `
 Instructions:
 1. ${step1} ${DECISIONS_NOTE}
@@ -1222,7 +1233,7 @@ Data:
 - Commits: ${JSON.stringify(state.commits)}
 - Files changed: ${JSON.stringify(state.filesChanged)}
 - Check result: all configured checks passed (${cfg.checks.map((c) => c.name).join(', ')})
-- Verification: ${state.verification ? JSON.stringify(state.verification) : 'Not run (not required for this issue)'}
+- Verification: ${state.verification ? JSON.stringify(state.verification) : state.verify || 'Not run (not required for this issue)'}
 - Manual checks (put them in the Tests section as a table: row, result, evidence): ${JSON.stringify(state.manualChecks)}
 - Review notes (suggestions that were NOT applied): ${JSON.stringify(state.suggestions)}
 - Assumptions: ${JSON.stringify(state.assumptions)}
@@ -1367,7 +1378,8 @@ async function runIssue(issue) {
   issue.notes = notes
   issue.claimWon = false
   issue.inCleanup = false
-  const done = (r) => Object.assign(r, { notes })
+  let pathKind = ''
+  const done = (r) => Object.assign(r, pathKind ? { path: pathKind } : {}, { notes })
   // A stage that could not reach GitHub reports it in `problem`; the run stops as at Claim.
   const down = (r) => !!(r && r.problem && mcpDown(r.problem))
 
@@ -1445,6 +1457,8 @@ async function runIssue(issue) {
     }
     issue.introducedBy = claim.introducedBy === true
   }
+  // The path is decided once, from the labels Claim read from GitHub.
+  pathKind = pathFor(issue, cfg)
   try {
     // Branch
     const made = await agent(branchPrompt(issue), {
@@ -1486,31 +1500,36 @@ async function runIssue(issue) {
     }
 
     // Plan: posted on the issue; nobody approves it. Open questions block the issue before any code is written.
-    const specPathForPlan = specPathFor(issue)
-    const plan = await agent(planPrompt(issue, branch), {
-      label: `plan #${issue.number}`,
-      phase: 'Implement',
-      schema: PLAN_SCHEMA,
-      model: 'sonnet',
-    })
-    if (!plan) return block('Plan', 'The plan agent died.')
-    if (down(plan)) return block('Plan', plan.problem)
-    // The plan read the acceptance criteria from GitHub; the Select copy's count is a cross-check only.
-    if (!Number.isInteger(plan.acceptanceCriteria)) {
-      notes.push('plan did not report the acceptance criteria count')
+    const specPathForPlan = pathKind === 'short' ? '' : specPathFor(issue)
+    let plan
+    if (pathKind === 'short') {
+      plan = { plan: SHORT_PLAN, qaFiles: [], devFiles: [] }
     } else {
-      const sel = countAcceptance(issue.body)
-      if (plan.acceptanceCriteria !== sel) {
-        log(`#${issue.number}: acceptance criteria: plan read ${plan.acceptanceCriteria}, selection had ${sel}`)
-        notes.push(`acceptance criteria: plan read ${plan.acceptanceCriteria}, selection had ${sel}`)
+      plan = await agent(planPrompt(issue, branch), {
+        label: `plan #${issue.number}`,
+        phase: 'Implement',
+        schema: PLAN_SCHEMA,
+        model: 'sonnet',
+      })
+      if (!plan) return block('Plan', 'The plan agent died.')
+      if (down(plan)) return block('Plan', plan.problem)
+      // The plan read the acceptance criteria from GitHub; the Select copy's count is a cross-check only.
+      if (!Number.isInteger(plan.acceptanceCriteria)) {
+        notes.push('plan did not report the acceptance criteria count')
+      } else {
+        const sel = countAcceptance(issue.body)
+        if (plan.acceptanceCriteria !== sel) {
+          log(`#${issue.number}: acceptance criteria: plan read ${plan.acceptanceCriteria}, selection had ${sel}`)
+          notes.push(`acceptance criteria: plan read ${plan.acceptanceCriteria}, selection had ${sel}`)
+        }
       }
+      state.httpOrE2eRows = plan.httpOrE2eRows === true
+      if (plan.status === 'blocked') {
+        const qs = plan.questions || []
+        return block('Plan', qs.join('; ') || 'The plan agent reported blocked without questions.', qs)
+      }
+      if (specPathForPlan && !readSpec(plan, specPathForPlan)) return block('Plan', `Plan did not read the spec ${specPathForPlan}`)
     }
-    state.httpOrE2eRows = plan.httpOrE2eRows === true
-    if (plan.status === 'blocked') {
-      const qs = plan.questions || []
-      return block('Plan', qs.join('; ') || 'The plan agent reported blocked without questions.', qs)
-    }
-    if (specPathForPlan && !readSpec(plan, specPathForPlan)) return block('Plan', `Plan did not read the spec ${specPathForPlan}`)
 
     const own = { qaFiles: plan.qaFiles || [], devFiles: plan.devFiles || [] }
     const shared = overlap(own.qaFiles, own.devFiles)
@@ -1627,7 +1646,9 @@ async function runIssue(issue) {
     const needsVerify =
       verifyCfg.modes.length > 0 &&
       (issue.labels.indexOf(labels.e2e) !== -1 || state.touchesUi || hasHttpOrE2eRow(issue.body) || state.httpOrE2eRows === true)
-    if (needsVerify) {
+    if (needsVerify && pathKind === 'short') state.verify = 'skipped (short path)'
+    else if (pathKind === 'short') state.verify = 'not needed'
+    if (needsVerify && pathKind !== 'short') {
       for (let round = 0; round <= 1; round++) {
         phase('Verify')
         const v = await agent(verifyPrompt(issue, branch, state), {
