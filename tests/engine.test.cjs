@@ -1397,3 +1397,114 @@ test('test_t6_21_default_agent_fallback_sticks_and_fails_closed', async () => {
   assert.match(r.rep[0].reason, /Review: the review could not read the issue/);
   assert.ok(has(r.calls, 'blocked'));
 });
+
+// ---------------------------------------------------------------------------------------------
+// T4 (#55): short path for risk:low issues
+// ---------------------------------------------------------------------------------------------
+
+const UNIT_ROW = '| T1.1 | T1 | c | happy | g | unit | must |';
+const SHORT_BODY = 'spec docs/specs/a.md\n| Id | Task | Criterion | Case | Given / When / Then | Level | Priority |\n| --- | --- | --- | --- | --- | --- | --- |\n' + UNIT_ROW;
+const SHORT_OPTS = { labels: ['risk:low'], body: SHORT_BODY };
+const SHORT_NOTE = 'none (short path: no plan stage)';
+
+// T4.1
+test('test_t4_1_short_path_skips_plan', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, SHORT_OPTS);
+  assert.equal(rep[0].status, 'pr');
+  assert.ok(!has(calls, 'plan'), 'no plan agent');
+  assert.equal(calls.filter((c) => c.l.startsWith('implement')).length, 1);
+  const p = prompt(calls, 'implement');
+  assert.ok(p.includes(SHORT_NOTE));
+  assert.match(p, /failing test/i);
+});
+
+// T4.2
+test('test_t4_2_short_path_no_qa_with_parallel_qa', async () => {
+  const { rep, calls } = await run({ ...BASE, config: { ...CFG, nextTask: { parallelQa: true } }, issues: [1] }, { ...QA, ...SHORT_OPTS });
+  assert.equal(rep[0].status, 'pr');
+  assert.ok(!has(calls, 'qa'), 'no qa agent');
+  assert.ok(!has(calls, 'commit'), 'no commit agent');
+  assert.ok(!has(calls, 'plan'));
+  assert.equal(calls.filter((c) => c.l.startsWith('implement')).length, 1);
+});
+
+// T4.3
+test('test_t4_3_short_path_never_verifies', async () => {
+  let r = await run({ ...BASE, config: VERIFY_CFG, issues: [1] }, { ...SHORT_OPTS, devOut: { touchesUi: true } });
+  assert.equal(r.rep[0].status, 'pr');
+  assert.ok(!has(r.calls, 'verify'), 'no verify agent');
+  assert.match(prompt(r.calls, 'ship'), /skipped \(short path\)/);
+  r = await run({ ...BASE, config: VERIFY_CFG, issues: [1] }, { ...SHORT_OPTS, devOut: { touchesUi: false } });
+  assert.ok(!has(r.calls, 'verify'));
+  assert.doesNotMatch(prompt(r.calls, 'ship'), /skipped \(short path\)/);
+  assert.match(prompt(r.calls, 'ship'), /Verification: not needed/);
+});
+
+// T4.4
+test('test_t4_4_short_path_keeps_check_review_risk_ship', async () => {
+  let seen = 0;
+  const review = () => (seen++ === 0 ? { verdict: 'changes', findings: [{ severity: 'critical', file: 'src/x.py', line: 1, problem: 'p', fix: 'f' }] } : { verdict: 'pass', findings: [] });
+  const { rep, calls } = await run({ ...BASE, config: { ...CFG, nextTask: { maxReviewRounds: 2 } }, issues: [1] }, { ...SHORT_OPTS, checkFirstFails: true, review, diff: '' });
+  assert.equal(rep[0].status, 'pr');
+  const seq = labels(calls).filter((l) => !['select', 'claim', 'branch', 'restore'].includes(l));
+  assert.deepEqual(seq, ['implement', 'check', 'fix', 'check', 'scan', 'review', 'fix', 'check', 'scan', 'review', 'ship']);
+});
+
+// T4.5
+test('test_t4_5_short_path_review_round_limit', async () => {
+  const review = { verdict: 'changes', findings: [{ severity: 'critical', file: 'src/x.py', line: 1, problem: 'p', fix: 'f' }] };
+  const { rep, calls } = await run({ ...BASE, config: { ...CFG, nextTask: { maxReviewRounds: 2 } }, issues: [1] }, { ...SHORT_OPTS, review, diff: '' });
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(rep[0].reason, /^Review:/);
+  assert.ok(!has(calls, 'ship'));
+  assert.match(rep[0].reason, /after 2 fix round/);
+});
+
+// T4.6
+test('test_t4_6_high_label_full_path', async () => {
+  for (const lbls of [['risk:high'], ['risk:low', 'risk:high']]) {
+    const { rep, calls } = await run({ ...BASE, issues: [1] }, { ...SHORT_OPTS, labels: lbls });
+    assert.ok(has(calls, 'plan'), lbls.join());
+    assert.equal(rep[0].path, 'full', lbls.join());
+  }
+});
+
+// T4.7
+test('test_t4_7_no_risk_or_e2e_full_path', async () => {
+  for (const lbls of [[], ['risk:low', 'needs-e2e']]) {
+    const { rep, calls } = await run({ ...BASE, config: VERIFY_CFG, issues: [1] }, { ...SHORT_OPTS, labels: lbls });
+    assert.ok(has(calls, 'plan'), lbls.join());
+    assert.equal(rep[0].path, 'full', lbls.join());
+  }
+});
+
+// T4.8
+test('test_t4_8_http_or_e2e_row_full_path', async () => {
+  const { pathFor } = await helpers();
+  const row = (level) => `| Id | Task | Criterion | Case | Given / When / Then | Level | Priority |\n| --- | --- | --- | --- | --- | --- | --- |\n| T1.1 | T1 | c | happy | g | ${level} | must |`;
+  const mk = (level) => ({ number: 1, labels: ['risk:low'], body: row(level) });
+  assert.equal(pathFor(mk('http'), CFG), 'full');
+  assert.equal(pathFor(mk('e2e'), CFG), 'full');
+  assert.equal(pathFor(mk('unit'), CFG), 'short');
+});
+
+// T4.9
+test('test_t4_9_escalated_short_path_no_verify', async () => {
+  const cfg = { ...VERIFY_CFG, risk: { highPaths: ['.github/**'] } };
+  const { rep, calls } = await run({ ...BASE, config: cfg, issues: [1] }, { ...SHORT_OPTS, devOut: { touchesUi: true, filesChanged: ['.github/workflows/x.yml'] } });
+  assert.equal(rep[0].status, 'pr');
+  assert.equal(rep[0].risk, 'high');
+  assert.ok(!has(calls, 'verify'), 'no verify agent');
+  const ship = prompt(calls, 'ship');
+  assert.match(ship, /Risk: high/);
+  assert.match(ship, /skipped \(short path\)/);
+});
+
+// T4.10
+test('test_t4_10_result_has_path', async () => {
+  const { rep } = await run({ ...BASE, issues: [1, 2] }, { ...SHORT_OPTS, selectLabels: (n) => (n === 1 ? ['risk:low'] : ['risk:high']) });
+  assert.equal(rep[0].status, 'pr');
+  assert.equal(rep[0].path, 'short');
+  assert.equal(rep[1].status, 'pr');
+  assert.equal(rep[1].path, 'full');
+});

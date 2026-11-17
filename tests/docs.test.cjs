@@ -240,3 +240,21 @@ test('test_t12_7_docs_describe_cleanup', () => {
   }
   assert.ok(changelogEntry(63), 'CHANGELOG has an entry citing (#63)');
 });
+
+// T4.11
+test('test_t4_11_docs_describe_short_path', () => {
+  for (const f of ['README.md', 'DESIGN.md']) {
+    const text = read(f);
+    assert.match(text, /short path/i, `${f} mentions the short path`);
+    assert.match(text, /risk:low/, `${f} mentions risk:low`);
+  }
+  const flows = read('docs/devflow-flows.html');
+  assert.match(flows, /short path/i, 'flows page (EN) mentions the short path');
+  assert.match(flows, /đường ngắn/i, 'flows page (VI) mentions the short path');
+  assert.match(flows, /risk:low/);
+  const changelog = read('CHANGELOG.md');
+  assert.match(changelog, /risk:low/);
+  const entry = changelogEntry(55);
+  assert.ok(entry, 'CHANGELOG has an entry citing (#55)');
+  assert.match(entry, /short path/i);
+});
