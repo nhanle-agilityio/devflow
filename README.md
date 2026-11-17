@@ -88,7 +88,7 @@ Bugs and gaps that no human has looked at carry `labels.triage` (default `needs-
 
 ### Risk
 
-Each issue and PR carries `labels.riskLow` or `labels.riskHigh`. The spec judges it per task; you approve it by merging the spec PR. `next-task` escalates a PR to high, deterministically, when a changed file matches `risk.highPaths` or a weakened check stays in the diff after review (and also labels the issue high). An issue with no risk label counts as high. The PR body has a `Risk: low|high - reason` line.
+Each issue and PR carries `labels.riskLow` or `labels.riskHigh`. The spec judges it per task; you approve it by setting the ready label on each sub-issue (epic mode) or by merging the spec PR (`--file`). `next-task` escalates a PR to high, deterministically, when a changed file matches `risk.highPaths` or a weakened check stays in the diff after review (and also labels the issue high). An issue with no risk label counts as high. The PR body has a `Risk: low|high - reason` line.
 
 ### Weakened checks and out of scope
 
