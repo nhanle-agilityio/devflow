@@ -1844,7 +1844,7 @@ async function runIssue(issue) {
 
     // Check
     const checked = await checkLoop(issue, branch, state)
-    if (!checked.ok) return block('Check', checked.reason)
+    if (!checked.ok) return block('Check', checked.reason, checked.questions)
 
     // Verify
     const needsVerify =
@@ -1878,7 +1878,7 @@ async function runIssue(issue) {
         const fix = await runFix(issue, branch, state, 'verification against the running app failed', details)
         if (!fix.ok) return block('Verify', fix.reason)
         const again = await checkLoop(issue, branch, state)
-        if (!again.ok) return block('Check', again.reason)
+        if (!again.ok) return block('Check', again.reason, again.questions)
       }
     }
 
@@ -1965,7 +1965,7 @@ async function runIssue(issue) {
       const fix = await fixRound(issue, branch, state, `review found problems (round ${round + 1} of ${nt.maxReviewRounds})`, items)
       if (!fix.ok) return block('Review', fix.reason, fix.questions)
       const again = await checkLoop(issue, branch, state)
-      if (!again.ok) return block('Check', again.reason)
+      if (!again.ok) return block('Check', again.reason, again.questions)
     }
 
     // Risk: label first, then deterministic escalation by touched paths.
