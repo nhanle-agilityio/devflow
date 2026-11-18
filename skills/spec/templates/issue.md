@@ -53,6 +53,12 @@ comment `# T1.2`. If the spec has no Test matrix, write the test plan here as a 
 
 <!-- Notes the table cannot hold (fixtures, data setup), or "None". For behaviour changes the failing test is committed first. -->
 
+## Open questions
+
+<!-- A question the user deferred during the grill that affects this task, one per line, or "None". The human settles it before setting the ready label. -->
+
+None
+
 ## Dependencies
 
 <!-- One line per dependency, or "None". Resolved from spec task ids to issue numbers. -->

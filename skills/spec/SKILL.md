@@ -30,7 +30,8 @@ Follow the steps in order. Announce each by number.
 ## 2. Grill
 
 - Invoke the `grill-me` skill on the idea plus your analysis.
-- Continue until every unknown is decided or explicitly deferred.
+- Continue until no question is open: every unknown is decided or explicitly deferred by the user.
+- No issue is created and no spec PR is opened while a question is open, unless the user defers it. A deferred question is written into an `## Open questions` section of each affected sub-issue. In `--file` mode it also goes into the spec's `Risks and unknowns`, and the issues created after the merge get the same section.
 - If `grill-me` is not available, run the same interview inline: one question at a time, each with your recommended answer.
 
 **Checkpoint:** list the decisions and deferrals. Proceed only when none is open.
@@ -39,20 +40,36 @@ Follow the steps in order. Announce each by number.
 
 Writes no spec file and opens no PR. The grill decisions, design and tasks live in GitHub issues. Task fields are the same as in `--file` mode (stable id `T1..Tn`, title, type, area, depends-on, acceptance criteria as checkable behaviour, files in scope, test plan, needs-e2e, size S or M, risk and hotspots), judged against `risk.highWhen` and `risk.highPaths`; unsure means high.
 
-**E1. Tasks.** Pick a kebab-case `<slug>` (at most 5 words). Draft the epic from `${CLAUDE_SKILL_DIR}/templates/epic.md` (Goal, Design, `## Decisions` with the grill answers, and the Tasks table with risk and reason, depends-on and an empty issue column) and the task list. Split anything bigger than M. Record each task's risk with a one-line reason and its hotspot files (real file paths, as `/devflow:dispatch` uses them).
+### E1. Tasks
 
-**E2. Draft and test matrix (QA).** Fill `${CLAUDE_SKILL_DIR}/templates/spec.md` into a scratchpad file `<slug>.draft.md` from the epic and tasks of E1. It is never committed. Then run the same QA step as F2 below (skipped when `spec.testMatrix` is `false`), giving the QA agent the path of the draft in place of the spec file, and writing the answers and the final rows back into the draft. Put the final rows in each task's Test cases.
+ Pick a kebab-case `<slug>` (at most 5 words). Draft the epic from `${CLAUDE_SKILL_DIR}/templates/epic.md` (Goal, Design, `## Decisions` with the grill answers, and the Tasks table with risk and reason, depends-on and an empty issue column) and the task list. Split anything bigger than M. Record each task's risk with a one-line reason and its hotspot files (real file paths, as `/devflow:dispatch` uses them).
 
-**E3. Build and size check.** Build every body in memory first, from the draft: the epic and one sub-issue per task from `${CLAUDE_SKILL_DIR}/templates/issue.md` (the Context line `Epic: #<epic>`, which must start at column 0 with no other text on the line, acceptance criteria as a checklist, scope, the task's Test cases rows copied as they are, the Risk line with reason, Hotspots, one `Depends on #<n>` line per dependency). Issue numbers are not known yet: fill each with a number at its widest expected width (for example `#99999`). Measure each body with the JavaScript string `length` (not bytes). If any body is longer than 65,000 characters, create nothing, tell the user which body is too long, and tell them to run `/devflow:spec --file` instead; stop.
+### E2. Draft and test matrix (QA)
 
-**E4. Create.** Only after E3 passed. Create with the GitHub MCP `issue_write` tool (method `create`).
-1. For each title, search existing issues (open and closed) for an exact match of the trimmed, case-sensitive title: epic `[<slug>] <title>`, sub-issues `[<slug>] T<n>: <task title>`. Reuse a match as it is: do not edit its body, labels or state (the one exception is a reused epic's Tasks table, which E6 fills with the issue numbers). Create only what is missing, so a re-run after a partial failure makes no duplicates.
+ Fill `${CLAUDE_SKILL_DIR}/templates/spec.md` into a scratchpad file `<slug>.draft.md` from the epic and tasks of E1. It is never committed. Then run the same QA step as F2 below (skipped when `spec.testMatrix` is `false`), giving the QA agent the path of the draft in place of the spec file, and writing the answers and the final rows back into the draft. Put the final rows in each task's Test cases.
+
+### E3. Spec review
+
+Run the spec review defined in "Review of the draft (both modes)" below on the draft of E2, giving the reviewer the path of the draft. Fix the draft for each critical finding before E4.
+
+### E4. Build and size check
+
+ Build every body in memory first, from the draft: the epic and one sub-issue per task from `${CLAUDE_SKILL_DIR}/templates/issue.md` (the Context line `Epic: #<epic>`, which must start at column 0 with no other text on the line, acceptance criteria as a checklist, scope, the task's Test cases rows copied as they are, the Risk line with reason, Hotspots, one `Depends on #<n>` line per dependency, and the `## Open questions` section: the deferred questions that affect the task, else `None`). Issue numbers are not known yet: fill each with a number at its widest expected width (for example `#99999`). Measure each body with the JavaScript string `length` (not bytes). If any body is longer than 65,000 characters, create nothing, tell the user which body is too long, and tell them to run `/devflow:spec --file` instead; stop.
+
+### E5. Create
+
+ Only after E4 passed. Create with the GitHub MCP `issue_write` tool (method `create`).
+1. For each title, search existing issues (open and closed) for an exact match of the trimmed, case-sensitive title: epic `[<slug>] <title>`, sub-issues `[<slug>] T<n>: <task title>`. Reuse a match as it is: do not edit its body, labels or state (the one exception is a reused epic's Tasks table, which E7 fills with the issue numbers). Create only what is missing, so a re-run after a partial failure makes no duplicates.
 2. Create the epic with label `type:epic` only: no ready label and no risk label.
 3. Create the sub-issues in dependency order so `Depends on` lines use real numbers and `Epic: #<epic>` the real epic number. Labels per sub-issue: `labels.riskLow` or `labels.riskHigh` per the task's risk, `labels.e2e` when the task needs e2e, and `type:<type>`. Never the ready label: the human sets it. Adding a missing label creates it.
 
-**E5. Link.** Link each sub-issue to the epic with the GitHub MCP `sub_issue_write` tool, method `add`. First read the epic's existing sub-issues and skip a link that already exists. A failed link is reported in the final message and does not stop the run.
+### E6. Link
 
-**E6. Update the epic.** Edit the epic body so the Tasks table has the issue numbers (reused issues included). Nothing else in the body changes.
+ Link each sub-issue to the epic with the GitHub MCP `sub_issue_write` tool, method `add`. First read the epic's existing sub-issues and skip a link that already exists. A failed link is reported in the final message and does not stop the run.
+
+### E7. Update the epic
+
+Edit the epic body so the Tasks table has the issue numbers (reused issues included). Nothing else in the body changes.
 
 ## `--file` mode
 
@@ -84,11 +101,15 @@ A separate QA agent turns the acceptance criteria into a test matrix. It works f
 
 **Checkpoint:** report the number of rows (must and should), the questions the QA step raised, how many were resolved, and what is still open.
 
-### F3. Spec PR
+### F3. Spec review
+
+Run the spec review defined in "Review of the draft (both modes)" below on the spec file, before the spec PR. Fix the spec for each critical finding. A question the review raises that the user defers goes into the spec's `Risks and unknowns`.
+
+### F4. Spec PR
 
 Commit with `docs(spec): <title>` (stage the files by name). Push the branch and open a PR to `baseBranch` titled `spec: <title>`; body = summary, a task table with columns task id, title, depends-on, size, risk and risk reason, and when F2 ran, one line with the test matrix size and the QA questions resolved and still open. No need to ask before pushing the spec branch or opening this PR.
 
-### F4. Gate 1
+### F5. Gate 1
 
 Ask exactly one question with AskUserQuestion: "Spec PR <url> merged? Merging also approves the risk levels in its table." with options: merged, changes requested, abandon.
 
@@ -96,7 +117,7 @@ Ask exactly one question with AskUserQuestion: "Spec PR <url> merged? Merging al
 - **Abandon:** close nothing; stop.
 - **Merged:** verify through the GitHub MCP server that the PR is merged. If it is not, say so and ask again.
 
-### F5. Issues
+### F6. Issues
 
 Run only after the PR is verified merged.
 
@@ -105,9 +126,22 @@ Run only after the PR is verified merged.
    - Title: `[<slug>] T<n>: <task title>`.
    - Body: link to the spec file on `baseBranch`, acceptance criteria as a checklist, scope, test cases (the task's rows of the Test matrix, copied as they are; if the spec has no Test matrix, the task's test plan as a list), and one `Depends on #<n>` line per dependency (resolve task ids to issue numbers).
    - Labels: `labels.ready` (this mode only), plus `labels.riskLow` or `labels.riskHigh` per the task's risk, plus `labels.e2e` when the task needs e2e, plus `type:<type>`. Adding a missing label creates it.
-   - Fill the template's Risk line (level and reason) and Hotspots.
+   - Fill the template's Risk line (level and reason), Hotspots and `## Open questions` (the deferred questions that affect the task, from the spec's Risks and unknowns, else `None`).
 3. Comment on the spec PR with the list of created issues.
 4. Then the final message below.
+
+## Review of the draft (both modes)
+
+The spec review runs in both modes, after the QA step and before any issue is created (epic mode) or the spec PR is opened (`--file` mode). It is not the QA step: QA writes the test rows and lists criteria that cannot be tested; the spec review checks the draft against the user's brief only and does not judge testability.
+
+1. Use the Agent tool (general-purpose) with `model` set to `spec.qaModel` (default `opus`; no separate config key). A fresh agent: give it only the brief (the idea or the brief file) and the path of the draft or spec file, not the grill conversation.
+2. It reads the draft against the brief and reports findings of three kinds:
+   - missing requirement: something the brief asks for that no task or criterion covers;
+   - contradiction: two parts of the draft that disagree, or a part that disagrees with the brief;
+   - not independent: a task that claims independence (no depends-on) but needs another task's result.
+   Each finding is `critical`, `warning` or `suggestion`. It does not edit any file.
+3. Only critical findings start another round: fix the draft (asking the user when the fix is a decision), then run the review again. At most 2 reviewer calls in total (the first review plus one after a fix). After the second, list the remaining critical findings to the user, who chooses to proceed or stop.
+4. Warnings and suggestions are shown to the user once and never start a round.
 
 ## Final message
 
