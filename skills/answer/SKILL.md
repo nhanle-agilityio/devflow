@@ -1,6 +1,6 @@
 ---
 name: answer
-description: Answer the questions that blocked a devflow issue: record the decisions in the spec (via a small PR) and in the issue, then set the issue ready again. Never merges.
+description: Answer the questions that blocked a devflow issue: append the decisions to the spec (via a small PR when the issue has a spec path), the issue and its epic, then set the issue ready again. Never merges.
 argument-hint: "#issue [1: answer; 2: answer ...]"
 disable-model-invocation: true
 ---
@@ -34,31 +34,30 @@ Every question needs an answer. If any is missing, list the unanswered questions
 
 ## 3. Spec (BA role)
 
-1. Take the spec path from the issue body: the first `<specDir>/<name>.md` (`specDir` default `docs/specs`). If there is none, tell the user, skip the rest of this step, do steps 4 and 5 and say in the report that no spec was updated.
+1. Take the spec path from the issue body: the first `<specDir>/<name>.md` (`specDir` default `docs/specs`). If there is none, create no branch and no PR: skip the rest of this step, do steps 4 and 5 and say in the report that no spec was updated.
 2. Create the branch `docs/<issue>-answers` from `<remote>/<baseBranch>`, isolated from the user's checkout: `git worktree add --detach <worktree.dir>/answer-<issue> <remote>/<baseBranch>` (`worktree.dir` default `.claude/worktrees`), then `git switch -c docs/<issue>-answers` inside it and work there (same pattern as `/devflow:next-task` step 2b). If a worktree cannot be used, create the branch in the main checkout and switch back to the starting branch at the end. If the branch already exists locally or on the remote, stop and tell the user.
-3. Update the spec so it states each decision in the section it belongs to (criteria, decisions, design). Append an entry per answer to a `## Decisions` section (create it at the end of the file if missing): `- <date> (#<issue>, Q<k>): <question> → <answer>`. Change nothing else.
+3. The only change to the spec is appending one entry per answer to its `## Decisions` section (create it at the end of the file if missing): `- <date> (Q<k>): <question> → <answer>` (`<date>` is `YYYY-MM-DD`, `Q<k>` the number in the questions comment). No other line of the spec changes. Entries in the epic-form `(#<issue>, Q<k>)` go to the epic, not the spec.
 4. Commit `docs(#<n>): record answers to open questions` (scope from `commitScope`), staging the spec file by name. Push the branch with `git push -u <remote> docs/<issue>-answers` (never to the base, never force).
 5. Open a PR with the MCP server against `baseBranch`, titled like the commit. Labels: `labels.devflow` and `labels.riskLow` (a spec-only change); `labels.riskHigh` instead if the spec path matches a `risk.highPaths` glob. Body: the question and answer list and `Refs #<n>` (not `Closes`). If PR creation fails, give the user a pre-filled compare link (`https://github.com/<owner>/<repo>/compare/<baseBranch>...docs/<issue>-answers?expand=1`) instead.
 6. Remove the worktree (`git worktree remove <path>`) or switch back to the starting branch.
 
-## 4. Issue body (BA role)
+## 4. Issue body and epic (BA role)
 
 Read the issue body first, then write the full body back (the MCP issue update replaces the body as a whole).
 
-- Append or extend a `## Decisions` section with the same entries as in the spec.
-- Where an answer changes an acceptance criterion or a Test cases row, update that line and mark it "(updated by /devflow:answer)". This is the human's decision, not a change to make a test pass.
-- Never remove criteria or rows the answers do not touch.
+1. Append to the issue's `## Decisions` section (create it at the end of the body when missing) one entry per answer: `- <date> (Q<k>): <question> → <answer>`. Edit no acceptance criterion and no Test cases row; the answers are recorded, never applied to them.
+2. Epic: when the issue body has a line `Epic: #<n>` (first match of `^Epic: #(\d+)`), read the epic's body, append to the epic's `## Decisions` section (create it at the end when missing) `- <date> (#<issue>, Q<k>): <question> → <answer>` per answer, and write the full body back. This happens whether or not the issue has a spec path. With no spec path, step 3 created no branch and no PR, so the epic append opens none either. If the epic append fails, keep the issue's entries, continue with step 5, and report the failure in the final table and in the unblock comment.
 
 ## 5. Unblock
 
 1. Delete every comment on the issue that contains `<!-- devflow-claim id=`.
 2. Remove the assignee devflow set (the authenticated user, if that is the assignee).
 3. Labels: remove `labels.blocked` and `labels.inProgress`, add `labels.ready`, keep all other labels. The issue update replaces the label list as a whole, so send the full new list.
-4. Post one comment: the answers, the spec PR link, and "Ready again: run /devflow:next-task #<n>".
+4. Post one comment: the answers, where the decisions were recorded (the issue, the epic `#<n>` or its failed append, the spec PR link), and "Ready again: run /devflow:next-task #<n>".
 
 ## 6. Report
 
-Print a table: question, answer. List ignored comments as `ignored: not a collaborator`. Then the spec PR (or the compare link) and the issue's new labels.
+Print a table: question, answer. List ignored comments as `ignored: not a collaborator`. Then the spec PR (or the compare link), the epic append result (`appended to #<n>`, `failed: <reason>` or `no epic`) and the issue's new labels.
 
 Mention that a branch left over from the blocked run is reused or recreated automatically when the run was blocked at Plan (no commits of its own, not on the remote); a branch with commits from an earlier blocked run is resumed by the engine (no manual handling). The spec PR needs to be merged before `/devflow:next-task` can read the new decisions from the base branch; the issue's `## Decisions` section already carries them.
 
