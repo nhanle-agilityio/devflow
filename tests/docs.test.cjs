@@ -7,7 +7,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-const changelogEntry = (n) => read('CHANGELOG.md').split('\n').filter((l) => l.includes(`(#${n})`)).join('\n');
+// An entry is a line citing "(#n)" in CHANGELOG.md, or the fragment <changelog.fragmentsDir>/<n>.md of root's config.
+function changelogEntryIn(root, n) {
+  const at = (f) => { try { return fs.readFileSync(path.join(root, f), 'utf8'); } catch { return ''; } };
+  const lines = at('CHANGELOG.md').split('\n').filter((l) => l.includes(`(#${n})`));
+  let dir = '';
+  try { dir = JSON.parse(at('.claude/devflow.json')).changelog.fragmentsDir || ''; } catch { dir = ''; }
+  const fragment = dir ? at(path.join(dir, `${n}.md`)) : '';
+  return lines.join('\n') + (fragment ? `\n${fragment}` : '');
+}
+const changelogEntry = (n) => changelogEntryIn(path.join(__dirname, '..'), n);
 const KEY = /assignedByRun|authenticated user/;
 
 // T1.10

@@ -37,5 +37,19 @@
       "tests/engine.test.cjs",
       "tests/scan.test.cjs"
     ]
+  },
+  "changelog": {
+    "fragmentsDir": "changelog.d"
+  },
+  "dispatch": {
+    "ignoreHotspots": [
+      "README.md",
+      "CHANGELOG.md",
+      "DESIGN.md",
+      "docs/**",
+      "skills/init/templates/devflow.schema.json",
+      "skills/init/templates/devflow.json",
+      "changelog.d/**"
+    ]
   }
 }
