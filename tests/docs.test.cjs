@@ -277,3 +277,13 @@ test('test_t6_10_docs_describe_source_rule', () => {
   }
   assert.ok(changelogEntry(57), 'CHANGELOG has an entry citing (#57)');
 });
+
+// T7.8
+test('test_t7_8_docs_describe_both_modes', () => {
+  for (const f of ['README.md', 'DESIGN.md', 'docs/devflow-flows.html', 'CHANGELOG.md']) {
+    const text = read(f);
+    assert.match(text, /epic/i, `${f} mentions epic`);
+    assert.ok(text.includes('--file'), `${f} mentions --file`);
+  }
+  assert.ok(changelogEntry(58), 'CHANGELOG has an entry citing (#58)');
+});

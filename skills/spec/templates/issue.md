@@ -1,10 +1,14 @@
 <!--
 Body of one GitHub issue per spec task. Title: [<slug>] T<n>: <task title>.
-Labels: the ready label, plus the risk label (low or high), plus the e2e label when the task needs it, plus type:<type>.
+Labels: the ready label only with --file (in epic mode the human sets it later), plus the risk label (low or high), plus the e2e label when the task needs it, plus type:<type>.
 Never write the at-sign handle of the review bot into the body.
 -->
 
 ## Context
+
+<!-- Use exactly one of the two lines below. Epic mode (default): keep the first line as it is, starting at column 0, and delete the second. With --file: delete the first and keep the second. -->
+
+Epic: #<epic>
 
 Part of the spec [<spec title>](<link to the spec file on the base branch>) (task T<n>). Spec PR: #<pr>.
 

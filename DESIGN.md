@@ -2,7 +2,7 @@
 
 A Claude Code plugin (2.9.0; `version` in `plugin.json` and `marketplace.json`, history in `CHANGELOG.md`) with nine project-agnostic commands, plus `/devflow:init` (and `init --upgrade`) for setup:
 
-1. **`/devflow:spec`** — idea → analyse → grill-me → spec PR (risk per task) → Gate 1 (human merges; this approves the risk levels) → GitHub issues labelled ready and `risk:low|high`.
+1. **`/devflow:spec`** — idea → analyse → grill-me → QA matrix → epic issue + one sub-issue per task (risk per task; the human sets the ready label). With `--file`: spec PR (risk per task) → Gate 1 (human merges; this approves the risk levels) → GitHub issues labelled ready and `risk:low|high`.
 2. **`/devflow:next-task`** — pick up to N ready issues → claim → branch → plan on the issue → implement (QA and dev agents in parallel when the plan allows it, else test first) → checks → verify → review → open PR labelled with its risk, stacked on a parent PR when needed. Runs in the user's checkout, or in its own worktree with `--isolated`; `--chain` runs a lane.
 3. **`/devflow:dispatch`** — split the ready issues into non-colliding lanes and start one background session per lane.
 4. **`/devflow:sync`** — keep those PRs mergeable: retarget, update behind branches, resolve conflicts, address review threads.
@@ -20,7 +20,7 @@ Nothing in the plugin knows about a specific stack. Project mechanics live in `.
 
 - **Deterministic where it matters.** The loop and the order of stages in `next-task` are a Workflow script (`workflows/next-task-engine.js`), not prose. Safety rules are hooks, not instructions.
 - **Claude never merges.** The plugin opens PRs and pushes its own feature branches, never merges, never pushes to the base branch, never force-pushes (except `--force-with-lease` on its own branch). Who merges is decided by risk: a human for `risk:high` and unlabelled PRs; the merge gate Action (outside Claude, own token) for `risk:low` PRs once its checks are green.
-- **Risk is judged early and enforced late.** The spec judges each task against `risk.highWhen` / `risk.highPaths` (unsure → high) and the human approves the levels at Gate 1. The engine only ever escalates to high, deterministically, when changed files match `risk.highPaths`. A missing label counts as high.
+- **Risk is judged early and enforced late.** The spec judges each task against `risk.highWhen` / `risk.highPaths` (unsure → high) and the human approves the levels by setting the ready label on each sub-issue (epic mode) or at Gate 1 (`--file`). The engine only ever escalates to high, deterministically, when changed files match `risk.highPaths`. A missing label counts as high.
 - **No reliance on GitHub paid features.** Target repos may be private on GitHub Free: no branch protection, no required checks, no native auto-merge. The merge gate is a plain Action that does the checking itself.
 - **Model tiers.** Opus plans and reviews; Sonnet writes the per-issue plan, implements and ships (it writes the PR body reviewers read); Haiku runs mechanical steps (selecting, claiming, branching, running checks, blocked clean-up).
 - **GitHub via the GitHub MCP server** (issues, labels, PRs, comments). `gh` is optional, never required. Adding a missing label to an issue creates it.
@@ -153,9 +153,13 @@ The config is written with `devflowVersion` = the installed plugin version. The 
 
 **`/devflow:init --upgrade`.** For a project that already ran init (clean tree, config present). Reads the plugin version and the project's `devflowVersion`; compares byte for byte every installed template (the three workflows, `devflow-merge-gate.cjs`, `devflow.schema.json`, which upgrade keeps managing; a reusable caller is compared with `callers/` at the new tag, so upgrading moves the tag; templates never installed are skipped) and lists the drifted ones and the config keys missing from the project. Because devflow cannot tell whether the project edited a file after install, every drifted file gets a diff and its own yes; a declined file stays. The gate workflow's `workflow_run` list is kept. After the yes: branch `chore/devflow-upgrade-<version>`, copy the accepted files, set `devflowVersion`, validate the config against the new schema, commit `chore(devflow): upgrade templates to devflow <version>`, push, open a PR labelled `devflow` + `risk:high` (it touches `.github/**` and `.claude/**`, so a human merges; a compare link if PR creation fails). Never merges, never pushes to the base.
 
-## `/devflow:spec <idea or path to a brief>`
+## `/devflow:spec <idea or path to a brief> [--file]`
 
-`disable-model-invocation: true`. Designed to run in a cloud session (claude.ai/code) on the repo, works locally too. Steps, each announced with its number:
+`disable-model-invocation: true`. Designed to run in a cloud session (claude.ai/code) on the repo, works locally too. Steps 1 and 2 are shared; then one of two modes.
+
+**Epic mode (default).** No spec file and no PR. After analyse, grill and the QA matrix: build the bodies of the epic (`templates/epic.md`: Goal, Design, `## Decisions`, Tasks table with risk and depends-on) and of one sub-issue per task (`templates/issue.md`, Context line `Epic: #<epic>`), with issue numbers filled at their widest expected width, and measure each by JavaScript string `length`; if one exceeds 65,000 characters nothing is created and the user is told to use `--file`. Then search by exact title (trimmed, case-sensitive, open or closed) and reuse matches without editing them (except a reused epic's Tasks table, filled with the issue numbers); create the epic `[<slug>] <title>` labelled `type:epic` only, then the sub-issues `[<slug>] T<n>: <title>` in dependency order, labelled risk (`labels.riskLow` or `labels.riskHigh`), `labels.e2e` when needed and `type:<type>`, never the ready label. Link each sub-issue with `sub_issue_write` (method `add`, existing links skipped; a failed link is reported and does not stop the run) and write the issue numbers into the epic's Tasks table. The final message says the human approves each sub-issue by setting `labels.ready`.
+
+**`--file` mode.** The steps of 2.9.0, each announced with its number (the spec link replaces the `Epic:` line in the issues, which carry `labels.ready`):
 
 1. **Analyse.** Read `.claude/devflow.json`, `CLAUDE.md`, and the code the idea touches. Produce a short analysis: current behaviour, affected areas (backend/frontend/infra/data), risks, unknowns. Do not write files yet.
 2. **Grill.** Invoke the `grill-me` skill on the idea plus the analysis. Keep going until every unknown is decided or explicitly deferred. If `grill-me` is not available, run the same interview inline: one question at a time, each with a recommended answer.
@@ -323,7 +327,7 @@ Output: a table check → `ok` / `warn` / `fail` → what to do, a line per fix 
 
 ## Risk and the merge gate
 
-Risk flows: spec task (`risk` + reason, approved at Gate 1) → issue label and `Risk:` line → engine (escalate to high on `risk.highPaths`; unlabelled = high) → PR label and body line → gate (acts only on `risk:low`).
+Risk flows: spec task (`risk` + reason, approved by the ready label on the sub-issue, or at Gate 1 with `--file`) → issue label and `Risk:` line → engine (escalate to high on `risk.highPaths`; unlabelled = high) → PR label and body line → gate (acts only on `risk:low`).
 
 **Merge gate** = `.github/workflows/devflow-merge-gate.yml` + `.github/scripts/devflow-merge-gate.cjs`, installed by `/devflow:init`. It exists because target repos may be private on GitHub Free. Runs on `workflow_run` completion (CI workflows and "Claude Code Review"), `status`, and manual `workflow_dispatch` (optional PR number). The workflow lives on the default branch (those triggers only run from there) and uses `DEVFLOW_GATE_TOKEN`, a fine-grained PAT (Contents + Pull requests read/write, this repo only), because pushes and merges made with `GITHUB_TOKEN` do not trigger CI. Config is read from `.claude/devflow.json` at `baseBranch`. It does nothing unless `mergeGate.enabled`; with `dryRun` (default) it only reports.
 
