@@ -224,6 +224,15 @@ const IMPLEMENT_SCHEMA = {
       description: 'Fix rounds: items of the earlier out-of-scope list that this fix implemented, copied exactly',
     },
     touchesUi: { type: 'boolean', description: 'True when the diff against the base branch changes user-facing UI' },
+    positions: {
+      type: 'array',
+      description: 'Fix rounds: your position on a numbered problem, only where the prompt asks for one',
+      items: {
+        type: 'object',
+        properties: { finding: { type: 'string', description: 'The problem id, for example F1' }, position: { type: 'string', description: 'QA fix agent: "test is right" or "test fixed"; dev fix agent: "code is right" or "code fixed"' } },
+        required: ['finding', 'position'],
+      },
+    },
     blockedReason: { type: 'string' },
     problem: { type: 'string', description: `Report starting with exactly "${MCP_DOWN}" when GitHub cannot be reached; otherwise omit` },
     specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
@@ -294,7 +303,11 @@ const CHECK_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        properties: { check: { type: 'string' }, output: { type: 'string' } },
+        properties: {
+          check: { type: 'string' },
+          output: { type: 'string' },
+          files: { type: 'array', items: { type: 'string' }, description: 'The repository files this failure is attributed to (the failing test files or the files the errors point at); [] when unknown' },
+        },
         required: ['check', 'output'],
       },
     },
@@ -367,6 +380,7 @@ const REVIEW_SCHEMA = {
         type: 'object',
         properties: {
           severity: { enum: ['critical', 'warning', 'suggestion'] },
+          category: { type: 'string', description: '"commit-structure" for commit split, order or message-wording findings (reported as suggestions); otherwise a short slug such as correctness, tests, scope' },
           file: { type: 'string' },
           line: { type: 'integer' },
           problem: { type: 'string' },
@@ -1142,21 +1156,45 @@ Steps, in order:
 Return ok, commits ("<sha> <message>", in order), failedFirst, failureNote.`
 }
 
+// The QA fix agent: fixes problems that sit in the QA agent's own test files, and only those.
+function qaFixPrompt(issue, branch, why, details, qaFiles) {
+  const src = sourceFor(issue)
+  return `You are the QA fix agent for issue #${issue.number} on branch ${branch} (already checked out). Reason: ${why}. ${MCP_NOTE}
+
+devflow config:
+${cfgJson}
+
+${issueBlock(issue)}
+
+Problems in the QA test files (each has an id):
+${details}
+
+Instructions:
+- You own only these files: ${JSON.stringify(qaFiles)}. Edit only them; a change to any other file blocks the run. The dev agent owns the code.
+- Decide for each problem whether the test is wrong or right. The contract is the issue, its acceptance criteria, its Test cases table and its Decisions, not the current code. If the test is wrong, fix it and keep it traceable to its row id. If the test is right (the code is wrong), do not change the test: return positions with {finding: <id>, position: "test is right"} for that problem; the dev fix agent then gets it. Never weaken or delete a test to make it pass.
+- Follow the project's CLAUDE.md. Commit your changes with Conventional Commits in English, scope "${scopeFor(issue)}", staging files by name. Never rewrite existing commits. Do not push. Make no commit when you change nothing.
+- If you cannot decide without a decision the spec does not make, return status "blocked" with blockedReason. ${DECISIONS_NOTE}
+Return the same structure as the implement stage; "commits" lists only the commits you made now. ${src.kind === 'epic' ? `In "specRead" put "epic #${src.n}" and in "epicRead" whether you read it: ${epicStep(src.n, EPIC_MCP)}` : `In "specRead" put the spec path if you read the spec, otherwise "none".`}`
+}
+
 function checkPrompt() {
   const list = cfg.checks.map((c, i) => `${i + 1}. [${c.name}] ${c.run}`).join('\n')
   return `Run the project's checks in the repository root, in this order. Run every one even if an earlier one fails.
 
 ${list}
 
-Report passed=true only if all of them exit 0. For each failing check return its name and the relevant trimmed output (the failing assertions / errors, at most about 60 lines; no passing noise). Do not edit any file and do not commit.`
+Report passed=true only if all of them exit 0. For each failing check return its name, the relevant trimmed output (the failing assertions / errors, at most about 60 lines; no passing noise) and files: the repository files the failure is attributed to (the failing test files, or the files the errors point at; [] when you cannot tell). Do not edit any file and do not commit.`
 }
 
-function fixPrompt(issue, branch, why, details, qaFiles) {
+function fixPrompt(issue, branch, why, details, qaFiles, disputed) {
   const src = sourceFor(issue)
   const qaRule =
     qaFiles && qaFiles.length
       ? `\n- These files hold the QA agent's tests for the Test cases rows: ${JSON.stringify(qaFiles)}. Do not edit them. If you are sure a QA test is wrong (it contradicts the spec, the issue or its Decisions), return status "blocked" with blockedReason starting with "[QA] " that names the test and the contradiction.`
       : ''
+  const disputeRule = disputed && disputed.length
+    ? `\n- The QA fix agent says the QA test is right for ${disputed.join(', ')} (listed above): the cause is in the code. Fix the code for them, or if you are sure the code is right and the test is wrong, return positions with {finding, position: "code is right"} for that problem. Do not edit the QA test files yourself.`
+    : ''
   return `Fix problems on branch ${branch} for issue #${issue.number}. Reason: ${why}. ${MCP_NOTE}
 
 devflow config:
@@ -1169,7 +1207,7 @@ ${details}
 
 Instructions:
 - Follow the project's CLAUDE.md. Fix the cause, not the symptom; never weaken or delete a test, and never edit acceptance criteria, to make something pass.
-- Stay inside the issue's scope. Record unrelated problems in "outOfScope" without changing them.${qaRule}
+- Stay inside the issue's scope. Record unrelated problems in "outOfScope" without changing them.${qaRule}${disputeRule}
 - Commit with Conventional Commits in English, scope "${scopeFor(issue)}", staging files by name. Never rewrite existing commits. Do not push.
 - If you cannot fix it without a decision the spec does not make, return status "blocked" with blockedReason. ${DECISIONS_NOTE}
 When a problem says an out-of-scope item is required by the acceptance criteria, implement it (test first) and copy that item exactly into "outOfScopeDone".
@@ -1259,6 +1297,7 @@ Review, in this order:
 5. Out of scope: an item in the out-of-scope list below that leaves behaviour unmet that the issue's acceptance criteria (or a "must" Test cases row) require is NOT out of scope: report it as critical, naming the criterion (for example "AC2.5 requires X; the out-of-scope note leaves it as is"). Only problems the criteria do not cover may stay out of scope.
 6. Weakened checks: a deterministic scan of the diff found the hits below (new noqa / type: ignore / eslint-disable / ts-ignore, skipped, focused or deleted tests, removed assertions, empty except or catch, edited check configuration). Each one is critical unless the issue itself asks for exactly that change. For each hit either report it as a critical finding (same file and line) or, only when the issue requires it, list it in acceptedWeakenings with the reason; an accepted hit stays in the PR and makes it risk:high. Also report as critical any other weakening of a check that the scan missed.
 Scan hits: ${hits && hits.length ? JSON.stringify(hits) : 'none'}
+Commit structure: a finding about how the commits are split, their order or their message wording is a suggestion, whatever its severity would otherwise be: set category: "commit-structure" on it and report it as a suggestion. Give every other finding a short category slug (for example correctness, tests, scope).
 Severity: critical = wrong behaviour / data loss / security / rule violation; warning = likely bug, missing test, scope creep; suggestion = optional improvement. Only report real problems with a file and line. verdict "pass" means no critical or warning findings.
 
 Implementation summary: ${state.summary}
@@ -1388,15 +1427,25 @@ async function checkLoop(issue, branch, state) {
     if (round === nt.maxFixRounds) {
       return { ok: false, reason: `Checks still failing after ${nt.maxFixRounds} fix round(s):\n${details}` }
     }
-    const fix = await runFix(issue, branch, state, `configured checks failed (fix round ${round + 1} of ${nt.maxFixRounds})`, details)
+    // A failure attributed to a QA file goes to the QA fix agent; one that also names other files goes to the dev fix agent too.
+    const items = []
+    check.failures.forEach((f, i) => {
+      const id = `F${i + 1}`
+      const files = Array.isArray(f.files) ? f.files : []
+      const text = `- (${id}) [${f.check}]\n${f.output}`
+      const inQa = files.length > 0 && overlap(files, state.qaFiles).length > 0
+      if (inQa) items.push({ id, text, qa: true })
+      if (!inQa || outside(files, state.qaFiles).length > 0) items.push({ id: inQa ? `${id}b` : id, text, qa: false })
+    })
+    const fix = await fixRound(issue, branch, state, `configured checks failed (fix round ${round + 1} of ${nt.maxFixRounds})`, items)
     if (!fix.ok) return fix
   }
   return { ok: false, reason: 'Unreachable check loop exit.' }
 }
 
-async function runFix(issue, branch, state, why, details) {
+async function runFix(issue, branch, state, why, details, disputed) {
   phase('Implement')
-  const fix = await agent(fixPrompt(issue, branch, why, details, state.qaFiles), {
+  const fix = await agent(fixPrompt(issue, branch, why, details, state.qaFiles, disputed), {
     label: `fix #${issue.number}`,
     phase: 'Implement',
     schema: IMPLEMENT_SCHEMA,
@@ -1410,6 +1459,56 @@ async function runFix(issue, branch, state, why, details) {
   const touched = overlap(fix.filesChanged, state.qaFiles)
   if (touched.length) return { ok: false, qaOverlap: true, reason: `The fix changed QA test files ${touched.join(', ')}; QA tests are only changed by a human decision.` }
   return { ok: true, result: fix }
+}
+
+// The QA fix agent may edit only the QA test files; any other change blocks.
+async function runQaFix(issue, branch, state, why, details) {
+  phase('Implement')
+  const fix = await agent(qaFixPrompt(issue, branch, why, details, state.qaFiles), {
+    label: `qa-fix #${issue.number}`,
+    phase: 'Implement',
+    schema: IMPLEMENT_SCHEMA,
+    model: 'sonnet',
+  })
+  if (!fix) return { ok: false, reason: `The QA fix agent died (${why}).` }
+  if (fix.problem && mcpDown(fix.problem)) return { ok: false, mcpDown: true, reason: fix.problem }
+  if (epicUnread(fix, sourceFor(issue))) return { ok: false, reason: epicReason(sourceFor(issue)) }
+  if (fix.status === 'blocked') return { ok: false, reason: fix.blockedReason || `The QA fix agent reported blocked (${why}).` }
+  merge(state, fix)
+  const out = outside(fix.filesChanged, state.qaFiles)
+  if (out.length) return { ok: false, reason: `The QA fix agent changed files outside the QA test files: ${out.join(', ')}.` }
+  return { ok: true, result: fix }
+}
+
+const positionsOf = (r, word) => (r && Array.isArray(r.positions) ? r.positions : []).filter((p) => p && String(p.position || '').toLowerCase().indexOf(word) !== -1)
+
+// One fix round for a list of numbered problems [{id, text, qa}]. QA-owned problems (in qaFiles) go to the QA fix agent first;
+// the dev fix agent runs for the others, and also when the QA fix agent says "test is right" so that it can take a position.
+// The whole round counts once against the caller's round limit. Returns {ok} or {ok:false, reason, questions?}.
+async function fixRound(issue, branch, state, why, items) {
+  const text = (list) => list.map((i) => i.text).join('\n')
+  const qaItems = items.filter((i) => i.qa)
+  const devItems = items.filter((i) => !i.qa)
+  let disputed = []
+  if (qaItems.length) {
+    const q = await runQaFix(issue, branch, state, why, text(qaItems))
+    if (!q.ok) return q
+    const right = positionsOf(q.result, 'test is right').map((p) => String(p.finding))
+    disputed = qaItems.filter((i) => right.indexOf(i.id) !== -1)
+  }
+  if (devItems.length || disputed.length) {
+    const dev = await runFix(issue, branch, state, why, text(devItems.concat(disputed)), disputed.map((i) => i.id))
+    if (!dev.ok) return dev
+    const codeRight = positionsOf(dev.result, 'code is right').map((p) => String(p.finding))
+    const clash = disputed.filter((i) => codeRight.indexOf(i.id) !== -1)
+    if (clash.length) {
+      const questions = [
+        `[QA] The QA fix agent and the dev fix agent disagree on ${clash.length === 1 ? 'a problem' : 'problems'}. QA fix agent: "test is right". Dev fix agent: "code is right". Which is correct?\n${text(clash)}`,
+      ]
+      return { ok: false, reason: `The QA fix agent says the test is right and the dev fix agent says the code is right for ${clash.map((i) => i.id).join(', ')}.`, questions }
+    }
+  }
+  return { ok: true }
 }
 
 // The implement summary stays the PR's "what"; fix summaries are kept separately.
@@ -1745,7 +1844,7 @@ async function runIssue(issue) {
 
     // Check
     const checked = await checkLoop(issue, branch, state)
-    if (!checked.ok) return block('Check', checked.reason)
+    if (!checked.ok) return block('Check', checked.reason, checked.questions)
 
     // Verify
     const needsVerify =
@@ -1779,7 +1878,7 @@ async function runIssue(issue) {
         const fix = await runFix(issue, branch, state, 'verification against the running app failed', details)
         if (!fix.ok) return block('Verify', fix.reason)
         const again = await checkLoop(issue, branch, state)
-        if (!again.ok) return block('Check', again.reason)
+        if (!again.ok) return block('Check', again.reason, again.questions)
       }
     }
 
@@ -1845,6 +1944,8 @@ async function runIssue(issue) {
       }
       state.weakened = hits.filter((h) => acceptedHit(h, accepted)).map((h) => Object.assign({}, h, { reason: (accepted.find((a) => a.file === h.file && Number(a.line) === Number(h.line)) || {}).reason || '' }))
       // Fail closed: only an exact 'suggestion' is non-blocking; any other severity (even 'Suggestion') blocks.
+      // A commit-structure finding (split, order, message wording) is a suggestion whatever its severity, before any routing by file.
+      review.findings = review.findings.map((f) => (f.category === 'commit-structure' ? Object.assign({}, f, { severity: 'suggestion' }) : f))
       const blocking = review.findings.filter((f) => f.severity !== 'suggestion')
       state.suggestions = review.findings.filter((f) => f.severity === 'suggestion')
       // The review exits on findings only; the verdict is informational. Injected scan hits are critical findings in `blocking`.
@@ -1855,10 +1956,16 @@ async function runIssue(issue) {
       if (round === nt.maxReviewRounds) {
         return block('Review', `Review still has critical/warning findings after ${nt.maxReviewRounds} fix round(s):\n${details}`)
       }
-      const fix = await runFix(issue, branch, state, `review found problems (round ${round + 1} of ${nt.maxReviewRounds})`, details)
-      if (!fix.ok) return block('Review', fix.reason)
+      // Findings in a QA file go to the QA fix agent, the others to the dev fix agent; one round, counted once.
+      const items = blocking.map((f, i) => ({
+        id: `F${i + 1}`,
+        text: `- (F${i + 1}) [${f.severity}] ${f.file}:${f.line}: ${f.problem}\n  Suggested fix: ${f.fix}`,
+        qa: overlap([f.file], state.qaFiles).length > 0,
+      }))
+      const fix = await fixRound(issue, branch, state, `review found problems (round ${round + 1} of ${nt.maxReviewRounds})`, items)
+      if (!fix.ok) return block('Review', fix.reason, fix.questions)
       const again = await checkLoop(issue, branch, state)
-      if (!again.ok) return block('Check', again.reason)
+      if (!again.ok) return block('Check', again.reason, again.questions)
     }
 
     // Risk: label first, then deterministic escalation by touched paths.
