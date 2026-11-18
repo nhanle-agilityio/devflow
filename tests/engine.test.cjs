@@ -1808,7 +1808,8 @@ test('T1.11 "test is right" against "code is right" for one finding blocks with 
   assert.match(b, /<!-- devflow-questions -->/);
   assert.match(b, /test is right/);
   assert.match(b, /code is right/);
-  assert.ok(!/\n2\. /.test(b));
+  assert.match(b, /\n1\. \[QA\][^]*test is right[^]*code is right/);
+  assert.ok(!/\n2\. \[/.test(b));
 });
 
 test('T1.12 positions on different findings raise no disagreement block', async () => {
