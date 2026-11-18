@@ -1812,6 +1812,16 @@ test('T1.11 "test is right" against "code is right" for one finding blocks with 
   assert.ok(!/\n2\. \[/.test(b));
 });
 
+test('T1.11 a check failure in a QA file with "test is right" against "code is right" blocks with one questions comment', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { ...Q93, ...right93, checkFail: (n, c) => (c === 1 ? [{ check: 'test', output: 'boom', files: ['tests/a.test.cjs'] }] : null), fixOut: { positions: [{ finding: 'F1', position: 'code is right' }] } });
+  assert.equal(rep[0].status, 'blocked');
+  const b = prompt(calls, 'blocked');
+  assert.equal(count93(calls, 'blocked'), 1);
+  assert.match(b, /<!-- devflow-questions -->/);
+  assert.match(b, /test is right/);
+  assert.match(b, /code is right/);
+});
+
 test('T1.12 positions on different findings raise no disagreement block', async () => {
   const { rep } = await run({ ...BASE, issues: [1] }, { ...Q93, ...right93, review: once93([f93('tests/a.test.cjs'), f93('src/x.js')]), fixOut: { positions: [{ finding: 'F2', position: 'code is right' }] } });
   assert.equal(rep[0].status, 'pr');
