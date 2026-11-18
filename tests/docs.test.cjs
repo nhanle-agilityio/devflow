@@ -307,3 +307,11 @@ test('test_t9_5_docs_describe_answer_rule', () => {
   }
   assert.ok(changelogEntry(60), 'CHANGELOG has an entry citing (#60)');
 });
+
+// T10.5
+test('test_t10_5_docs_describe_accept_epic', () => {
+  for (const f of ['README.md', 'DESIGN.md', 'CHANGELOG.md']) {
+    assert.ok(read(f).includes('/devflow:accept #'), `${f} describes /devflow:accept #<n>`);
+  }
+  assert.ok(changelogEntry(61), 'CHANGELOG has an entry citing (#61)');
+});
