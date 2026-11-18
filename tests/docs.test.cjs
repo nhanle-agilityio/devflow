@@ -326,3 +326,163 @@ test('test_t11_7_docs_describe_metrics', () => {
   }
   assert.ok(changelogEntry(62), 'CHANGELOG has an entry citing (#62)');
 });
+
+// #86: docs/devflow-flows.html shows epic mode, the spec review step and the epic source rule.
+// Source-text assertions only (no DOM): the page keeps one entry per spec-flow node, each starting `id: '<mode>-<step>'`.
+const flows = () => read('docs/devflow-flows.html');
+const STR = "((?:[^'\\\\]|\\\\.)*)";
+const tPair = (key, text) => {
+  const m = new RegExp(`\\b${key}: t\\('${STR}', '${STR}'\\)`).exec(text);
+  return m && { vi: m[1], en: m[2] };
+};
+const specEntries = (mode) => {
+  const src = flows();
+  const start = src.indexOf(`const SPEC_${mode.toUpperCase()} = () => [`);
+  assert.ok(start >= 0, `page defines SPEC_${mode.toUpperCase()}`);
+  const end = src.indexOf('\n  ];', start);
+  return src.slice(start, end).split(`id: '${mode}-`).slice(1).map((chunk) => {
+    const id = chunk.slice(0, chunk.indexOf("'"));
+    return { id, text: chunk, l: tPair('l', chunk), d: tPair('d', chunk) };
+  });
+};
+const EPIC_LABELS = ['Analyse', 'Grill', 'Tasks', 'QA', 'Spec review', 'Size check', 'Create', 'Human sets ready'];
+const FILE_LABELS = ['Analyse', 'Grill', 'Spec + tasks', 'QA', 'Spec review', 'Spec PR', 'Gate 1', 'Issues'];
+const cardsOf = (entry) => {
+  const i = entry.text.indexOf('cards: [');
+  assert.ok(i >= 0, `${entry.id} has cards`);
+  return [...entry.text.slice(i).matchAll(/n: (\d+), [^\n]*?l: \[([^\]]*)\]/g)].map((m) => ({ n: Number(m[1]), labels: m[2] }));
+};
+
+test('T1.1 epic mode has eight nodes in order and the size check names 65,000 and --file', () => {
+  const e = specEntries('epic');
+  assert.deepEqual(e.map((x) => x.l && x.l.en), EPIC_LABELS);
+  const size = e.find((x) => x.id === 'size');
+  for (const lang of ['vi', 'en']) {
+    assert.ok(size.d[lang].includes('65,000'), `size check ${lang} has 65,000`);
+    assert.ok(size.d[lang].includes('--file'), `size check ${lang} has --file`);
+  }
+  const create = e.find((x) => x.id === 'create').d.en;
+  assert.match(create, /creates the epic and (the )?sub-issues/);
+  assert.match(create, /links them/);
+  assert.match(create, /Tasks table/);
+});
+
+test('T1.2 epic mode VI labels are non-empty', () => {
+  const e = specEntries('epic');
+  assert.equal(e.length, 8);
+  for (const x of e) assert.ok(x.l && x.l.vi.trim(), `${x.id} has a VI label`);
+});
+
+test('T1.3 the default play button is epic mode and a separate --file button exists', () => {
+  const src = flows();
+  assert.match(src, /<button[^>]*id="spec-play"[^>]*>/);
+  assert.match(src, /<button[^>]*id="spec-play-file"[^>]*>▶ --file<\/button>/);
+  assert.match(src, /\$\('#spec-play'\)\.addEventListener\('click', \(\) => specPlay\('epic'\)\)/);
+  assert.match(src, /\$\('#spec-play-file'\)\.addEventListener\('click', \(\) => specPlay\('file'\)\)/);
+});
+
+test('T1.4 --file mode has eight nodes in order, each with VI and EN', () => {
+  const e = specEntries('file');
+  assert.deepEqual(e.map((x) => x.l && x.l.en), FILE_LABELS);
+  for (const x of e) assert.ok(x.l.vi.trim(), `${x.id} has a VI label`);
+});
+
+test('T1.5 the spec review step says what it is in both modes (EN)', () => {
+  for (const mode of ['epic', 'file']) {
+    const en = specEntries(mode).find((x) => x.id === 'review').d.en;
+    for (const lit of ['spec.qaModel', 'missing requirement', 'contradiction', 'not independent', 'only critical', 'at most 2 reviewer calls', 'not a testability check']) {
+      assert.ok(en.includes(lit), `${mode} review EN contains ${lit}`);
+    }
+  }
+});
+
+test('T1.6 testability only appears inside "not a testability check"', () => {
+  for (const mode of ['epic', 'file']) {
+    const en = specEntries(mode).find((x) => x.id === 'review').d.en;
+    assert.equal(en.split('testability').length - 1, en.split('not a testability check').length - 1);
+  }
+});
+
+test('T1.7 the spec review step VI text names spec.qaModel and 2', () => {
+  for (const mode of ['epic', 'file']) {
+    const vi = specEntries(mode).find((x) => x.id === 'review').d.vi;
+    assert.ok(vi.includes('spec.qaModel'));
+    assert.ok(vi.includes('2'));
+  }
+});
+
+test('T1.8 the epic Create step shows the epic card and two sub-issues without agent:ready', () => {
+  const cards = cardsOf(specEntries('epic').find((x) => x.id === 'create'));
+  assert.deepEqual(cards.map((c) => c.n), [30, 31, 32]);
+  assert.ok(cards[0].labels.includes('type:epic'));
+  for (const c of cards) assert.ok(!c.labels.includes('agent:ready'), `#${c.n} has no agent:ready yet`);
+});
+
+test('T1.9 the Human sets ready step adds agent:ready to #31 and #32 only', () => {
+  const cards = cardsOf(specEntries('epic').find((x) => x.id === 'ready'));
+  const by = Object.fromEntries(cards.map((c) => [c.n, c.labels]));
+  assert.ok(by[31].includes('agent:ready'));
+  assert.ok(by[32].includes('agent:ready'));
+  assert.ok(!by[30].includes('agent:ready'));
+});
+
+test('T1.10 the --file Issues step labels cards agent:ready and shows no epic card', () => {
+  const cards = cardsOf(specEntries('file').find((x) => x.id === 'issues'));
+  assert.ok(cards.length >= 2);
+  for (const c of cards) {
+    assert.ok(c.labels.includes('agent:ready'), `#${c.n} is ready`);
+    assert.ok(!c.labels.includes('type:epic'), `#${c.n} is not an epic`);
+  }
+});
+
+test('T1.11 the epic cards carry the task risk, type and dependency labels', () => {
+  const cards = cardsOf(specEntries('epic').find((x) => x.id === 'create'));
+  const by = Object.fromEntries(cards.map((c) => [c.n, c.labels]));
+  assert.ok(by[31].includes('risk:low') && by[31].includes('type:feat'));
+  assert.ok(by[32].includes('risk:high') && by[32].includes('type:feat') && by[32].includes('needs-e2e'));
+  assert.match(specEntries('epic').find((x) => x.id === 'create').text, /dep: 'Depends on #31'/);
+});
+
+const ruleNote = () => {
+  const src = flows();
+  const i = src.indexOf('const SRC_NOTE = {');
+  assert.ok(i >= 0, 'page defines SRC_NOTE');
+  const block = src.slice(i, src.indexOf('};', i));
+  const vi = /vi: '((?:[^'\\]|\\.)*)'/.exec(block);
+  const en = /en: '((?:[^'\\]|\\.)*)'/.exec(block);
+  return { vi: vi && vi[1], en: en && en[1] };
+};
+
+test('T1.12 the next-task source rule note exists in VI and EN', () => {
+  const n = ruleNote();
+  for (const lang of ['vi', 'en']) {
+    assert.ok(n[lang], `${lang} note exists`);
+    for (const lit of ['Epic: #<n>', '## Decisions', 'epic #<n> could not be read']) assert.ok(n[lang].includes(lit), `${lang} note has ${lit}`);
+  }
+});
+
+test('T1.13 the EN note orders spec path, epic, issue alone and says the issue wins', () => {
+  const en = ruleNote().en;
+  const a = en.indexOf('spec path'), b = en.indexOf('Epic: #<n>'), c = en.indexOf('issue alone');
+  assert.ok(a >= 0 && a < b && b < c, 'order: spec path, Epic: #<n>, issue alone');
+  assert.ok(en.includes('Claim'));
+  assert.match(en, /criteria, Test cases and ## Decisions[^.]*win over the epic/i);
+});
+
+test('T1.14 the Plan and Review node subtitles mention spec or epic in both languages', () => {
+  const src = flows();
+  for (const st of ['plan', 'review']) {
+    const line = src.split('\n').find((l) => l.includes(`data-st="${st}"`));
+    const vi = /<span class="s">([^<]*)<\/span>/.exec(line)[1];
+    assert.ok(vi.includes('spec hoặc epic'), `${st} VI subtitle`);
+    const en = new RegExp(`'${vi.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}': '([^']*)'`).exec(src);
+    assert.ok(en && en[1].includes('spec or epic'), `${st} EN subtitle`);
+  }
+});
+
+test('T1.17 specPlay does not tie step indexes to one mode length', () => {
+  const src = flows();
+  const i = src.indexOf('function specPlay');
+  const body = src.slice(i, src.indexOf('\n  }\n', i));
+  for (const bad of ['i === 6', 'i === 5', 'sNodes[6]']) assert.ok(!body.includes(bad), `specPlay has no ${bad}`);
+});
