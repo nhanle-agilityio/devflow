@@ -4,6 +4,10 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Changed
+- Review and check findings in the QA test files (`qaFiles`) go to a QA fix agent that may edit only `qaFiles`, instead of a dev Fix round or a block; the dev Fix agent still never edits them. A round with QA-file and other findings runs the QA fix agent, then the dev Fix agent, and counts once against `maxFixRounds` / `maxReviewRounds`. A QA fix agent that says "test is right" against a dev Fix agent that says "code is right" for the same finding blocks with one questions comment holding both positions. The Check stage reports `files` per failure for this routing (#93)
+- Review findings with `category: "commit-structure"` (commit split, order or message wording) are suggestions whatever their severity: listed under the PR's Review notes, never a fix round or a block; `agents/reviewer.md` and the review prompt ask the reviewer to set it (#93)
+
 ## [3.0.0] - 2026-11-18
 
 Wave 2, the lighter flow: an epic as the spec, an optional GitHub review, and a short path for `risk:low` issues.
