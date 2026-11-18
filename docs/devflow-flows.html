@@ -373,36 +373,23 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     </div>
     <div class="controls">
       <button class="ctl primary" id="spec-play" type="button">▶ Chạy</button>
+      <button class="ctl" id="spec-play-file" type="button">▶ --file</button>
       <button class="ctl" id="spec-reset" type="button">↺</button>
     </div>
   </div>
   <div class="canvas">
     <div class="scroll-x">
-      <div class="pipe" id="spec-pipe" style="--mw:1280px">
-        <div class="node sonnet" data-step="0"><span class="badge">1 · Analyse</span><span class="t">Phân tích</span><span class="s">đọc CLAUDE.md, config, code liên quan</span></div>
-        <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
-        <div class="node sonnet" data-step="1"><span class="badge">2 · Grill</span><span class="t">grill-me</span><span class="s">mỗi câu hỏi kèm đáp án đề xuất</span></div>
-        <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
-        <div class="node sonnet" data-step="2"><span class="badge">3 · Spec</span><span class="t">Spec + tasks</span><span class="s">mỗi task: risk low|high + lý do + hotspots</span></div>
-        <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
-        <div class="node opus" data-step="3"><span class="badge">4 · QA · opus</span><span class="t">Test matrix</span><span class="s">agent QA chỉ đọc spec → các dòng Test cases</span></div>
-        <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
-        <div class="node sonnet" data-step="4"><span class="badge">5 · Spec PR</span><span class="t">Mở PR spec</span><span class="s">spec/&lt;slug&gt; · docs/specs/*.md</span></div>
-        <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
-        <div class="node human" data-step="5"><span class="badge">6 · Gate 1</span><span class="t">"Merge PR spec?"</span><span class="s">merge = duyệt cả mức risk</span></div>
-        <div class="conn"><div class="arrow"></div><div class="arrow-head"></div></div>
-        <div class="node out" data-step="6"><span class="badge">7 · Issues</span><span class="t">Tạo issue</span><span class="s">label ready + risk, theo thứ tự phụ thuộc</span></div>
-      </div>
+      <div class="pipe" id="spec-pipe" style="--mw:1280px"></div>
     </div>
     <div class="split">
       <div class="panel">
         <h3><span class="dotc" id="spec-dot" style="--c:var(--sonnet)"></span><span id="spec-title">Bấm ▶ để xem từng bước</span></h3>
-        <p class="muted" id="spec-desc">Mỗi bước có một đầu ra cụ thể. Bước 6 là chốt chặn: issue chỉ được tạo sau khi bạn đã merge spec.</p>
+        <p class="muted" id="spec-desc">Mỗi bước có một đầu ra cụ thể. Bước cuối là của bạn: sub-issue chỉ sẵn sàng khi bạn đặt agent:ready (chế độ --file: sau khi bạn merge spec ở Gate 1).</p>
         <div class="chat" id="spec-chat" aria-live="polite"></div>
       </div>
       <div class="panel">
         <h3><span class="dotc" style="--c:var(--out)"></span>Issues trên GitHub</h3>
-        <div class="issues" id="spec-issues"><div class="empty">Chưa có issue. Chúng xuất hiện ở bước 7, sau Gate 1.</div></div>
+        <div class="issues" id="spec-issues"><div class="empty">Chưa có issue. Chúng xuất hiện ở bước Tạo (epic) hoặc bước Issues (--file, sau Gate 1).</div></div>
       </div>
     </div>
   </div>
@@ -444,12 +431,12 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
         <div class="node haiku" data-st="claim"><span class="badge">haiku</span><span class="t">Claim</span><span class="s">khoá bằng claim comment, sớm nhất thắng</span></div>
         <div class="node haiku" data-st="branch"><span class="badge">haiku</span><span class="t">Branch</span><span class="s">chồng lên PR cha, hoặc tiếp tục branch cũ</span></div>
         <div class="node sonnet" data-st="integrate"><span class="badge">sonnet</span><span class="t">Integrate</span><span class="s">chỉ khi có nhiều parent: gộp parent</span></div>
-        <div class="node sonnet" data-st="plan"><span class="badge">sonnet</span><span class="t">Plan</span><span class="s">comment devflow-plan, không ai duyệt</span></div>
+        <div class="node sonnet" data-st="plan"><span class="badge">sonnet</span><span class="t">Plan</span><span class="s">đọc spec hoặc epic, comment devflow-plan, không ai duyệt</span></div>
         <div class="node sonnet" data-st="impl"><span class="badge">sonnet</span><span class="t">Implement</span><span class="s">QA ∥ Dev song song, hoặc 1 agent</span></div>
         <div class="node haiku" data-st="commit"><span class="badge">haiku</span><span class="t">Commit</span><span class="s">test trước, xác nhận đỏ, rồi code</span></div>
         <div class="node haiku" data-st="check"><span class="badge">haiku</span><span class="t">Check</span><span class="s">chạy mọi lệnh trong checks</span></div>
         <div class="node sonnet" data-st="verify"><span class="badge">sonnet</span><span class="t">Verify</span><span class="s">khoá verify.lock, rồi curl / trình duyệt theo AC</span></div>
-        <div class="node opus" data-st="review"><span class="badge">opus</span><span class="t">Review</span><span class="s">diff, spec, CLAUDE.md, dòng must kiểm tay</span></div>
+        <div class="node opus" data-st="review"><span class="badge">opus</span><span class="t">Review</span><span class="s">diff, spec hoặc epic, CLAUDE.md, dòng must kiểm tay</span></div>
         <div class="node script" data-st="risk"><span class="badge">code</span><span class="t">Risk</span><span class="s">tất định, highPaths nâng lên high</span></div>
         <div class="node out" data-st="ship"><span class="badge">sonnet</span><span class="t">Ship</span><span class="s">đọc lại PR cha · PR gắn devflow + risk</span></div>
       </div>
@@ -459,6 +446,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
         <div class="loop" id="loop-review" style="--col:10"><b>↻ Fix (sonnet)</b><br>critical/warning → sửa<br><span id="loop-review-n">tối đa 2 vòng</span></div>
       </div>
     </div>
+    <p class="muted" id="nt-source"></p>
     <div class="par" id="par">
       <span class="eyebrow">Implement khi Plan có qaFiles</span>
       <div class="node sonnet" id="par-qa"><span class="badge">sonnet</span><span class="t">QA agent</span><span class="s">viết test cho mọi dòng must, chỉ đọc spec + issue, chỉ sửa qaFiles</span></div>
@@ -902,6 +890,11 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       en: 'From an <b>idea</b> to a <b>merged PR</b> and a <b>release</b>, through nine commands: <b>/devflow:spec</b>, <b>/devflow:next-task</b>, <b>/devflow:dispatch</b>, <b>/devflow:sync</b>, <b>/devflow:answer</b>, <b>/devflow:accept</b>, <b>/devflow:release</b>, <b>/devflow:report</b>, <b>/devflow:doctor</b>, plus <b>/devflow:init</b> (and <b>init --upgrade</b>) for setup. Every task carries a risk level; Claude never merges. You decide at the orange boxes.',
     },
   };
+  // Source rule of next-task (VI and EN). Set with textContent, so the angle brackets stay literal.
+  const SRC_NOTE = {
+    vi: 'Nguồn spec, theo thứ tự: đường dẫn spec trong thân issue (hoặc từ Claim), nếu không có thì epic từ dòng Epic: #<n> đầu tiên, nếu không có thì chỉ issue. Tiêu chí, Test cases và ## Decisions luôn lấy từ issue và thắng epic. Epic không đọc được thì issue bị chặn với epic #<n> could not be read.',
+    en: 'Spec source, in order: the spec path in the issue body (or from Claim), else the epic from the first Epic: #<n> line, else the issue alone. Criteria, Test cases and ## Decisions come from the issue and win over the epic. An epic that cannot be read blocks the issue with epic #<n> could not be read.',
+  };
   const EN = {
     'Bạn quyết định': 'You decide',
     'Claude Haiku · việc cơ học': 'Claude Haiku · mechanical steps',
@@ -1001,13 +994,13 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     'merge = duyệt cả mức risk': 'merging = approving the risk levels',
     'label ready + risk, theo thứ tự phụ thuộc': 'ready + risk labels, in dependency order',
     'Bấm ▶ để xem từng bước': 'Press ▶ to step through',
-    'Mỗi bước có một đầu ra cụ thể. Bước 6 là chốt chặn: issue chỉ được tạo sau khi bạn đã merge spec.': 'Every step has a concrete output. Step 6 is the gate: issues are created only after you merge the spec.',
-    'Chưa có issue. Chúng xuất hiện ở bước 7, sau Gate 1.': 'No issues yet. They appear at step 7, after Gate 1.',
+    'Mỗi bước có một đầu ra cụ thể. Bước cuối là của bạn: sub-issue chỉ sẵn sàng khi bạn đặt agent:ready (chế độ --file: sau khi bạn merge spec ở Gate 1).': 'Every step has a concrete output. The last step is yours: a sub-issue is ready only when you set agent:ready (--file mode: after you merge the spec at Gate 1).',
+    'Chưa có issue. Chúng xuất hiện ở bước Tạo (epic) hoặc bước Issues (--file, sau Gate 1).': 'No issues yet. They appear at the Create step (epic mode) or the Issues step (--file mode, after Gate 1).',
     'ready, parent đã có PR, ≤ limit': 'ready, parents have PRs, ≤ limit',
     'khoá bằng claim comment, sớm nhất thắng': 'lock via claim comments, earliest wins',
     'chồng lên branch của PR cha': 'stacked on the parent PR branch',
     'chỉ khi có nhiều parent: gộp parent': 'only with several parents: merges them',
-    'comment devflow-plan, không ai duyệt': 'devflow-plan comment, nobody approves',
+    'đọc spec hoặc epic, comment devflow-plan, không ai duyệt': 'reads the spec or epic, devflow-plan comment, nobody approves',
     'QA ∥ Dev song song, hoặc 1 agent': 'QA ∥ Dev in parallel, or 1 agent',
     'test trước, xác nhận đỏ, rồi code': 'tests first, confirm red, then code',
     'tất định, highPaths nâng lên high': 'deterministic, highPaths escalate to high',
@@ -1082,7 +1075,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     'gh CLI đã cài (ghCli)': 'gh CLI installed (ghCli)',
     'chồng lên PR cha, hoặc tiếp tục branch cũ': 'stacked on the parent PR, or resumes an old branch',
     'khoá verify.lock, rồi curl / trình duyệt theo AC': 'takes verify.lock, then curl / browser per AC',
-    'diff, spec, CLAUDE.md, dòng must kiểm tay': 'diff, spec, CLAUDE.md, manually checked must rows',
+    'diff, spec hoặc epic, CLAUDE.md, dòng must kiểm tay': 'diff, spec or epic, CLAUDE.md, manually checked must rows',
     '1 · mkdir devflow-verify.lock, chờ tối đa 10 phút': '1 · mkdir devflow-verify.lock, waits up to 10 minutes',
     '2 · dev server chạy, mỗi máy một session': '2 · dev server runs, one session per machine',
     '3 · rmdir, luôn nhả (lock cũ hơn 30 phút là stale)': '3 · rmdir, always released (a lock older than 30 minutes is stale)',
@@ -1193,6 +1186,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     document.documentElement.lang = lang;
     staticText.forEach((s) => (s.n.nodeValue = s[lang]));
     staticAttr.forEach((a) => a.e.setAttribute('aria-label', lang === 'vi' ? a.vi : ATTR_EN[a.vi]));
+    $('#nt-source').textContent = SRC_NOTE[lang];
     $$('[data-i18n]').forEach((e) => (e.innerHTML = BLOCKS[e.dataset.i18n][lang]));
     $('#lang-en').setAttribute('aria-pressed', String(lang === 'en'));
     $('#lang-vi').setAttribute('aria-pressed', String(lang === 'vi'));
@@ -1230,85 +1224,154 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
   /* ---------------- spec flow ---------------- */
   const bub = (box, k, who, txt) => { const b = el('div', `bubble ${k}`); b.innerHTML = `<small>${who}</small>`; b.append(txt); box.append(b); };
   const specR = runner();
-  const sNodes = $$('#spec-pipe .node');
-  const sArrows = $$('#spec-pipe .arrow');
+  let sNodes = [], sArrows = [];
   const sTitle = $('#spec-title'), sDesc = $('#spec-desc'), sChat = $('#spec-chat'), sDot = $('#spec-dot'), sIssues = $('#spec-issues');
-  const SPEC = () => [
-    { c: '--sonnet', t: t('1 · Phân tích', '1 · Analyse'),
+  // Spec-flow data: one entry per pipe node. `id` is `<mode>-<step>`; `l` is the node label, `s` its subtitle, `d` the step text.
+  const SPEC_EPIC = () => [
+    { id: 'epic-analyse', c: '--sonnet', m: 'sonnet', l: t('Phân tích', 'Analyse'), s: t('đọc CLAUDE.md, config, code liên quan', 'reads CLAUDE.md, config, related code'),
       d: t('Claude đọc CLAUDE.md, .claude/devflow.json và các file projects (routes → services → repository). Chưa ghi file nào.', 'Claude reads CLAUDE.md, .claude/devflow.json and the projects code (routes → services → repository). No files are written yet.'),
       chat: [['q', t('Kết quả phân tích', 'Analysis'), t('Hiện chỉ có tạo và xem project. Ảnh hưởng: routes, services, repository, tests. Chưa rõ: xử lý task khi xoá, tên trùng.', 'Projects can only be created and read today. Affected: routes, services, repository, tests. Open: what happens to tasks on delete, duplicate names.')]] },
-    { c: '--sonnet', t: '2 · grill-me',
-      d: t('Hỏi từng câu, mỗi câu kèm đáp án đề xuất. Chỉ đi tiếp khi không còn điểm mở.', 'One question at a time, each with a recommended answer. It moves on only when nothing is left open.'),
+    { id: 'epic-grill', c: '--sonnet', m: 'sonnet', l: t('Grill', 'Grill'), s: t('mỗi câu hỏi kèm đáp án đề xuất', 'each question comes with a recommended answer'),
+      d: t('grill-me: hỏi từng câu, mỗi câu kèm đáp án đề xuất. Chỉ đi tiếp khi không còn điểm mở; câu hỏi hoãn lại được ghi vào ## Open questions.', 'grill-me: one question at a time, each with a recommended answer. It moves on only when no question is left open; deferred ones go to ## Open questions.'),
       chat: [['q', t('Claude hỏi', 'Claude asks'), t('Xoá project còn task: xoá luôn task hay chặn lại? Đề xuất: chặn, trả 409.', 'Deleting a project that still has tasks: delete them too, or refuse? Recommended: refuse with 409.')],
              ['a', t('Bạn', 'You'), t('Đồng ý, trả 409.', 'Agreed, 409.')],
              ['q', t('Claude hỏi', 'Claude asks'), t('PATCH với tên đã tồn tại: 400 hay 409? Đề xuất: 409 cho nhất quán.', 'PATCH to a name that already exists: 400 or 409? Recommended: 409, for consistency.')],
              ['a', t('Bạn', 'You'), '409.']] },
-    { c: '--sonnet', t: '3 · Spec + tasks',
+    { id: 'epic-tasks', c: '--sonnet', m: 'sonnet', l: t('Tasks', 'Tasks'), s: t('thân epic + task: risk low|high + lý do + hotspots', 'epic body + tasks: risk low|high + reason + hotspots'),
+      d: t('Soạn thân epic (Goal, Design, ## Decisions, bảng Tasks) và danh sách task trong bộ nhớ; chưa tạo gì trên GitHub. Mỗi task có risk low|high kèm lý do (xét theo risk.highWhen và risk.highPaths; không chắc thì high) và hotspots: các file mà task khác có thể đụng, chỉ để ghi lại.', 'Drafts the epic body (Goal, Design, ## Decisions, Tasks table) and the task list in memory; nothing is created on GitHub yet. Each task gets risk low|high with a reason (judged against risk.highWhen and risk.highPaths; unsure means high) and hotspots: files other tasks are likely to touch, recorded only.'),
+      chat: [['q', 'T1 PATCH /projects/<id> (S)', t('risk: low, vì chỉ thêm tính năng, không phá contract. Hotspots: services.py', 'risk: low, because it only adds behaviour and breaks no contract. Hotspots: services.py')],
+             ['q', 'T2 DELETE /projects/<id> (S, depends on T1)', t('risk: high, vì xoá dữ liệu đã lưu (highWhen). Hotspots: services.py, repository.py', 'risk: high, because it deletes stored data (highWhen). Hotspots: services.py, repository.py')]] },
+    { id: 'epic-qa', c: '--opus', m: 'opus', l: t('QA', 'QA'), s: t('agent QA chỉ đọc bản nháp → các dòng Test cases', 'the QA agent reads only the draft → Test cases rows'),
+      d: t('Một agent QA (model spec.qaModel, mặc định opus) chỉ nhận bản nháp và CLAUDE.md, không nhận cuộc grill, nên nó test điều bản nháp viết chứ không phải điều bạn định nói. Trả về các dòng Test cases và những tiêu chí chưa test được.', 'A QA agent (model spec.qaModel, default opus) gets only the draft and CLAUDE.md, not the grill conversation, so it tests what the draft says rather than what you meant. It returns Test cases rows and the criteria it cannot test as written.'),
+      chat: [['q', t('QA trả về', 'QA returns'), t('11 dòng, mỗi tiêu chí có một dòng must. Ví dụ T2.3 · edge · Given project có task, When DELETE, Then 409 · level http · must', '11 rows, every criterion has a must row. Example T2.3 · edge · Given a project with tasks, When DELETE, Then 409 · level http · must')],
+             ['q', t('QA hỏi', 'QA asks'), t('Tiêu chí "xoá nhanh" không test được. Giới hạn bao nhiêu ms?', 'The criterion "deleting is fast" is not testable. What limit in ms?')],
+             ['a', t('Bạn', 'You'), t('Bỏ tiêu chí đó, không phải yêu cầu.', 'Drop it, it is not a requirement.')],
+             ['q', t('Ma trận cập nhật', 'Matrix updated'), t('10 dòng, QA chạy lại: không còn câu hỏi. Mỗi task trỏ tới các dòng của nó.', '10 rows, QA runs again: no questions left. Each task points at its rows.')]] },
+    { id: 'epic-review', c: '--opus', m: 'opus', l: t('Spec review', 'Spec review'), s: t('agent mới kiểm bản nháp so với brief', 'a fresh agent checks the draft against the brief'),
+      d: t('Một agent mới (model spec.qaModel) chỉ nhận brief và bản nháp, không nhận cuộc grill, rồi đối chiếu bản nháp với brief: thiếu yêu cầu, mâu thuẫn, task không độc lập. Mỗi phát hiện là critical, warning hoặc suggestion; chỉ critical mới mở thêm một vòng, tối đa 2 lần gọi reviewer. Không phải kiểm tra khả năng test (việc của bước QA).', 'A fresh agent on spec.qaModel gets only the brief and the draft, not the grill conversation, and checks the draft against the brief: missing requirement, contradiction, task not independent. Each finding is critical, warning or suggestion; only critical starts another round, at most 2 reviewer calls. It is not a testability check (that is the QA step).'),
+      chat: [['q', t('Reviewer trả về', 'Reviewer returns'), t('1 warning: brief nhắc "đổi tên project" nhưng T1 chỉ ghi PATCH. Không có critical, không cần vòng thứ hai.', '1 warning: the brief says "rename a project" but T1 only lists PATCH. No critical finding, so no second round.')]] },
+    { id: 'epic-size', c: '--sonnet', m: 'sonnet', l: t('Size check', 'Size check'), s: t('đo độ dài từng thân, tối đa 65,000 ký tự', 'measures each body, at most 65,000 characters'),
+      d: t('Dựng sẵn mọi thân trong bộ nhớ và đo bằng length của chuỗi JavaScript. Nếu một thân dài hơn 65,000 ký tự thì không tạo gì cả và chỉ sang /devflow:spec --file.', 'Builds every body in memory and measures it by the JavaScript string length. If any body is longer than 65,000 characters it creates nothing and points to /devflow:spec --file.'),
+      chat: [['q', t('Kết quả đo', 'Measured'), t('3 thân (epic, T1, T2), dài nhất 4,210 ký tự, dưới 65,000. Tiếp tục.', '3 bodies (epic, T1, T2), the longest 4,210 characters, under 65,000. Continuing.')]] },
+    { id: 'epic-create', c: '--out', m: 'sonnet', l: t('Tạo', 'Create'), s: t('epic + sub-issue, liên kết, điền bảng Tasks', 'epic + sub-issues, linked, Tasks table filled'),
+      d: t('Tìm issue trùng trước, rồi tạo epic và các sub-issue (epic [<slug>] <title> với type:epic, sub-issue [<slug>] T<n>: … có dòng Epic: #<n>). Sau đó liên kết chúng làm sub-issue và điền số issue vào bảng Tasks của epic. Các sub-issue chưa có agent:ready.', 'Searches for duplicates first, then creates the epic and the sub-issues (epic [<slug>] <title> with type:epic, sub-issues [<slug>] T<n>: … with an Epic: #<n> line). It links them as sub-issues and fills the issue numbers into the Tasks table of the epic. The sub-issues do not have agent:ready yet.'),
+      chat: [['q', t('Hoàn tất', 'Done'), t('Đã tạo epic #30 và 2 sub-issue #31, #32, liên kết xong, bảng Tasks đã điền.', 'Created epic #30 and sub-issues #31, #32, linked them and filled the Tasks table.')]],
+      cards: [
+        { n: 30, t: 'Allow editing and deleting a project', l: ['type:epic'], x: 'Tasks: T1 #31 · T2 #32', epic: true },
+        { n: 31, t: 'T1: PATCH /projects/<id>', l: ['risk:low', 'type:feat'], x: 'Test cases: 4 rows · Hotspots: services.py' },
+        { n: 32, t: 'T2: DELETE /projects/<id>', l: ['risk:high', 'type:feat', 'needs-e2e'], dep: 'Depends on #31', x: 'Test cases: 6 rows · Hotspots: services.py, repository.py' },
+      ] },
+    { id: 'epic-ready', c: '--human', m: 'you', l: t('Bạn đặt ready', 'Human sets ready'), s: t('bạn đặt agent:ready cho từng sub-issue', 'you set agent:ready on each sub-issue'),
+      d: t('Bạn đọc từng sub-issue rồi tự đặt agent:ready; đó là cách bạn duyệt task và mức risk. Epic không bao giờ có agent:ready.', 'You read each sub-issue and set agent:ready yourself; that is how you approve the task and its risk level. The epic never gets agent:ready.'),
+      chat: [['a', t('Bạn', 'You'), t('Đặt agent:ready cho #31 và #32 ✓', 'agent:ready set on #31 and #32 ✓')]],
+      cards: [
+        { n: 30, t: 'Allow editing and deleting a project', l: ['type:epic'], x: 'Tasks: T1 #31 · T2 #32', epic: true },
+        { n: 31, t: 'T1: PATCH /projects/<id>', l: ['agent:ready', 'risk:low', 'type:feat'], x: 'Test cases: 4 rows · Hotspots: services.py' },
+        { n: 32, t: 'T2: DELETE /projects/<id>', l: ['agent:ready', 'risk:high', 'type:feat', 'needs-e2e'], dep: 'Depends on #31', x: 'Test cases: 6 rows · Hotspots: services.py, repository.py' },
+      ] },
+  ];
+  const SPEC_FILE = () => [
+    { id: 'file-analyse', c: '--sonnet', m: 'sonnet', l: t('Phân tích', 'Analyse'), s: t('đọc CLAUDE.md, config, code liên quan', 'reads CLAUDE.md, config, related code'),
+      d: t('Claude đọc CLAUDE.md, .claude/devflow.json và các file projects (routes → services → repository). Chưa ghi file nào.', 'Claude reads CLAUDE.md, .claude/devflow.json and the projects code (routes → services → repository). No files are written yet.'),
+      chat: [['q', t('Kết quả phân tích', 'Analysis'), t('Hiện chỉ có tạo và xem project. Ảnh hưởng: routes, services, repository, tests. Chưa rõ: xử lý task khi xoá, tên trùng.', 'Projects can only be created and read today. Affected: routes, services, repository, tests. Open: what happens to tasks on delete, duplicate names.')]] },
+    { id: 'file-grill', c: '--sonnet', m: 'sonnet', l: t('Grill', 'Grill'), s: t('mỗi câu hỏi kèm đáp án đề xuất', 'each question comes with a recommended answer'),
+      d: t('grill-me: hỏi từng câu, mỗi câu kèm đáp án đề xuất. Chỉ đi tiếp khi không còn điểm mở.', 'grill-me: one question at a time, each with a recommended answer. It moves on only when nothing is left open.'),
+      chat: [['q', t('Claude hỏi', 'Claude asks'), t('Xoá project còn task: xoá luôn task hay chặn lại? Đề xuất: chặn, trả 409.', 'Deleting a project that still has tasks: delete them too, or refuse? Recommended: refuse with 409.')],
+             ['a', t('Bạn', 'You'), t('Đồng ý, trả 409.', 'Agreed, 409.')],
+             ['q', t('Claude hỏi', 'Claude asks'), t('PATCH với tên đã tồn tại: 400 hay 409? Đề xuất: 409 cho nhất quán.', 'PATCH to a name that already exists: 400 or 409? Recommended: 409, for consistency.')],
+             ['a', t('Bạn', 'You'), '409.']] },
+    { id: 'file-spec', c: '--sonnet', m: 'sonnet', l: t('Spec + task', 'Spec + tasks'), s: t('mỗi task: risk low|high + lý do + hotspots', 'each task: risk low|high + reason + hotspots'),
       d: t('Tạo branch spec/project-edit-delete và viết docs/specs/2026-10-29-project-edit-delete.md. Mỗi task có risk low|high kèm lý do (xét theo risk.highWhen và risk.highPaths; không chắc thì high) và hotspots: các file mà task khác có thể đụng, chỉ để ghi lại.', 'Creates branch spec/project-edit-delete and writes docs/specs/2026-10-29-project-edit-delete.md. Each task gets risk low|high with a reason (judged against risk.highWhen and risk.highPaths; unsure means high) and hotspots: files other tasks are likely to touch, recorded only.'),
       chat: [['q', 'T1 PATCH /projects/<id> (S)', t('risk: low, vì chỉ thêm tính năng, không phá contract. Hotspots: services.py', 'risk: low, because it only adds behaviour and breaks no contract. Hotspots: services.py')],
              ['q', 'T2 DELETE /projects/<id> (S, depends on T1)', t('risk: high, vì xoá dữ liệu đã lưu (highWhen). Hotspots: services.py, repository.py', 'risk: high, because it deletes stored data (highWhen). Hotspots: services.py, repository.py')]] },
-    { c: '--opus', t: t('4 · Test matrix (QA)', '4 · Test matrix (QA)'),
+    { id: 'file-qa', c: '--opus', m: 'opus', l: t('QA', 'QA'), s: t('agent QA chỉ đọc spec → các dòng Test cases', 'the QA agent reads only the spec → Test cases rows'),
       d: t('Một agent QA (model spec.qaModel, mặc định opus) chỉ nhận file spec và CLAUDE.md, không nhận cuộc grill, nên nó test điều spec viết chứ không phải điều bạn định nói. Trả về các dòng Test cases và những tiêu chí chưa test được.', 'A QA agent (model spec.qaModel, default opus) gets only the spec file and CLAUDE.md, not the grill conversation, so it tests what the spec says rather than what you meant. It returns Test cases rows and the criteria it cannot test as written.'),
       chat: [['q', t('QA trả về', 'QA returns'), t('11 dòng, mỗi tiêu chí có một dòng must. Ví dụ T2.3 · edge · Given project có task, When DELETE, Then 409 · level http · must', '11 rows, every criterion has a must row. Example T2.3 · edge · Given a project with tasks, When DELETE, Then 409 · level http · must')],
              ['q', t('QA hỏi', 'QA asks'), t('Tiêu chí "xoá nhanh" không test được. Giới hạn bao nhiêu ms?', 'The criterion "deleting is fast" is not testable. What limit in ms?')],
              ['a', t('Bạn', 'You'), t('Bỏ tiêu chí đó, không phải yêu cầu.', 'Drop it, it is not a requirement.')],
              ['q', t('Ma trận cập nhật', 'Matrix updated'), t('10 dòng, QA chạy lại: không còn câu hỏi. Mỗi task trỏ tới các dòng của nó.', '10 rows, QA runs again: no questions left. Each task points at its rows.')]] },
-    { c: '--sonnet', t: t('5 · PR spec', '5 · Spec PR'),
+    { id: 'file-review', c: '--opus', m: 'opus', l: t('Spec review', 'Spec review'), s: t('agent mới kiểm spec so với brief', 'a fresh agent checks the spec against the brief'),
+      d: t('Một agent mới (model spec.qaModel) chỉ nhận brief và file spec, không nhận cuộc grill, rồi đối chiếu spec với brief: thiếu yêu cầu, mâu thuẫn, task không độc lập. Mỗi phát hiện là critical, warning hoặc suggestion; chỉ critical mới mở thêm một vòng, tối đa 2 lần gọi reviewer. Không phải kiểm tra khả năng test (việc của bước QA).', 'A fresh agent on spec.qaModel gets only the brief and the spec file, not the grill conversation, and checks the spec against the brief: missing requirement, contradiction, task not independent. Each finding is critical, warning or suggestion; only critical starts another round, at most 2 reviewer calls. It is not a testability check (that is the QA step).'),
+      chat: [['q', t('Reviewer trả về', 'Reviewer returns'), t('1 warning: brief nhắc "đổi tên project" nhưng T1 chỉ ghi PATCH. Không có critical, không cần vòng thứ hai.', '1 warning: the brief says "rename a project" but T1 only lists PATCH. No critical finding, so no second round.')]] },
+    { id: 'file-pr', c: '--sonnet', m: 'sonnet', l: t('PR spec', 'Spec PR'), s: t('spec/<slug> · docs/specs/*.md', 'spec/<slug> · docs/specs/*.md'),
       d: t('Commit docs(spec), push branch và mở PR spec (không cần hỏi). Thân PR có bảng task kèm risk và lý do, số dòng test, câu hỏi QA đã giải quyết.', 'Commits docs(spec), pushes the branch and opens the spec PR (no need to ask). The PR body has the task table with risk and reason, the number of test rows and the QA questions resolved.'),
       chat: [['q', t('PR spec đã mở', 'Spec PR opened'), 'spec: project edit and delete · T1 low · T2 high (deletes stored data) · 10 test rows · 1 QA question resolved']] },
-    { c: '--human', t: '6 · Gate 1',
+    { id: 'file-gate1', c: '--human', m: 'you', l: t('Gate 1', 'Gate 1'), s: t('merge = duyệt cả mức risk', 'merge = approves the risk levels too'),
       d: t('Claude dừng và hỏi đúng một câu. Bạn review và merge; merge cũng là duyệt mức risk trong bảng. Claude kiểm tra lại qua MCP rằng PR đã merge thật.', 'Claude stops and asks exactly one question. You review and merge; merging also approves the risk levels in the table. Claude checks through MCP that the PR really is merged.'),
       chat: [['q', t('Claude hỏi', 'Claude asks'), t('PR spec #39 đã merge chưa? Merge cũng là duyệt mức risk. (merged / changes requested / abandon)', 'Is spec PR #39 merged? Merging also approves the risk levels. (merged / changes requested / abandon)')], ['a', t('Bạn', 'You'), 'merged ✓']] },
-    { c: '--out', t: t('7 · Tạo issues', '7 · Create issues'),
+    { id: 'file-issues', c: '--out', m: 'sonnet', l: t('Issues', 'Issues'), s: t('label ready + risk, theo thứ tự phụ thuộc', 'ready + risk labels, in dependency order'),
       d: t('Tìm issue trùng trước, tạo theo thứ tự phụ thuộc để dòng "Depends on" dùng số thật. Mỗi issue có label ready, label risk, các dòng Test cases và mục Hotspots. Rồi comment danh sách vào PR spec.', 'Searches for duplicates first, creates issues in dependency order so "Depends on" lines use real numbers. Each issue gets the ready label, a risk label, its Test cases rows and a Hotspots section. Then comments the list on the spec PR.'),
-      chat: [['q', t('Hoàn tất', 'Done'), t('Đã tạo 2 issue và comment danh sách vào PR #39.', 'Created 2 issues and listed them on PR #39.')]] },
+      chat: [['q', t('Hoàn tất', 'Done'), t('Đã tạo 2 issue và comment danh sách vào PR #39.', 'Created 2 issues and listed them on PR #39.')]],
+      cards: [
+        { n: 31, t: 'T1: PATCH /projects/<id>', l: ['agent:ready', 'risk:low', 'type:feat'], x: 'Test cases: 4 rows · Hotspots: services.py' },
+        { n: 32, t: 'T2: DELETE /projects/<id>', l: ['agent:ready', 'risk:high', 'type:feat', 'needs-e2e'], dep: 'Depends on #31', x: 'Test cases: 6 rows · Hotspots: services.py, repository.py' },
+      ] },
   ];
-  const ISSUES = [
-    { n: 31, t: 'T1: PATCH /projects/<id>', l: ['ready', 'risk:low', 'type:feat'], x: 'Test cases: 4 rows · Hotspots: services.py' },
-    { n: 32, t: 'T2: DELETE /projects/<id>', l: ['ready', 'risk:high', 'type:feat', 'needs-e2e'], dep: 'Depends on #31', x: 'Test cases: 6 rows · Hotspots: services.py, repository.py' },
-  ];
-  const lblClass = (l) => l === 'ready' ? 'ready' : l === 'needs-e2e' ? 'e2e' : l === 'risk:low' ? 'rlow' : l === 'risk:high' ? 'rhigh' : l === 'stacked' ? 'stk' : l === 'devflow' ? 'dvf' : 'type';
+  const lblClass = (l) => l === 'ready' || l === 'agent:ready' ? 'ready' : l === 'needs-e2e' ? 'e2e' : l === 'risk:low' ? 'rlow' : l === 'risk:high' ? 'rhigh' : l === 'stacked' ? 'stk' : l === 'devflow' ? 'dvf' : 'type';
   const lblText = (l) => l === 'ready' ? 'agent:ready' : l;
-  const emptyIssues = () => `<div class="empty">${t('Chưa có issue. Chúng xuất hiện ở bước 7, sau Gate 1.', 'No issues yet. They appear at step 7, after Gate 1.')}</div>`;
+  const emptyIssues = () => `<div class="empty">${t('Chưa có issue. Chúng xuất hiện ở bước Tạo (epic) hoặc bước Issues (--file, sau Gate 1).', 'No issues yet. They appear at the Create step (epic mode) or the Issues step (--file mode, after Gate 1).')}</div>`;
+  const SPEC_MODES = { epic: SPEC_EPIC, file: SPEC_FILE };
+  // The pipe shows the nodes of one mode; the idle view is epic mode.
+  function specRender(steps) {
+    const pipe = $('#spec-pipe');
+    pipe.innerHTML = '';
+    steps.forEach((s, i) => {
+      if (i) pipe.append(el('div', 'conn', '<div class="arrow"></div><div class="arrow-head"></div>'));
+      const n = el('div', `node ${s.c.slice(2)}`);
+      n.append(el('span', 'badge', `${i + 1} · ${s.m}`), el('span', 't', s.l), el('span', 's', s.s));
+      pipe.append(n);
+    });
+    sNodes = $$('#spec-pipe .node');
+    sArrows = $$('#spec-pipe .arrow');
+  }
+  async function specCards(cards, slow, sleep) {
+    sIssues.innerHTML = '';
+    for (const it of cards) {
+      if (slow) await sleep(600);
+      const card = el('div', 'issue');
+      card.innerHTML = `<span class="it"><b>#${it.n}</b> ${it.epic ? '' : '[project-edit-delete] '}</span><div class="labels"></div>`;
+      card.querySelector('.it').append(it.t);
+      it.l.forEach((l) => card.querySelector('.labels').append(el('span', `lbl ${lblClass(l)}`, lblText(l))));
+      if (it.dep) card.append(el('span', 'dep', it.dep));
+      card.append(el('span', 'dep', it.x));
+      sIssues.append(card);
+    }
+  }
   function specReset() {
     specR.stop();
-    sNodes.forEach((n) => n.classList.remove('active', 'done'));
+    specRender(SPEC_EPIC());
     sTitle.textContent = t('Bấm ▶ để xem từng bước', 'Press ▶ to step through');
-    sDesc.textContent = t('Mỗi bước có một đầu ra cụ thể. Bước 6 là chốt chặn: issue chỉ được tạo sau khi bạn đã merge spec.', 'Every step has a concrete output. Step 6 is the gate: issues are created only after you merge the spec.');
+    sDesc.textContent = t('Mỗi bước có một đầu ra cụ thể. Bước cuối là của bạn: sub-issue chỉ sẵn sàng khi bạn đặt agent:ready (chế độ --file: sau khi bạn merge spec ở Gate 1).', 'Every step has a concrete output. The last step is yours: a sub-issue is ready only when you set agent:ready (--file mode: after you merge the spec at Gate 1).');
     sDot.style.setProperty('--c', 'var(--sonnet)');
     sChat.innerHTML = '';
     sIssues.innerHTML = emptyIssues();
   }
-  function specPlay() {
-    specReset();
-    const steps = SPEC();
+  // mode is 'epic' (default) or 'file'; a click on any play button stops the running play first.
+  function specPlay(mode) {
+    specR.stop();
+    const steps = SPEC_MODES[mode]();
+    specRender(steps);
+    sTitle.textContent = '';
+    sDesc.textContent = '';
+    sChat.innerHTML = '';
+    sIssues.innerHTML = emptyIssues();
     specR.start(async (sleep) => {
       for (let i = 0; i < steps.length; i++) {
         const s = steps[i];
         if (i) { sNodes[i - 1].classList.remove('active'); sNodes[i - 1].classList.add('done'); flash(sArrows[i - 1]); await sleep(450); }
         sNodes[i].classList.add('active');
-        sTitle.textContent = s.t; sDesc.textContent = s.d; sDot.style.setProperty('--c', `var(${s.c})`);
+        sTitle.textContent = `${i + 1} · ${s.l}`; sDesc.textContent = s.d; sDot.style.setProperty('--c', `var(${s.c})`);
         sChat.innerHTML = '';
         for (const [k, who, txt] of s.chat) { await sleep(k === 'a' ? 900 : 600); bub(sChat, k, who, txt); }
-        if (i === 6) {
-          sIssues.innerHTML = '';
-          for (const it of ISSUES) {
-            await sleep(600);
-            const card = el('div', 'issue');
-            card.innerHTML = `<span class="it"><b>#${it.n}</b> [project-edit-delete] </span><div class="labels"></div>`;
-            card.querySelector('.it').append(it.t);
-            it.l.forEach((l) => card.querySelector('.labels').append(el('span', `lbl ${lblClass(l)}`, lblText(l))));
-            if (it.dep) card.append(el('span', 'dep', it.dep));
-            card.append(el('span', 'dep', it.x));
-            sIssues.append(card);
-          }
-        }
-        await sleep(i === 5 ? 1400 : 1500);
+        if (s.cards) await specCards(s.cards, !s.id.endsWith('-ready'), sleep);
+        await sleep(s.c === '--human' ? 1400 : 1500);
       }
-      sNodes[6].classList.remove('active'); sNodes[6].classList.add('done');
+      const last = sNodes[steps.length - 1];
+      last.classList.remove('active'); last.classList.add('done');
     });
   }
-  $('#spec-play').addEventListener('click', specPlay);
+  $('#spec-play').addEventListener('click', () => specPlay('epic'));
+  $('#spec-play-file').addEventListener('click', () => specPlay('file'));
   $('#spec-reset').addEventListener('click', specReset);
 
   /* ---------------- next-task flow ---------------- */
@@ -2269,7 +2332,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
   const io = new IntersectionObserver((entries) => entries.forEach((e) => {
     if (!e.isIntersecting || seen.has(e.target)) return;
     seen.add(e.target);
-    if (e.target.id === 'spec') specPlay();
+    if (e.target.id === 'spec') specPlay('epic');
     if (e.target.id === 'next') ntPlay();
     if (e.target.id === 'answer') anPlay();
     if (e.target.id === 'merge') mgPlay();
