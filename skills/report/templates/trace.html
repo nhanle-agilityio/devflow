@@ -81,6 +81,8 @@ button.ctl.alt { color: var(--fg); background: var(--panel-2); border-color: var
 .node.active { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 35%, transparent), 0 0 28px color-mix(in srgb, var(--c) 45%, transparent); transform: translateY(-2px); opacity: 1; }
 .node.pending { opacity: .25; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; } }
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+.metrics .tot b { font-size: 18px; overflow-wrap: anywhere; }
 .empty { font: 400 13px/1.5 var(--f-mono); color: var(--muted); border: 1px dashed var(--line); border-radius: 10px; padding: 14px; }
 footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 16px; }
 </style>
@@ -144,6 +146,9 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     e_rounds: ['rounds', 'vòng'],
     e_notests: ['no tests in the diff', 'không có test trong diff'], e_testfirst: ['test commit first', 'commit test trước'],
     e_testlater: ['test commit not first', 'commit test không đầu tiên'], e_files: ['files', 'tệp'], e_tfn: ['tests', 'test'], e_rows: ['rows', 'dòng'],
+    m_path: ['Path', 'Đường đi'], m_rounds: ['Review rounds', 'Vòng review'], m_blocked: ['Times blocked', 'Số lần bị chặn'],
+    m_dur: ['Duration', 'Thời lượng'], m_by: ['Merged by', 'Người merge'],
+    v_short: ['short', 'ngắn'], v_full: ['full', 'đầy đủ'], v_gate: ['gate', 'gate'], v_human: ['human', 'người'], v_hours: ['h', 'giờ'],
     e_open: ['PR still open', 'PR vẫn mở'], e_closed: ['PR closed, not merged', 'PR đóng, chưa merge'],
     e_gate: ['merged by the gate', 'gate đã merge'], e_unk: ['merger unknown (gate or owner)', 'chưa rõ ai merge (gate hoặc chủ repo)'], e_hum: ['merged by', 'người merge'],
     e_accno: ['not run', 'chưa chạy'], e_accpass: ['criteria pass', 'tiêu chí đạt'], e_accfail: ['gap found', 'có khoảng trống'], e_accna: ['not checkable', 'không kiểm tra được'],
@@ -190,6 +195,20 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     return out;
   }
 
+  /* Per-issue metrics row: five cells. claimedAt and mergedAt are in the data only, never shown. Absent metrics (2.9.0 data) render "unknown". */
+  function metricsOf(it) {
+    const m = it.metrics || {};
+    const val = (v) => (v === null || v === undefined || v === '' ? t('unknown') : String(v));
+    const word = (v) => (v === 'short' || v === 'full' || v === 'gate' || v === 'human' ? t('v_' + v) : t('unknown'));
+    return [
+      ['m_path', () => word(m.path)],
+      ['m_rounds', () => val(m.reviewRounds)],
+      ['m_blocked', () => val(m.blocked)],
+      ['m_dur', () => (typeof m.durationHours === 'number' ? m.durationHours + ' ' + t('v_hours') : t('unknown'))],
+      ['m_by', () => word(m.mergedBy)]
+    ];
+  }
+  const mcells = []; // { el, fn }
   const nodes = []; // { el, col }
   function renderNode(s, col) {
     const n = el('div', 'node ' + s.actor);
@@ -211,6 +230,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     document.querySelectorAll('[data-k]').forEach((e) => (e.textContent = t(e.dataset.k)));
     document.querySelectorAll('[data-b]').forEach((e) => (e.textContent = t('b_' + e.dataset.b)));
     document.querySelectorAll('[data-tk]').forEach((e) => (e.textContent = t(e.dataset.tk)));
+    mcells.forEach((x) => { x.el.textContent = x.fn(); });
     nodes.forEach((x) => { x.el.querySelector('[data-e]').textContent = x.el._s.ev(); });
     document.querySelectorAll('[data-lg]').forEach((e) => (e.textContent = t('lg_' + e.dataset.lg)));
     document.querySelectorAll('[data-risk]').forEach((e) => (e.textContent = t('risk') + ': ' + t(e.dataset.risk)));
@@ -249,7 +269,13 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       (it.labels || []).forEach((l) => lb.appendChild(el('span', 'lbl', l))); h.appendChild(lb); c.appendChild(h);
       const sc = el('div', 'scroll-x'); const tr = el('div', 'track');
       stepsOf(it, data).forEach((s, col) => tr.appendChild(renderNode(s, col)));
-      sc.appendChild(tr); c.appendChild(sc); tracks.appendChild(c);
+      sc.appendChild(tr); c.appendChild(sc);
+      const mr = el('div', 'metrics');
+      metricsOf(it).forEach((m) => {
+        const cell = el('div', 'tot'); cell.appendChild(el('span', null, '')).setAttribute('data-tk', m[0]);
+        const v = el('b', null, ''); cell.appendChild(v); mcells.push({ el: v, fn: m[1] }); mr.appendChild(cell);
+      });
+      c.appendChild(mr); tracks.appendChild(c);
     });
   }
 

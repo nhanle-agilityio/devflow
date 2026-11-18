@@ -544,3 +544,116 @@ test('test_t10_4_accept_spec_path_kept', () => {
   assert.ok(t.includes('git show <remote>/<baseBranch>:<specDir>/<file>'));
   assert.ok(t.includes('Gap: '));
 });
+
+// ---- T11: /devflow:report takes an epic and shows per-issue metrics ----
+const reportText = () => read('skills/report/SKILL.md');
+
+// T11.1
+test('test_t11_1_report_json_contract', () => {
+  const t = reportText();
+  for (const k of ['spec.epic', 'spec.pr', 'metrics', 'path', 'reviewRounds', 'blocked', 'claimedAt', 'mergedAt', 'durationHours', 'mergedBy']) {
+    assert.ok(t.includes(k), `SKILL.md contains ${k}`);
+  }
+});
+
+// T11.2
+test('test_t11_2_report_metric_sources', () => {
+  const t = reportText();
+  assert.ok(t.includes('devflow-run'));
+  assert.ok(t.includes('<!-- devflow-blocked -->'));
+  assert.match(t, /verdict[- ]marker/i);
+});
+
+// Runs the script of trace.html in node:vm against a stub DOM; returns all rendered text.
+const renderTrace = (data, lang) => {
+  const vm = require('node:vm');
+  const html = read('skills/report/templates/trace.html');
+  const m = html.match(/<script>([\s\S]*?)<\/script>/);
+  assert.ok(m, 'trace.html has an inline script');
+  const camel = (k) => k.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+  class El {
+    constructor() { this.children = []; this.attrs = {}; this.dataset = {}; this.own = ''; this.style = { setProperty() {} }; this.className = ''; this._cl = new Set(); }
+    get textContent() { return this.own + this.children.map((c) => c.textContent).join(' '); }
+    set textContent(v) { this.own = String(v); this.children = []; }
+    setAttribute(k, v) { this.attrs[k] = String(v); if (k.startsWith('data-')) this.dataset[camel(k.slice(5))] = String(v); }
+    getAttribute(k) { return this.attrs[k]; }
+    get classList() { const s = this._cl; return { add: (c) => s.add(c), remove: (c) => s.delete(c), contains: (c) => s.has(c), toggle() {} }; }
+    appendChild(c) { this.children.push(c); return c; }
+    addEventListener() {}
+    querySelectorAll(sel) {
+      const m2 = /^\[(data-[a-z]+)\]$/.exec(sel);
+      const out = [];
+      const walk = (n) => n.children.forEach((c) => { if (m2 && c.attrs[m2[1]] !== undefined) out.push(c); walk(c); });
+      walk(this);
+      return out;
+    }
+    querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+  }
+  const root = new El();
+  const byId = {};
+  const document = {
+    documentElement: new El(),
+    createElement: () => new El(),
+    querySelector: (s) => { if (!byId[s]) { byId[s] = new El(); root.appendChild(byId[s]); } return byId[s]; },
+    querySelectorAll: (s) => root.querySelectorAll(s)
+  };
+  document.querySelector('#data').textContent = JSON.stringify(data);
+  const localStorage = { getItem: () => lang || null, setItem() {} };
+  const ctx = vm.createContext({ document, localStorage, setTimeout, clearTimeout, console });
+  vm.runInContext(m[1], ctx);
+  return root.children.filter((c) => c !== byId['#data']).map((c) => c.textContent).join(' ');
+};
+
+const traceIssue = (over) => Object.assign({
+  number: 101, url: 'https://github.com/o/r/issues/101', title: 'Sample issue', labels: ['devflow'], risk: 'low',
+  plan: null, questions: null, blocked: false,
+  pr: { number: 201, url: 'https://github.com/o/r/pull/201', state: 'merged', base: 'main', stacked: false, byGate: false, mergedByKnown: true, mergedBy: 'pr-merger' },
+  review: { state: 'success', rounds: 2, description: 'ok' }, tests: null, accepted: null
+}, over || {});
+const fullMetrics = () => ({ path: 'short', reviewRounds: 7, blocked: 4, claimedAt: '2031-05-06T07:08:09Z', mergedAt: '2032-01-02T03:04:05Z', durationHours: 12.3, mergedBy: 'gate' });
+const unknownCount = (s) => (s.match(/unknown|chưa rõ/g) || []).length;
+
+// T11.3
+test('test_t11_3_trace_renders_five_metrics', () => {
+  const text = renderTrace({
+    spec: { slug: 'e', title: 'Epic', epic: { number: 100, url: 'https://github.com/o/r/issues/100' }, pr: null },
+    issues: [traceIssue({ metrics: fullMetrics() })], release: null
+  });
+  assert.ok(text.includes('short'), 'path');
+  assert.match(text, /\b7\b/, 'review rounds');
+  assert.match(text, /\b4\b/, 'times blocked');
+  assert.ok(text.includes('12.3'), 'duration');
+  assert.match(text, /Merged by\s+(gate|the gate)/i, 'merged by');
+  assert.ok(!text.includes('2031-05-06'), 'claimedAt value not shown');
+  assert.ok(!text.includes('2032-01-02'), 'mergedAt value not shown');
+});
+
+// T11.4
+test('test_t11_4_trace_null_renders_unknown', () => {
+  const mk = (m) => ({ spec: { slug: 'e', title: 'Epic', epic: null, pr: null }, issues: [traceIssue({ metrics: m })], release: null });
+  const nulls = Object.assign(fullMetrics(), { reviewRounds: null, durationHours: null });
+  for (const [lang, word] of [['en', 'unknown'], ['vi', 'chưa rõ']]) {
+    const base = unknownCount(renderTrace(mk(fullMetrics()), lang));
+    const text = renderTrace(mk(nulls), lang);
+    assert.ok(text.includes(word), `${lang} shows ${word}`);
+    assert.ok(unknownCount(text) >= base + 2, `${lang}: two more unknown cells than with full metrics`);
+  }
+});
+
+// T11.5
+test('test_t11_5_trace_renders_290_data', () => {
+  const text = renderTrace({
+    spec: { slug: 's', title: 'Old spec', pr: { number: 9, url: 'https://github.com/o/r/pull/9', mergedBy: 'someone' } },
+    issues: [traceIssue(), traceIssue({ number: 102, title: 'Second issue', pr: null })], release: null
+  });
+  assert.ok(text.includes('#101 Sample issue'));
+  assert.ok(text.includes('#102 Second issue'));
+});
+
+// T11.6
+test('test_t11_6_report_read_only', () => {
+  const t = reportText();
+  for (const w of ['add_issue_comment', 'issue_write', 'create_pull_request']) {
+    assert.ok(!t.includes(w), `SKILL.md does not name ${w}`);
+  }
+});
