@@ -499,3 +499,30 @@ test('test_t1_1_flows_page_next_task_sample_log_count_matches_markup_and_js', ()
   const pool = html.match(/const POOL = \[([\s\S]*?)\n  \];/)[1].match(/\{ n: \d+/g).length;
   assert.equal(Number(nums(markup[1])[0]), pool, 'count matches the POOL size');
 });
+
+// T9.4-T9.6: changelogEntryIn(root, n) is the helper behind changelogEntry(n): CHANGELOG.md or the fragment <fragmentsDir>/<n>.md.
+const os = require('node:os');
+function fixture(files) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-docs-'));
+  for (const [f, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(root, f)), { recursive: true });
+    fs.writeFileSync(path.join(root, f), text);
+  }
+  return root;
+}
+const FRAG_CFG = JSON.stringify({ changelog: { fragmentsDir: 'changelog.d' } });
+
+test('T9.4 changelogEntry finds a changelog entry', () => {
+  const root = fixture({ 'CHANGELOG.md': '## [Unreleased]\n- x (#5)\n', '.claude/devflow.json': FRAG_CFG });
+  assert.ok(changelogEntryIn(root, 5));
+});
+
+test('T9.5 changelogEntry finds a fragment', () => {
+  const root = fixture({ 'CHANGELOG.md': '## [Unreleased]\n', 'changelog.d/5.md': '### Added\n- x (#5)\n', '.claude/devflow.json': FRAG_CFG });
+  assert.ok(changelogEntryIn(root, 5));
+});
+
+test('T9.6 changelogEntry finds neither', () => {
+  const root = fixture({ 'CHANGELOG.md': '## [Unreleased]\n- x (#6)\n', 'changelog.d/7.md': '### Added\n- y (#7)\n', '.claude/devflow.json': FRAG_CFG });
+  assert.ok(!changelogEntryIn(root, 5));
+});
