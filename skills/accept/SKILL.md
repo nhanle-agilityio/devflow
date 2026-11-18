@@ -1,7 +1,7 @@
 ---
 name: accept
-description: BA acceptance after merge. Check the merged behavior of a spec against its acceptance criteria on a fresh checkout of the base branch, then turn every gap into a same-day gap issue and post the result on the spec PR. Never merges.
-argument-hint: <spec path or slug>
+description: BA acceptance after merge. Check the merged behavior of a spec against its acceptance criteria on a fresh checkout of the base branch, then turn every gap into a same-day gap issue and post the result on the spec PR, or on the epic when given an epic. Never merges.
+argument-hint: <epic #n | spec path or slug>
 disable-model-invocation: true
 ---
 
@@ -21,9 +21,11 @@ Fail fast with a clear message if any check fails.
 2. The GitHub MCP server is reachable: load its tools with ToolSearch and get the authenticated user.
 3. The working tree is clean (`git status --porcelain` is empty). Note the current branch (or detached HEAD) to restore at the end.
 4. `git fetch <remote> <baseBranch>` succeeds (`remote` is `github.remote`, default `origin`).
-5. `$ARGUMENTS` names a spec: a path under `specDir` (default `docs/specs`) or a slug. If empty, list the specs on the base branch (`git ls-tree --name-only <remote>/<baseBranch> <specDir>/`) and ask which one.
+5. `$ARGUMENTS` names an epic or a spec. `#<n>` or `<n>` is an epic's issue number: a number is always an issue number, never a slug. Otherwise it is a spec: a path under `specDir` (default `docs/specs`) or a slug. If empty, list the specs on the base branch (`git ls-tree --name-only <remote>/<baseBranch> <specDir>/`) and ask which one.
 
 ## 1. Resolve the spec and its issues
+
+**Epic (`#<n>` or `<n>`).** Read issue `#<n>` and collect its issue set as the union of two sources: the native sub-issues of the epic (`issue_read` method `get_sub_issues`) and the issues (open and closed) whose body has `Epic: #<n>`. Remove duplicates. If both sources are empty, stop with `#<n> is not an epic` and post nothing. The slug is the one in `[<slug>]` at the start of the epic's title, else `[epic #<n>]`. Take the acceptance criteria and the Test cases rows with level `http` or `e2e` from each sub-issue's body (there is no spec file to read), then continue at item 4 below (state and closing PR of each issue). The skill never closes the epic. The spec path and slug flow below is unchanged.
 
 1. Find the file on the base branch only: `git show <remote>/<baseBranch>:<specDir>/<file>`. For a slug, match the file name that ends in `<slug>.md`; if several match, ask. If none, tell the user the spec is not on the base branch (its spec PR is not merged) and stop.
 2. List its tasks (`T1..Tn`), the acceptance criteria of each and the Test matrix rows with level `http` or `e2e`.
@@ -60,7 +62,7 @@ For each `fail`:
 
 1. Search open issues for a duplicate (same spec and criterion). If one exists, link it in the table and create nothing.
 2. Otherwise draft a gap issue from the bug template `${CLAUDE_PLUGIN_ROOT}/skills/spec/templates/bug.md` (keep every heading):
-   - Title: `[<slug>] Gap: <criterion, short>`.
+   - Title: `[<slug>] Gap: <criterion, short>`; for an epic, `<slug>` is the slug from `[<slug>]` in the epic title, else `[epic #<n>]` (so `[epic #<n>] Gap: ...`).
    - **Context** (spec link on the base branch, the criterion, the original issue and PR), **Expected**, **Actual** (the evidence), **Repro**, **Introduced by** (the PR that closed the task, and the criterion id, e.g. "PR #54, AC2.5"), **Risk** (a suggestion: `low` or `high` against `risk.highWhen` / `risk.highPaths`; unsure means high), **Acceptance criteria** (the spec's criterion as a checklist item), **Scope**, **Test cases** (at least one `must` regression row), **Dependencies** None.
    - Labels: `labels.triage` (default `needs-triage`) plus every label in `accept.labels` (default `["type:gap"]`). Not `labels.ready`, no risk or priority label: a human triages the gap.
    - After creating it, comment on the issue: a suggested priority (one of `labels.priority`) and a suggested risk, each with a one-line reason, and that a human sets the labels and ready.
@@ -69,7 +71,7 @@ Show the drafted list (title, risk, criterion) and create the issues only after 
 
 ## 6. Report on the spec PR
 
-Find the spec's PR (the merged PR that added the spec file; `git log <remote>/<baseBranch> --diff-filter=A -- <file>` then the PR for that commit). If it is not found, use the last merged PR among the spec's issues. Post one comment starting with `<!-- devflow-accept -->` containing the table (task, criterion, result, evidence in one line), the counts (pass, fail, not checkable), the issues not yet merged that were left out, and links to the new or existing gap issues. Edit this comment in place on a re-run instead of adding another.
+For an epic, post the comment on the epic issue itself (no PR lookup), edited in place on a re-run; never close the epic. Otherwise find the spec's PR (the merged PR that added the spec file; `git log <remote>/<baseBranch> --diff-filter=A -- <file>` then the PR for that commit). If it is not found, use the last merged PR among the spec's issues. Post one comment starting with `<!-- devflow-accept -->` containing the table (task, criterion, result, evidence in one line), the counts (pass, fail, not checkable), the issues not yet merged that were left out, and links to the new or existing gap issues. Edit this comment in place on a re-run instead of adding another.
 
 Print the same table in the chat, then the gap issues created, the ones waiting for a human, and the comment link. Mention that the gap issues wait in `needs-triage`: once a human sets the priority and risk labels and swaps `needs-triage` for ready, `/devflow:next-task` picks them up like any other ready issue (fix issues get Root cause, Introduced by and Why it was missed in their PR), and `/devflow:release` includes this result in the notes.
 
