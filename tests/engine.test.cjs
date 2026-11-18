@@ -1710,3 +1710,66 @@ test('test_t6_9_reviewer_reads_epic', () => {
   assert.match(text, /Epic:/);
   assert.match(text, /gh issue view/);
 });
+
+// #94: commit grouping follows CLAUDE.md and the plan.
+const RULES = 'RULES-MARKER: keep code, tests and docs in separate commits';
+const ORDER = 'ORDER-MARKER: 1. failing test 2. code 3. docs';
+const PLAN94 = `## Files to change\nx\n\n## Order of commits\n${ORDER}\n\n## Open questions\nnone`;
+const prompts94 = (calls, p) => calls.filter((c) => c.l.startsWith(p)).map((c) => c.prompt);
+const run94 = (planOut, extra = {}) => run({ ...BASE, issues: [1] }, { ...QA, checkFirstFails: true, planOut, ...extra });
+const REWRITE = /\b(amend|rebase|squash|split)\b/i;
+
+test('T2.1 commit and fix prompts carry the CLAUDE.md rules and the plan order', async () => {
+  const { calls } = await run94({ plan: PLAN94, commitRules: RULES, separateCommits: false });
+  assert.equal(prompts94(calls, 'commit').length, 1);
+  assert.equal(prompts94(calls, 'fix').length, 1);
+  for (const p of [...prompts94(calls, 'commit'), ...prompts94(calls, 'fix')]) {
+    assert.ok(p.includes(RULES), 'rules present');
+    assert.ok(p.includes(ORDER), 'order present');
+  }
+});
+
+test('T2.2 short path: CLAUDE.md commit rules and no plan order', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] }, { labels: ['risk:low'], checkFirstFails: true });
+  const fix = prompts94(calls, 'fix');
+  assert.equal(fix.length, 1);
+  assert.match(fix[0], /commit rules/i);
+  assert.doesNotMatch(fix[0], /Order of commits/);
+});
+
+test('T2.3 separate-commit rule: QA test commit, code commit, then a docs commit', async () => {
+  const { calls } = await run94({ plan: PLAN94, commitRules: RULES, separateCommits: true });
+  const p = prompts94(calls, 'commit')[0];
+  assert.match(p, /QA test commit/);
+  assert.match(p, /docs\(/);
+  assert.match(p, /repository-root `\*\.md`/);
+  assert.match(p, /`docs\/\*\*`/);
+  assert.match(p, /changelog fragment/i);
+  assert.match(p, /never `skills\/\*\*` or `agents\/\*\*`/);
+  assert.ok(p.indexOf('QA test commit') < p.indexOf('code commit') && p.indexOf('code commit') < p.indexOf('docs('));
+});
+
+test('T2.4 separate-commit rule: the docs commit is skipped when no docs files changed', async () => {
+  const { calls } = await run94({ plan: PLAN94, commitRules: RULES, separateCommits: true });
+  assert.match(prompts94(calls, 'commit')[0], /skip the docs commit/i);
+});
+
+test('T2.5 CLAUDE.md silent on grouping: 3.0.0 grouping, no docs commit', async () => {
+  const { calls } = await run94({ plan: PLAN94, commitRules: '', separateCommits: false });
+  const p = prompts94(calls, 'commit')[0];
+  assert.match(p, /test\(/);
+  assert.match(p, /feat\|fix\|chore\|refactor/);
+  assert.doesNotMatch(p, /docs\(/);
+  assert.doesNotMatch(p, /QA test commit/);
+});
+
+test('T2.6 no commit or fix prompt asks to amend, rebase, squash or split a commit', async () => {
+  for (const separateCommits of [true, false]) {
+    const { calls } = await run94({ plan: PLAN94, commitRules: RULES, separateCommits });
+    const all = [...prompts94(calls, 'commit'), ...prompts94(calls, 'fix')];
+    assert.equal(all.length, 2);
+    for (const p of all) assert.doesNotMatch(p, REWRITE);
+  }
+  const { calls } = await run({ ...BASE, issues: [1] }, { labels: ['risk:low'], checkFirstFails: true });
+  for (const p of prompts94(calls, 'fix')) assert.doesNotMatch(p, REWRITE);
+});
