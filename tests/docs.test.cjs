@@ -287,3 +287,13 @@ test('test_t7_8_docs_describe_both_modes', () => {
   }
   assert.ok(changelogEntry(58), 'CHANGELOG has an entry citing (#58)');
 });
+
+// T8.4
+test('test_t8_4_docs_describe_spec_review', () => {
+  for (const f of ['README.md', 'DESIGN.md', 'CHANGELOG.md']) {
+    const text = read(f);
+    assert.match(text, /spec review/i, `${f} mentions spec review`);
+    assert.ok(text.includes('QA'), `${f} mentions QA`);
+  }
+  assert.ok(changelogEntry(59), 'CHANGELOG has an entry citing (#59)');
+});

@@ -426,3 +426,49 @@ test('test_t7_7_final_message_ready', () => {
   assert.ok(text, 'SKILL.md has a Final message step');
   assert.ok(text.includes('labels.ready'));
 });
+
+// Helpers for T8: step labels are headings (--file mode) or bold paragraph leads (epic mode).
+const stepOffset = (text, re) => {
+  const m = text.match(new RegExp(`^(?:#{1,6}\\s+|\\*\\*)?(?:[EF]\\d+\\.\\s*)?(?:${re.source})`, 'im'));
+  return m ? m.index : -1;
+};
+
+// T8.1
+test('test_t8_1_open_questions_section', () => {
+  const skill = read('skills/spec/SKILL.md');
+  assert.ok(skill.includes('## Open questions'), 'SKILL.md has ## Open questions');
+  assert.ok(read('skills/spec/templates/issue.md').includes('## Open questions'), 'issue.md has ## Open questions');
+  assert.ok(skill.includes('Risks and unknowns'), 'SKILL.md names Risks and unknowns');
+  assert.ok(fileModeText().includes('Risks and unknowns'), '--file mode names Risks and unknowns');
+});
+
+// T8.2
+test('test_t8_2_spec_review_contract', () => {
+  const skill = read('skills/spec/SKILL.md');
+  for (const k of ['spec.qaModel', 'missing requirement', 'contradiction', 'not independent', 'critical', 'warning', 'suggestion']) {
+    assert.ok(skill.includes(k), `SKILL.md contains ${k}`);
+  }
+});
+
+// T8.3
+test('test_t8_3_spec_review_order_both_modes', () => {
+  const epic = epicModeText();
+  const file = fileModeText();
+  assert.ok(epic && file, 'both mode sections exist');
+  const eQa = stepOffset(epic, /[^\n]*\(QA\)/);
+  const eReview = stepOffset(epic, /Spec review/);
+  const eCreate = stepOffset(epic, /(?:Build|Create)\b/);
+  assert.ok(eQa >= 0, 'epic mode has a QA step');
+  assert.ok(eReview >= 0, 'epic mode has a Spec review step');
+  assert.ok(eCreate >= 0, 'epic mode has a build/create step');
+  assert.ok(eQa < eReview, 'epic: QA before spec review');
+  assert.ok(eReview < eCreate, 'epic: spec review before issue creation');
+  const fQa = stepOffset(file, /[^\n]*\(QA\)/);
+  const fReview = stepOffset(file, /Spec review/);
+  const fPr = stepOffset(file, /Spec PR/);
+  assert.ok(fQa >= 0, '--file has a QA step');
+  assert.ok(fReview >= 0, '--file has a Spec review step');
+  assert.ok(fPr >= 0, '--file has a Spec PR step');
+  assert.ok(fQa < fReview, '--file: QA before spec review');
+  assert.ok(fReview < fPr, '--file: spec review before spec PR');
+});
