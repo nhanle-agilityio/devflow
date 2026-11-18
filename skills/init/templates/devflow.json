@@ -91,6 +91,10 @@
   // /devflow:release: tag = tagPrefix + version. draft: the GitHub release is created as a draft; a human publishes it.
   // deploy: optional shell command run after the release, only after the user says yes. notesFrom: "prs".
   "release": { "tagPrefix": "v", "draft": true, "deploy": "", "notesFrom": "prs" },
+  // Changelog fragments (bin/devflow-changelog): one <issue number>.md per issue in fragmentsDir, with "### Added" style
+  // headings and "- " bullets; assemble writes them into "file" below "## [Unreleased]". fragmentsDir has no default: ""
+  // (or no changelog object) means off.
+  "changelog": { "fragmentsDir": "", "file": "CHANGELOG.md" },
   // /devflow:accept: model is "sonnet" or "opus"; labels are added to the gap issues it files.
   "accept": { "model": "sonnet", "labels": ["type:gap"] }
 }

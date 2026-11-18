@@ -1,0 +1,210 @@
+#!/usr/bin/env node
+'use strict';
+// devflow-changelog: changelog fragments. One file per issue in changelog.fragmentsDir (<number>.md) holds
+// "### <section>" headings with "- " bullets; assemble turns them into a release section of the changelog.
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+const USAGE = `Usage: devflow-changelog <command> [args]
+
+Commands:
+  has <n>                                  exit 0 when <fragmentsDir>/<n>.md exists and is valid, 1 otherwise
+  preview --version X.Y.Z --date YYYY-MM-DD  print the release section; writes nothing
+  assemble --version X.Y.Z --date YYYY-MM-DD write the section below "## [Unreleased]" in changelog.file, move the
+                                           bullets already under [Unreleased] into it, delete the fragments
+
+Reads changelog.fragmentsDir (required) and changelog.file (default CHANGELOG.md) from .claude/devflow.json in the
+current directory. Exit codes: 0 ok, 1 invalid fragments or changelog (nothing written), 2 usage or configuration error.`;
+
+const SECTIONS = ['Added', 'Changed', 'Deprecated', 'Removed', 'Fixed', 'Security'];
+const VERSION_RE = /^\d+\.\d+\.\d+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$/;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+class ExitError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+}
+const usageError = (m) => new ExitError(2, m);
+const failure = (m) => new ExitError(1, m);
+
+// Parse the text of a fragment (or of the [Unreleased] block) into Map<section, string[] bullets>.
+// A bullet is a "- " line plus the indented lines that follow it. Returns {ok, sections} or {ok:false, error}.
+function parseFragment(text, { allowEmpty = false } = {}) {
+  const sections = new Map();
+  let current = null;
+  let seen = 0;
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === '') continue;
+    const h = /^###\s+(.*?)\s*$/.exec(line);
+    if (h) {
+      if (!SECTIONS.includes(h[1])) return { ok: false, error: `line ${i + 1}: unknown heading "### ${h[1]}" (known: ${SECTIONS.join(', ')})` };
+      current = h[1];
+      seen++;
+      if (!sections.has(current)) sections.set(current, []);
+      continue;
+    }
+    if (current === null) return { ok: false, error: `line ${i + 1}: text before the first "### <section>" heading` };
+    const list = sections.get(current);
+    if (line.startsWith('- ')) list.push(line);
+    else if (/^\s/.test(line) && list.length) list[list.length - 1] += '\n' + line;
+    else return { ok: false, error: `line ${i + 1}: not a bullet ("- ...") under "### ${current}"` };
+  }
+  if (!allowEmpty) {
+    if (!seen) return { ok: false, error: 'no "### <section>" heading' };
+    for (const [name, list] of sections) if (!list.length) return { ok: false, error: `"### ${name}" has no bullet` };
+  }
+  return { ok: true, sections };
+}
+
+// fragments: [{n, sections}] in any order; base: optional Map of bullets already under [Unreleased] (no suffix).
+function renderSection(version, date, fragments, base) {
+  const merged = new Map(SECTIONS.map((s) => [s, []]));
+  if (base) for (const [s, list] of base) merged.get(s).push(...list);
+  for (const f of [...fragments].sort((a, b) => a.n - b.n)) {
+    for (const [s, list] of f.sections) {
+      for (const b of list) merged.get(s).push(b.includes(`(#${f.n})`) ? b : `${b} (#${f.n})`);
+    }
+  }
+  let out = `## [${version}] - ${date}\n`;
+  for (const s of SECTIONS) {
+    const list = merged.get(s);
+    if (list.length) out += `\n### ${s}\n${list.join('\n')}\n`;
+  }
+  return out;
+}
+
+function loadConfig(cwd) {
+  let cfg = {};
+  try {
+    cfg = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'devflow.json'), 'utf8'));
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw usageError(`cannot read .claude/devflow.json: ${e.message}`);
+  }
+  const c = (cfg && cfg.changelog) || {};
+  if (typeof c.fragmentsDir !== 'string' || !c.fragmentsDir.trim()) {
+    throw usageError('changelog.fragmentsDir is not set in .claude/devflow.json');
+  }
+  const file = typeof c.file === 'string' && c.file.trim() ? c.file : 'CHANGELOG.md';
+  return { fragmentsDir: path.resolve(cwd, c.fragmentsDir), file: path.resolve(cwd, file), fileName: file };
+}
+
+// Read every fragment; throws failure listing all problems. Returns [{n, file, sections}] (unsorted).
+function readFragments(dir) {
+  let names = [];
+  try {
+    names = fs.readdirSync(dir);
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+  }
+  const problems = [];
+  const out = [];
+  for (const name of names.sort()) {
+    const m = /^(\d+)\.md$/.exec(name);
+    if (!m) {
+      problems.push(`${name}: file name is not <number>.md`);
+      continue;
+    }
+    const r = parseFragment(fs.readFileSync(path.join(dir, name), 'utf8'));
+    if (!r.ok) problems.push(`${name}: ${r.error}`);
+    else out.push({ n: Number(m[1]), file: path.join(dir, name), sections: r.sections });
+  }
+  if (problems.length) throw failure(problems.join('\n'));
+  return out;
+}
+
+function parseArgs(args) {
+  const opts = {};
+  for (let i = 0; i < args.length; i += 2) {
+    const k = args[i];
+    if ((k !== '--version' && k !== '--date') || args[i + 1] === undefined) throw usageError(`unexpected argument "${k}"\n${USAGE}`);
+    opts[k.slice(2)] = args[i + 1];
+  }
+  if (!opts.version) throw usageError('--version is required');
+  if (!opts.date) throw usageError('--date is required');
+  if (!VERSION_RE.test(opts.version)) throw usageError(`invalid version "${opts.version}" (expected X.Y.Z or X.Y.Z-pre.release)`);
+  if (!DATE_RE.test(opts.date)) throw usageError(`invalid date "${opts.date}" (expected YYYY-MM-DD)`);
+  return opts;
+}
+
+function run(argv, cwd, io) {
+  const [cmd, ...rest] = argv;
+  if (!cmd || cmd === '--help' || cmd === '-h') {
+    io.out(USAGE + '\n');
+    return cmd ? 0 : 2;
+  }
+  if (!['has', 'preview', 'assemble'].includes(cmd)) throw usageError(`unknown command "${cmd}"\n${USAGE}`);
+  let n = null;
+  let opts = null;
+  if (cmd === 'has') {
+    if (rest.length !== 1 || !/^\d+$/.test(rest[0])) throw usageError('has takes one issue number');
+    n = Number(rest[0]);
+  } else opts = parseArgs(rest);
+  const cfg = loadConfig(cwd);
+
+  if (cmd === 'has') {
+    const file = path.join(cfg.fragmentsDir, `${n}.md`);
+    if (!fs.existsSync(file)) return 1;
+    const r = parseFragment(fs.readFileSync(file, 'utf8'));
+    if (!r.ok) io.err(`${n}.md: ${r.error}\n`);
+    return r.ok ? 0 : 1;
+  }
+
+  const fragments = readFragments(cfg.fragmentsDir);
+  if (cmd === 'preview') {
+    if (!fragments.length) throw failure('nothing to release: no fragments');
+    io.out(renderSection(opts.version, opts.date, fragments));
+    return 0;
+  }
+
+  // assemble: validate everything, then write the changelog, then delete the fragments.
+  let text;
+  try {
+    text = fs.readFileSync(cfg.file, 'utf8');
+  } catch (e) {
+    throw failure(`cannot read ${cfg.fileName}: ${e.code === 'ENOENT' ? 'file not found' : e.message}`);
+  }
+  const lines = text.split('\n');
+  const start = lines.findIndex((l) => /^## \[Unreleased\]\s*$/i.test(l));
+  if (start < 0) throw failure(`${cfg.fileName} has no "## [Unreleased]" heading`);
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^## \[/.test(lines[i]) || /^\[[^\]]+\]:\s/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  const escaped = opts.version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (new RegExp(`^## \\[${escaped}\\]`, 'm').test(text)) throw failure(`${cfg.fileName} already has a section for ${opts.version}`);
+  const unreleased = parseFragment(lines.slice(start + 1, end).join('\n'), { allowEmpty: true });
+  if (!unreleased.ok) throw failure(`[Unreleased] in ${cfg.fileName}: ${unreleased.error}`);
+  const hasBullets = [...unreleased.sections.values()].some((l) => l.length);
+  if (!fragments.length && !hasBullets) throw failure('nothing to release: no fragments and no bullets under [Unreleased]');
+
+  const section = renderSection(opts.version, opts.date, fragments, unreleased.sections);
+  const tail = lines.slice(end).join('\n');
+  const next = lines.slice(0, start + 1).join('\n') + '\n\n' + section + (tail ? '\n' + tail : '');
+  fs.writeFileSync(cfg.file, next);
+  for (const f of fragments) fs.unlinkSync(f.file);
+  io.out(`assembled ${opts.version} into ${cfg.fileName} from ${fragments.length} fragment(s)\n`);
+  return 0;
+}
+
+if (require.main === module) {
+  try {
+    process.exitCode = run(process.argv.slice(2), process.cwd(), {
+      out: (s) => process.stdout.write(s),
+      err: (s) => process.stderr.write(s),
+    });
+  } catch (e) {
+    if (!(e instanceof ExitError)) throw e;
+    process.stderr.write(`devflow-changelog: ${e.message}\n`);
+    process.exitCode = e.code;
+  }
+}
+
+module.exports = { parseFragment, renderSection, SECTIONS };
