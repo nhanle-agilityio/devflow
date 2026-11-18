@@ -62,6 +62,9 @@ async function run(args, opts = {}) {
       for (const k of Object.keys(planRes)) if (planRes[k] === undefined) delete planRes[k];
       return planRes;
     }
+    if (l.startsWith('qa-fix')) {
+      return Object.assign({ status: 'done', summary: 'qf', commits: [], filesChanged: [], assumptions: [], outOfScope: [], touchesUi: false, specRead: 'none' }, pick(opts.qaFixOut, n) || {});
+    }
     if (l.startsWith('qa')) {
       return Object.assign({ status: 'done', tests: [{ rowId: 'T1.1', test: 'test_t1_1' }], filesChanged: opts.qaFiles || [], questions: [], specRead: 'docs/specs/a.md' }, opts.qaOut || {});
     }
@@ -79,6 +82,10 @@ async function run(args, opts = {}) {
     }
     if (l.startsWith('check')) {
       checkCalls[n] = (checkCalls[n] || 0) + 1;
+      if (opts.checkFail) {
+        const f = opts.checkFail(n, checkCalls[n]);
+        if (f) return { passed: false, failures: f };
+      }
       if (opts.checkFirstFails && checkCalls[n] === 1) return { passed: false, failures: [{ check: 'test', output: 'boom' }] };
       return { passed: true, failures: [] };
     }
@@ -1709,4 +1716,146 @@ test('test_t6_9_reviewer_reads_epic', () => {
   const text = fs.readFileSync(path.join(__dirname, '..', 'agents', 'reviewer.md'), 'utf8');
   assert.match(text, /Epic:/);
   assert.match(text, /gh issue view/);
+});
+
+// ---- #93: QA-owned findings go to a QA fix agent; commit-structure findings are suggestions ----
+const Q93 = { qaFiles: ['tests/a.test.cjs'], devFiles: ['src/x.js'] };
+const f93 = (file, o = {}) => ({ severity: 'warning', file, line: 1, problem: 'problem in ' + file, fix: 'fix it', ...o });
+const once93 = (findings) => { let k = 0; return () => (k++ === 0 ? { verdict: 'changes', findings } : { verdict: 'pass', findings: [] }); };
+const always93 = (findings) => () => ({ verdict: 'changes', findings });
+const count93 = (calls, label) => calls.filter((c) => c.l.startsWith(label)).length;
+const cfg93 = (nt) => ({ ...BASE, config: { ...CFG, nextTask: nt }, issues: [1] });
+
+test('T1.1 a review finding in qaFiles goes to the QA fix agent, not the dev fix agent', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { ...Q93, review: once93([f93('tests/a.test.cjs')]) });
+  assert.equal(rep[0].status, 'pr');
+  assert.equal(count93(calls, 'qa-fix'), 1);
+  assert.equal(count93(calls, 'fix'), 0);
+});
+
+test('T1.2 the QA fix agent changing a file outside qaFiles blocks', async () => {
+  const { rep } = await run({ ...BASE, issues: [1] }, { ...Q93, review: once93([f93('tests/a.test.cjs')]), qaFixOut: { filesChanged: ['src/x.js'] } });
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(rep[0].reason, /QA fix agent changed .*src\/x\.js/);
+});
+
+test('T1.3 a critical finding in qaFiles runs the QA fix agent', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { ...Q93, review: once93([f93('tests/a.test.cjs', { severity: 'critical' })]) });
+  assert.equal(rep[0].status, 'pr');
+  assert.equal(count93(calls, 'qa-fix'), 1);
+});
+
+test('T1.4 a failing check attributed to a qaFile starts a QA fix round', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { ...Q93, checkFail: (n, c) => (c === 1 ? [{ check: 'test', output: 'boom', files: ['tests/a.test.cjs'] }] : null) });
+  assert.equal(rep[0].status, 'pr');
+  assert.equal(count93(calls, 'qa-fix'), 1);
+  assert.equal(count93(calls, 'fix'), 0);
+});
+
+test('T1.5 a failing check attributed to a non-QA file starts the dev fix agent', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { ...Q93, checkFail: (n, c) => (c === 1 ? [{ check: 'test', output: 'boom', files: ['src/x.js'] }] : null) });
+  assert.equal(rep[0].status, 'pr');
+  assert.equal(count93(calls, 'fix'), 1);
+  assert.equal(count93(calls, 'qa-fix'), 0);
+});
+
+test('T1.6 the dev fix agent changing a qaFile blocks', async () => {
+  const { rep } = await run({ ...BASE, issues: [1] }, { ...Q93, review: once93([f93('src/x.js')]), fixOut: { filesChanged: ['tests/a.test.cjs'] } });
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(rep[0].reason, /QA test files tests\/a\.test\.cjs/);
+});
+
+test('T1.7 QA and dev fix rounds share maxFixRounds in the check loop', async () => {
+  const fails = (n, c) => [{ check: 'test', output: 'boom', files: [c === 1 ? 'tests/a.test.cjs' : 'src/x.js'] }];
+  const { rep, calls } = await run(cfg93({ maxFixRounds: 2 }), { ...Q93, checkFail: fails });
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(rep[0].reason, /^Check:/);
+  assert.equal(count93(calls, 'qa-fix') + count93(calls, 'fix'), 2);
+  assert.equal(count93(calls, 'check'), 3);
+});
+
+test('T1.8 a QA-file finding that stays open gets exactly maxReviewRounds rounds', async () => {
+  const { rep, calls } = await run(cfg93({ maxReviewRounds: 1 }), { ...Q93, review: always93([f93('tests/a.test.cjs')]) });
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(rep[0].reason, /^Review:/);
+  assert.equal(count93(calls, 'qa-fix'), 1);
+  assert.equal(count93(calls, 'fix'), 0);
+  assert.equal(count93(calls, 'review'), 2);
+});
+
+test('T1.9 a mixed round runs the QA fix agent, then the dev fix agent, and counts once', async () => {
+  const { rep, calls } = await run(cfg93({ maxReviewRounds: 1 }), { ...Q93, review: always93([f93('tests/a.test.cjs'), f93('src/x.js')]) });
+  assert.equal(rep[0].status, 'blocked');
+  const order = labels(calls).filter((l) => l === 'qa-fix' || l === 'fix');
+  assert.deepEqual(order, ['qa-fix', 'fix']);
+  assert.equal(count93(calls, 'review'), 2);
+});
+
+test('T1.10 a QA fix round that changes nothing still counts and the dev fix agent still runs', async () => {
+  const { rep, calls } = await run(cfg93({ maxReviewRounds: 1 }), { ...Q93, review: always93([f93('tests/a.test.cjs'), f93('src/x.js')]), qaFixOut: { filesChanged: [] } });
+  assert.equal(rep[0].status, 'blocked');
+  assert.equal(count93(calls, 'fix'), 1);
+  assert.equal(count93(calls, 'review'), 2);
+});
+
+const right93 = { qaFixOut: { positions: [{ finding: 'F1', position: 'test is right' }] } };
+
+test('T1.11 "test is right" against "code is right" for one finding blocks with one questions comment', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { ...Q93, ...right93, review: always93([f93('tests/a.test.cjs')]), fixOut: { positions: [{ finding: 'F1', position: 'code is right' }] } });
+  assert.equal(rep[0].status, 'blocked');
+  const b = prompt(calls, 'blocked');
+  assert.equal(count93(calls, 'blocked'), 1);
+  assert.match(b, /<!-- devflow-questions -->/);
+  assert.match(b, /test is right/);
+  assert.match(b, /code is right/);
+  assert.ok(!/\n2\. /.test(b));
+});
+
+test('T1.12 positions on different findings raise no disagreement block', async () => {
+  const { rep } = await run({ ...BASE, issues: [1] }, { ...Q93, ...right93, review: once93([f93('tests/a.test.cjs'), f93('src/x.js')]), fixOut: { positions: [{ finding: 'F2', position: 'code is right' }] } });
+  assert.equal(rep[0].status, 'pr');
+});
+
+test('T1.13 a disagreement blocks even when onQuestion is decide', async () => {
+  const { rep } = await run(cfg93({ onQuestion: 'decide' }), { ...Q93, ...right93, review: always93([f93('tests/a.test.cjs')]), fixOut: { positions: [{ finding: 'F1', position: 'code is right' }] } });
+  assert.equal(rep[0].status, 'blocked');
+});
+
+test('T1.14 a commit-structure finding is a suggestion: listed in the PR notes, no fix, no block', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { ...Q93, review: always93([f93('src/x.js', { severity: 'critical', category: 'commit-structure', problem: 'split the commit please' })]) });
+  assert.equal(rep[0].status, 'pr');
+  assert.equal(count93(calls, 'fix') + count93(calls, 'qa-fix'), 0);
+  assert.match(prompt(calls, 'ship'), /split the commit please/);
+});
+
+test('T1.15 commit-structure is a suggestion before routing by file', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { ...Q93, review: always93([f93('tests/a.test.cjs', { category: 'commit-structure' })]) });
+  assert.equal(rep[0].status, 'pr');
+  assert.equal(count93(calls, 'qa-fix'), 0);
+});
+
+test('T1.16 other or missing categories are not downgraded', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] }, { ...Q93, review: once93([f93('tests/a.test.cjs', { category: 'correctness' }), f93('src/x.js')]) });
+  assert.equal(count93(calls, 'qa-fix'), 1);
+  assert.equal(count93(calls, 'fix'), 1);
+});
+
+test('T1.17 reviewer.md and the review prompt name category commit-structure for suggestions', async () => {
+  const md = fs.readFileSync(path.join(__dirname, '..', 'agents', 'reviewer.md'), 'utf8');
+  const { calls } = await run({ ...BASE, issues: [1] });
+  for (const text of [md, prompt(calls, 'review')]) {
+    assert.match(text, /category: "commit-structure"/);
+    assert.match(text, /split/);
+    assert.match(text, /order/);
+    assert.match(text, /wording/);
+    assert.match(text, /suggestion/);
+  }
+});
+
+test('T1.18 "test is right" without a dev position leaves the finding open, no block', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { ...Q93, ...right93, review: always93([f93('tests/a.test.cjs')]) });
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(rep[0].reason, /^Review: Review still has/);
+  assert.equal(count93(calls, 'qa-fix'), 2);
+  assert.equal(count93(calls, 'fix'), 2);
 });
