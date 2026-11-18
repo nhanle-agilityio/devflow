@@ -4,6 +4,10 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-11-18
+
+Wave 2, the lighter flow: an epic as the spec, an optional GitHub review, and a short path for `risk:low` issues.
+
 ### Added
 - `/devflow:report` takes an epic and shows per-issue metrics: `/devflow:report #<n>` uses the epic's native sub-issues plus the issues with `Epic: #<n>` (`spec.epic` is `{number,url}`, `spec.pr` is `null`), and each issue gets `metrics` (path, review rounds, times blocked, duration, merged by, plus `claimedAt`/`mergedAt` in the data only) from the `devflow-run` marker, the `devflow-blocked` comments and the merge marker. The trace page shows five metrics per issue, `null` as "unknown"; data without `metrics` still renders (#62)
 - `/devflow:accept` takes an epic: `/devflow:accept #<n>` (or `<n>`; a number is always an issue number) uses the union of the epic's native sub-issues and the issues whose body has `Epic: #<n>`, with criteria and http/e2e rows from each sub-issue. The `<!-- devflow-accept -->` comment goes on the epic (edited in place on a re-run) and gap titles use the slug from `[<slug>]` in the epic title, else `[epic #<n>]`. `#<n>` with no sub-issues and no referencing issue stops with `#<n> is not an epic` and posts nothing. A spec path or slug works as in 2.9.0; the skill never closes the epic (#61)
@@ -17,6 +21,12 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 - Engine short path for `risk:low` issues: an issue whose labels (read at Claim) include `labels.riskLow`, do not include `labels.riskHigh` or `labels.e2e`, and whose Test cases table has no `http` or `e2e` row takes the short path: no Plan agent and no plan comment, no QA or commit agent (one implement agent writes the failing test first, also with `nextTask.parallelQa`) and no Verify, also when Implement changes the UI. Check with its fix rounds, the weakened-checks scan, Review (`maxReviewRounds`), Risk and Ship run as on the full path; a short path PR escalated to `risk:high` by the Risk step still skips Verify. Every other issue (`risk:high`, both risk labels, no risk label, `needs-e2e`, an `http`/`e2e` row) takes the full path as before. Each result entry carries `path: "short"` or `"full"`. Behaviour change: `risk:low` issues no longer get a plan comment or Verify (#55)
 - Ship records the review trace and run markers: every PR body gets a `## Review` section (`Review: pass after <n> round(s) - local devflow reviewer in this run (GitHub review: off|on)`, `Path: short (Plan and Verify skipped)|full`, `Verify: ran|skipped (short path)|not needed|could not run`) and one hidden line `<!-- devflow-run {"path":...,"reviewRounds":<n>,"claimedAt":<ISO or null>} -->`; each result entry carries `reviewRounds`. Exactly one comment per block carries `<!-- devflow-blocked -->`: the questions comment as its second line (the first stays `<!-- devflow-questions -->`), otherwise the reason comment (#56)
 - Engine and reviewer read the epic as the spec source: an issue with no spec path and a line `Epic: #<n>` (first match of `^Epic: #(\d+)`) makes the Plan, Implement, QA, Fix and Review stages read epic `#<n>` (GitHub MCP `issue_read`; the `devflow:reviewer` agent with `gh issue view`) for shared design and decisions, with criteria, Test cases and `## Decisions` from the issue winning. `specRead` must contain `#<n>` as a whole token; the stage schemas gain an optional `epicRead`, and `false` blocks the issue with `epic #<n> could not be read`. A spec path still wins over an `Epic:` line, and an issue with neither uses the issue alone (#57)
+
+### Upgrade
+- `review.github` defaults to `false`: the devflow GitHub review is off. To turn it on, set `"review": { "github": true }` in `.claude/devflow.json` (`/devflow:init --upgrade` offers it). With it on, the merge gate requires the `devflow/review` check, so keep `devflow/review` in `mergeGate.requiredChecks`; with it off, the gate drops that check and refuses to merge when no required checks remain.
+- `/devflow:spec` creates an epic by default (the spec as the epic body, tasks as sub-issues). Use `--file` for the old flow that writes a spec file and a PR.
+- The short path for `risk:low` issues: the engine skips the full stage chain for them (`path` is `short` in the run marker, `full` otherwise).
+- Copy-mode projects run `/devflow:init --upgrade` for the new merge gate script; reusable-mode projects move to the new workflows when they pin `v3.0.0`. The `v3.0.0` tag is published only after a human merges the release.
 
 ## [2.9.0] - 2026-11-16
 

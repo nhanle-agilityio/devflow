@@ -1,6 +1,6 @@
 # devflow
 
-A Claude Code plugin (version 2.9.0, see [CHANGELOG.md](CHANGELOG.md); the version is also in `.claude-plugin/plugin.json`) with nine project-agnostic commands, plus `/devflow:init` (and `init --upgrade`) for setup:
+A Claude Code plugin (version 3.0.0, see [CHANGELOG.md](CHANGELOG.md); the version is also in `.claude-plugin/plugin.json`) with nine project-agnostic commands, plus `/devflow:init` (and `init --upgrade`) for setup:
 
 1. `/devflow:spec <idea>`: idea, analysis, grill-me interview, QA test matrix, then an epic issue (`type:epic`: goal, design, decisions, tasks table) and one sub-issue per task with `risk:low|high` and its test cases; you approve each sub-issue by setting the ready label. With `--file` it keeps the spec PR flow: spec file, spec PR, Gate 1 (a human merges, which also approves the risk levels), then one GitHub issue per task labelled ready and `risk:low|high`.
 2. `/devflow:next-task [limit | #issue ...] [--isolated] [--chain]`: pick up to N ready issues, claim each, post a plan on it, implement (a QA agent writes the acceptance tests in parallel with the dev agent), run checks, verify against the running app, review, and open a PR labelled with its risk (a required verification that could not run raises the PR to `risk:high`, so the merge gate never auto-merges it). An issue whose open dependencies all have open PRs is stacked on them. `--isolated` runs in its own git worktree.
