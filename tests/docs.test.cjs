@@ -7,7 +7,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-const changelogEntry = (n) => read('CHANGELOG.md').split('\n').filter((l) => l.includes(`(#${n})`)).join('\n');
+// An entry is a line citing "(#n)" in CHANGELOG.md, or the fragment <changelog.fragmentsDir>/<n>.md of root's config.
+function changelogEntryIn(root, n) {
+  const at = (f) => { try { return fs.readFileSync(path.join(root, f), 'utf8'); } catch { return ''; } };
+  const lines = at('CHANGELOG.md').split('\n').filter((l) => l.includes(`(#${n})`));
+  let dir = '';
+  try { dir = JSON.parse(at('.claude/devflow.json')).changelog.fragmentsDir || ''; } catch { dir = ''; }
+  const fragment = dir ? at(path.join(dir, `${n}.md`)) : '';
+  return lines.join('\n') + (fragment ? `\n${fragment}` : '');
+}
+const changelogEntry = (n) => changelogEntryIn(path.join(__dirname, '..'), n);
 const KEY = /assignedByRun|authenticated user/;
 
 // T1.10
@@ -498,4 +507,31 @@ test('test_t1_1_flows_page_next_task_sample_log_count_matches_markup_and_js', ()
   assert.deepEqual(nums(markup[1]), nums(js[1]));
   const pool = html.match(/const POOL = \[([\s\S]*?)\n  \];/)[1].match(/\{ n: \d+/g).length;
   assert.equal(Number(nums(markup[1])[0]), pool, 'count matches the POOL size');
+});
+
+// T9.4-T9.6: changelogEntryIn(root, n) is the helper behind changelogEntry(n): CHANGELOG.md or the fragment <fragmentsDir>/<n>.md.
+const os = require('node:os');
+function fixture(files) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-docs-'));
+  for (const [f, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(root, f)), { recursive: true });
+    fs.writeFileSync(path.join(root, f), text);
+  }
+  return root;
+}
+const FRAG_CFG = JSON.stringify({ changelog: { fragmentsDir: 'changelog.d' } });
+
+test('T9.4 changelogEntry finds a changelog entry', () => {
+  const root = fixture({ 'CHANGELOG.md': '## [Unreleased]\n- x (#5)\n', '.claude/devflow.json': FRAG_CFG });
+  assert.ok(changelogEntryIn(root, 5));
+});
+
+test('T9.5 changelogEntry finds a fragment', () => {
+  const root = fixture({ 'CHANGELOG.md': '## [Unreleased]\n', 'changelog.d/5.md': '### Added\n- x (#5)\n', '.claude/devflow.json': FRAG_CFG });
+  assert.ok(changelogEntryIn(root, 5));
+});
+
+test('T9.6 changelogEntry finds neither', () => {
+  const root = fixture({ 'CHANGELOG.md': '## [Unreleased]\n- x (#6)\n', 'changelog.d/7.md': '### Added\n- y (#7)\n', '.claude/devflow.json': FRAG_CFG });
+  assert.ok(!changelogEntryIn(root, 5));
 });

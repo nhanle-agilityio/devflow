@@ -4,12 +4,6 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
-### Added
-- `bin/devflow-changelog` and the optional config keys `changelog.fragmentsDir` (no default) and `changelog.file` (default `CHANGELOG.md`): `has <n>` checks the fragment `<fragmentsDir>/<n>.md`, `preview` prints the release section (sections in Keep a Changelog order, fragments by issue number, bullets ending ` (#<n>)`) and `assemble` writes it below `## [Unreleased]`, moves the bullets already there into it and deletes the fragments. Invalid fragments or changelog stop with exit 1 and nothing written; an unset `fragmentsDir` or a usage error exits 2. A 3.0.0 config stays valid (#95)
-
-### Changed
-- Commit grouping follows CLAUDE.md and the plan: the Plan agent returns `commitRules` (the commit rules of CLAUDE.md) and `separateCommits`; the commit stage and every fix prompt carry the rules and, on the full path, the plan's "Order of commits". When CLAUDE.md asks for separate code, tests and docs commits the commit stage makes the QA test commit, the code commit, then a `docs(<scope>)` commit (repository-root `*.md`, `docs/**`, changelog fragments; never `skills/**` or `agents/**`), skipped when there are none. Otherwise the 3.0.0 grouping stays. No prompt asks to amend, rebase, squash or split a commit (#94)
-
 ## [3.0.0] - 2026-11-18
 
 Wave 2, the lighter flow: an epic as the spec, an optional GitHub review, and a short path for `risk:low` issues.

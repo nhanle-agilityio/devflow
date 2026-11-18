@@ -1068,11 +1068,29 @@ Instructions:
    If the issue has a "Test cases" table (rows of the spec's test matrix), write a test for every row with priority "must" and make each traceable to its row id. ${TEST_NAMING} "should" rows are optional. If the issue has only a test plan, follow it.
    ${e2eRule(false)}
 4. Stage files by name only; never stage everything at once. Make small commits. Add no Co-Authored-By or AI attribution unless CLAUDE.md says otherwise.
-   ${MANUAL_RULE}${resumeNote(issue)}${rootCauseNote(issue)}
+   ${MANUAL_RULE}${resumeNote(issue)}${rootCauseNote(issue)}${fragmentNote(issue)}
 5. Stay inside the issue's scope. Anything else you notice goes into "outOfScope", unchanged in the code.
 6. If a requirement is ambiguous in a way that changes behaviour or a contract and the spec does not answer it, do NOT guess: return status "blocked" with blockedReason stating the question. For minor ambiguity, decide, and record the decision in "assumptions".
 7. Do not push, open a PR, or touch GitHub labels.
 Return: status, a short summary, the commits you made ("<sha> <message>"), files changed, assumptions, outOfScope, touchesUi (true when the diff against ${parentRef} changes user-facing UI), ${readReturn(src)}, and manualChecks ([] when there are no such rows).`}`
+}
+
+// Changelog fragments (changelog.fragmentsDir): the entry goes into <fragmentsDir>/<issue>.md, never into the changelog file.
+function fragmentPath(issue) {
+  const dir = cfg.changelog && typeof cfg.changelog.fragmentsDir === 'string' ? cfg.changelog.fragmentsDir.trim().replace(/\/+$/, '') : ''
+  return dir ? `${dir}/${issue.number}.md` : ''
+}
+function fragmentReview(issue) {
+  const f = fragmentPath(issue)
+  if (!f) return ''
+  const file = (cfg.changelog && cfg.changelog.file) || 'CHANGELOG.md'
+  return `7. Changelog: fragments are on, so the entry for this change must be in the fragment \`${f}\`, not the changelog file \`${file}\`. Check the fragment for an entry; a missing entry is a warning, and an edit of \`${file}\` is a warning too.\n`
+}
+function fragmentNote(issue) {
+  const f = fragmentPath(issue)
+  if (!f) return ''
+  const file = (cfg.changelog && cfg.changelog.file) || 'CHANGELOG.md'
+  return `\n   Changelog: add the entry for this change as the fragment \`${f}\` ("### <section>" headings with "- " bullets, the bullet ending " (#${issue.number})"). Never edit the changelog file \`${file}\`.`
 }
 
 // Fix issues: the PR must say why the bug happened.
@@ -1108,7 +1126,7 @@ Instructions:
 3. Write the implementation in the files the plan gives to dev: ${JSON.stringify(own.devFiles)}. If you need another file, use it and say so in "assumptions", but never create, edit or delete any of the QA files above. Extra tests of your own are fine in files that are not QA files.
 4. Do NOT commit, stage or stash anything: the workflow commits the QA tests first and your change after them. Do not run git commands that change the working tree or the index.
 5. You may run the project's checks to see your own work, but do not edit anything to make a QA test pass; the QA tests may still be incomplete while you work.
-6. Stay inside the issue's scope. Anything else you notice goes into "outOfScope", unchanged in the code. ${MANUAL_RULE}${rootCauseNote(issue)}
+6. Stay inside the issue's scope. Anything else you notice goes into "outOfScope", unchanged in the code. ${MANUAL_RULE}${rootCauseNote(issue)}${fragmentNote(issue)}
 7. If a requirement is ambiguous in a way that changes behaviour or a contract and the spec and Decisions do not answer it, do NOT guess: return status "blocked" with blockedReason stating the question. For minor ambiguity, decide, and record the decision in "assumptions".
 8. Do not push, open a PR, or touch GitHub labels.
 Return: status, a short summary, commits = [], every file you changed, assumptions, outOfScope, touchesUi (true when your change, compared with ${parentRef}, changes user-facing UI), ${readReturn(src)}, and manualChecks ([] when there are no such rows).`
@@ -1240,7 +1258,7 @@ ${details}
 
 Instructions:
 - Follow the project's CLAUDE.md. Fix the cause, not the symptom; never weaken or delete a test, and never edit acceptance criteria, to make something pass.
-- Stay inside the issue's scope. Record unrelated problems in "outOfScope" without changing them.${qaRule}${disputeRule}
+- Stay inside the issue's scope. Record unrelated problems in "outOfScope" without changing them.${qaRule}${disputeRule}${fragmentNote(issue).replace('\n   ', '\n- ')}
 - ${guideBlock(guide)}
 - Commit with Conventional Commits in English, scope "${scopeFor(issue)}", staging files by name. Add new commits only; never rewrite existing ones. Do not push.${guide && guide.separate ? ` Keep code and docs apart: the fix in one commit, then the changed repository-root \`*.md\` files, \`docs/**\` and changelog fragment files in a \`docs(${scopeFor(issue)}): ...\` commit (never \`skills/**\` or \`agents/**\`); skip the docs commit when there are none.` : ''}
 - If you cannot fix it without a decision the spec does not make, return status "blocked" with blockedReason. ${DECISIONS_NOTE}
@@ -1330,7 +1348,7 @@ Review, in this order:
 4. CLAUDE.md conventions and its "Never" list.
 5. Out of scope: an item in the out-of-scope list below that leaves behaviour unmet that the issue's acceptance criteria (or a "must" Test cases row) require is NOT out of scope: report it as critical, naming the criterion (for example "AC2.5 requires X; the out-of-scope note leaves it as is"). Only problems the criteria do not cover may stay out of scope.
 6. Weakened checks: a deterministic scan of the diff found the hits below (new noqa / type: ignore / eslint-disable / ts-ignore, skipped, focused or deleted tests, removed assertions, empty except or catch, edited check configuration). Each one is critical unless the issue itself asks for exactly that change. For each hit either report it as a critical finding (same file and line) or, only when the issue requires it, list it in acceptedWeakenings with the reason; an accepted hit stays in the PR and makes it risk:high. Also report as critical any other weakening of a check that the scan missed.
-Scan hits: ${hits && hits.length ? JSON.stringify(hits) : 'none'}
+${fragmentReview(issue)}Scan hits: ${hits && hits.length ? JSON.stringify(hits) : 'none'}
 Commit structure: a finding about how the commits are split, their order or their message wording is a suggestion, whatever its severity would otherwise be: set category: "commit-structure" on it and report it as a suggestion. Give every other finding a short category slug (for example correctness, tests, scope).
 Severity: critical = wrong behaviour / data loss / security / rule violation; warning = likely bug, missing test, scope creep; suggestion = optional improvement. Only report real problems with a file and line. verdict "pass" means no critical or warning findings.
 

@@ -20,6 +20,7 @@ Review in this order:
 5. **Out of scope**: an out-of-scope item (in the PR body or given by the caller) that leaves an acceptance criterion or a `must` row unmet is in scope: report it as critical and name the criterion (for example "AC2.5 requires X; the note leaves it as is").
 6. **Weakened checks**, critical unless the issue itself asks for exactly that change: new `# noqa`, `type: ignore`, `eslint-disable`, `@ts-ignore` / `@ts-nocheck`, `pytest.mark.skip` / `xfail`, `.skip` / `.only` on tests, deleted tests, removed assertions, empty `except` / `catch`, and edits to the files that configure the project's checks (`checks` in `.claude/devflow.json`: linter, type checker, test runner and CI configuration, scripts a check runs). When the caller passes scan hits, decide each one: report it as critical at the same file and line, or accept it with the reason when the issue requires it.
 7. **Fix PRs** (a bug, a gap, a `type:fix` issue): the root cause, what introduced it and why it was missed must be stated, and a regression test must reproduce the bug.
+8. **Changelog fragments**: when `changelog.fragmentsDir` is set in `.claude/devflow.json`, check the fragment `<fragmentsDir>/<issue>.md`, not the changelog file, for the entry of a user-visible change; a missing entry is a warning, and an edit of the changelog file is a warning too.
 
 ## Severity
 

@@ -49,6 +49,8 @@ Build the notes in English from the PRs (`release.notesFrom` is `prs`):
 - **Who merged**: a PR was merged by the merge gate when it has a comment starting with `<!-- devflow-gate-merged -->` or its merge commit message contains `Merged-by: devflow merge gate`. Otherwise, for a PR that predates the marker: when `merged_by` equals the gate token owner (the authenticated user), say "merger unknown (gate or owner)"; when a different user merged it, say "human: <login>".
 - **Acceptance**: when `/devflow:accept` posted a comment (it starts with `<!-- devflow-accept -->`) on the spec PR, add its counts and the link to its gap issues; otherwise say acceptance was not run.
 
+When `changelog.fragmentsDir` is set in `.claude/devflow.json`, run `devflow-changelog preview --version <version> --date <today>` (the plugin's `bin/devflow-changelog`) and show its output in the notes as the fragment-based changelog section. The skill only shows it: it does not write it, never runs `assemble` and never edits `CHANGELOG.md` or the fragments.
+
 Show the notes and the version. Do not continue without a yes.
 
 ## 4. Create the release

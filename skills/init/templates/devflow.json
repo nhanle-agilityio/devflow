@@ -80,7 +80,8 @@
   // /devflow:dispatch: at most maxLanes background sessions at once. pluginDir (optional) is passed as --plugin-dir
   // to those sessions when the plugin is loaded from a local directory.
   // ignoreHotspots: hotspots matching these paths or globs (* and **) do not join lanes; conflicts there are small and
-  // resolved by the merge gate's branch update or /devflow:sync.
+  // resolved by the merge gate's branch update or /devflow:sync. With changelog.fragmentsDir set,
+  // the fragment directory never needs a lane: list `<fragmentsDir>/**` here (one file per issue).
   "dispatch": { "maxLanes": 3, "ignoreHotspots": ["README.md", "CHANGELOG.md"] },
   // Weakened-checks scan: files matching these globs (** * ?) are skipped entirely, e.g. a test file whose fixture data
   // holds the scanned patterns. .claude/devflow.json is never ignored, so editing this list is itself a scan hit.
