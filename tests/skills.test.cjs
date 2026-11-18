@@ -472,3 +472,42 @@ test('test_t8_3_spec_review_order_both_modes', () => {
   assert.ok(fQa < fReview, '--file: QA before spec review');
   assert.ok(fReview < fPr, '--file: spec review before spec PR');
 });
+
+// ---- T9 (#60): answer appends decisions only, no PR in epic mode ----
+// T9.1
+test('test_t9_1_append_only_format', () => {
+  const t = answerText();
+  assert.ok(t.includes('(Q<k>):'), 'issue entry form');
+  assert.ok(t.includes('(#<issue>, Q<k>):'), 'epic entry form');
+  assert.ok(t.includes('→'));
+  assert.ok(t.includes('## Decisions'));
+  assert.ok(!t.includes('(updated by /devflow:answer)'), 'update-in-place rule is gone');
+});
+
+// T9.2
+test('test_t9_2_epic_append_no_pr', () => {
+  const t = answerText();
+  const i = t.indexOf('Epic: #');
+  assert.ok(i >= 0, 'mentions the Epic: # line');
+  const after = t.slice(i, i + 1500);
+  assert.match(after, /no (branch|PR)|(without|not)[^.\n]*(branch|PR)/i, 'no branch or PR');
+  assert.match(after, /spec path/i, 'conditioned on the spec path');
+});
+
+// T9.3
+test('test_t9_3_spec_pr_appends_decisions_only', () => {
+  const t = answerText();
+  assert.ok(!/in the section it belongs to/i.test(t), 'old wording is gone');
+  const s3 = answerStep(3);
+  assert.ok(s3.includes('## Decisions'), 'spec step names the spec Decisions section');
+  assert.match(s3, /(only|nothing else|no other)/i, 'states it is the only change');
+  assert.ok(s3.includes('(Q<k>):'), 'spec entry form');
+});
+
+// T9.4
+test('test_t9_4_unblock_step_unchanged', () => {
+  const t = answerText();
+  for (const s of ['<!-- devflow-claim id=', 'assignee', 'labels.blocked', 'labels.inProgress', 'labels.ready']) {
+    assert.ok(t.includes(s), `unblock keeps ${s}`);
+  }
+});
