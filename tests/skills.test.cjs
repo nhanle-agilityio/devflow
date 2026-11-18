@@ -511,3 +511,36 @@ test('test_t9_4_unblock_step_unchanged', () => {
     assert.ok(t.includes(s), `unblock keeps ${s}`);
   }
 });
+
+// ---- T10 (#61): accept takes an epic ----
+const acceptText = () => read('skills/accept/SKILL.md');
+
+// T10.1
+test('test_t10_1_accept_takes_epic', () => {
+  const t = acceptText();
+  assert.ok(t.includes('#<n>'), 'epic argument form');
+  assert.ok(t.includes('Epic: #'), 'Epic: # line source');
+  assert.ok(/sub-issue/i.test(t), 'native sub-issue source');
+});
+
+// T10.2
+test('test_t10_2_accept_comment_and_gap_titles', () => {
+  const t = acceptText();
+  assert.ok(t.includes('<!-- devflow-accept -->'));
+  assert.ok(t.includes('[<slug>]'));
+  assert.ok(t.includes('[epic #'));
+});
+
+// T10.3
+test('test_t10_3_accept_not_an_epic', () => {
+  assert.ok(acceptText().includes('is not an epic'));
+});
+
+// T10.4
+test('test_t10_4_accept_spec_path_kept', () => {
+  const t = acceptText();
+  assert.ok(t.includes('a path under `specDir`'));
+  assert.ok(t.includes('or a slug'));
+  assert.ok(t.includes('git show <remote>/<baseBranch>:<specDir>/<file>'));
+  assert.ok(t.includes('Gap: '));
+});

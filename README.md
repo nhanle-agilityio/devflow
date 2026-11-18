@@ -7,7 +7,7 @@ A Claude Code plugin (version 2.9.0, see [CHANGELOG.md](CHANGELOG.md); the versi
 3. `/devflow:dispatch [max lanes]`: split the ready issues into non-colliding lanes and start one background session per lane.
 4. `/devflow:sync [#pr ...]`: keep those PRs mergeable: retarget stacked PRs, update behind branches, resolve conflicts, address review threads.
 5. `/devflow:answer #issue [answers]`: answer the questions that blocked an issue; appends them to the issue's `## Decisions`, its epic's and, with a spec path, the spec's (PR), and sets it ready again.
-6. `/devflow:accept <spec>`: after merge, check the shipped behaviour against the spec's acceptance criteria on a fresh checkout of the base branch; every gap becomes an issue.
+6. `/devflow:accept <spec | #epic>`: after merge, check the shipped behaviour against the acceptance criteria of a spec, or of an epic with `/devflow:accept #<n>` (its sub-issues: native sub-issues plus issues whose body has `Epic: #<n>`; a number is always an issue number; `#<n> is not an epic` stops with nothing posted), on a fresh checkout of the base branch; every gap becomes an issue. For an epic the result comment goes on the epic and the skill never closes it.
 7. `/devflow:release <spec | since <tag> | all>`: collect the merged devflow PRs, propose a semver version, write client-facing notes plus a changelog with a risk section and create the GitHub release (draft by default).
 8. `/devflow:report <spec>`: a demo-ready trace page of one spec (ticket, plan, PR, review, tests, merge, acceptance, release), published as an artifact.
 9. `/devflow:doctor [--fix]`: check that devflow works in this project and report what to do.
