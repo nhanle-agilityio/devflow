@@ -9,11 +9,13 @@
   "risk": {
     "highPaths": [
       ".github/**",
-      "hooks/guard.py",
+      "hooks/**",
       "skills/init/templates/github/**"
     ]
   },
   "mergeGate": {
+    "enabled": true,
+    "dryRun": false,
     "requiredChecks": [
       "devflow/review",
       "test (python 3.9, ubuntu-24.04)",
