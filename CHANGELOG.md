@@ -4,6 +4,9 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Changed
+- Commit grouping follows CLAUDE.md and the plan: the Plan agent returns `commitRules` (the commit rules of CLAUDE.md) and `separateCommits`; the commit stage and every fix prompt carry the rules and, on the full path, the plan's "Order of commits". When CLAUDE.md asks for separate code, tests and docs commits the commit stage makes the QA test commit, the code commit, then a `docs(<scope>)` commit (repository-root `*.md`, `docs/**`, changelog fragments; never `skills/**` or `agents/**`), skipped when there are none. Otherwise the 3.0.0 grouping stays. No prompt asks to amend, rebase, squash or split a commit (#94)
+
 ## [3.0.0] - 2026-11-18
 
 Wave 2, the lighter flow: an epic as the spec, an optional GitHub review, and a short path for `risk:low` issues.
