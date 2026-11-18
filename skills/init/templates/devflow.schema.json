@@ -262,6 +262,15 @@
         "notesFrom": { "enum": ["prs"], "default": "prs", "description": "Where the release notes come from: the merged PRs since the last tag." }
       }
     },
+    "changelog": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read by bin/devflow-changelog (changelog fragments).",
+      "properties": {
+        "fragmentsDir": { "type": "string", "description": "Directory of changelog fragments, one <issue number>.md per issue. Unset: fragments are off and every devflow-changelog command exits 2." },
+        "file": { "type": "string", "default": "CHANGELOG.md", "description": "The changelog file `devflow-changelog assemble` writes." }
+      }
+    },
     "accept": {
       "type": "object",
       "additionalProperties": false,
