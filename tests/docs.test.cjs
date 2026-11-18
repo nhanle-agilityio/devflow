@@ -184,10 +184,11 @@ test('test_t1_12_docs_describe_review_flag', () => {
     'DESIGN.md states the trade-off with devflow:reviewer',
   );
   const log = read('CHANGELOG.md');
-  const unreleased = log.slice(log.indexOf('## [Unreleased]'), log.indexOf('\n## [', log.indexOf('## [Unreleased]') + 1));
   assert.ok(log.includes('## [Unreleased]'), 'CHANGELOG has [Unreleased]');
-  assert.match(unreleased, /\(#52\)/);
-  assert.match(unreleased, /review\.github/);
+  // The entry sits under [Unreleased] until the release moves it into its version section.
+  const entry = log.split('\n').find((l) => /^- /.test(l) && /\(#52\)/.test(l));
+  assert.ok(entry, 'CHANGELOG has an entry citing (#52)');
+  assert.match(entry, /review\.github/);
 });
 
 // T2.10 (wave2-lighter-flow, issue #53): the gate callers keep their triggers
