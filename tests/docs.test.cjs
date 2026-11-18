@@ -486,3 +486,16 @@ test('T1.17 specPlay does not tie step indexes to one mode length', () => {
   const body = src.slice(i, src.indexOf('\n  }\n', i));
   for (const bad of ['i === 6', 'i === 5', 'sNodes[6]']) assert.ok(!body.includes(bad), `specPlay has no ${bad}`);
 });
+
+// T1.1 (#87)
+test('test_t1_1_flows_page_next_task_sample_log_count_matches_markup_and_js', () => {
+  const html = read('docs/devflow-flows.html');
+  const markup = html.match(/id="nt-log"[^>]*><div>([^<]*)<\/div>/);
+  assert.ok(markup, 'static nt-log markup found');
+  const js = html.match(/logBox\.innerHTML = `<div>\$\{t\('([^']*)'/);
+  assert.ok(js, 'JS-rendered nt-log text found');
+  const nums = (s) => s.match(/(\d+) issue sẵn sàng, limit = (\d+)/).slice(1, 3);
+  assert.deepEqual(nums(markup[1]), nums(js[1]));
+  const pool = html.match(/const POOL = \[([\s\S]*?)\n  \];/)[1].match(/\{ n: \d+/g).length;
+  assert.equal(Number(nums(markup[1])[0]), pool, 'count matches the POOL size');
+});
