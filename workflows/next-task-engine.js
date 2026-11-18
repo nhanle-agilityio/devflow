@@ -193,6 +193,8 @@ const PLAN_SCHEMA = {
     specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
     epicRead: { type: 'boolean', description: 'Epic issues only: false when the epic named by the issue\'s Epic: line is missing, closed, a pull request or could not be read; true when it was read' },
     httpOrE2eRows: { type: 'boolean', description: 'True when the issue\'s Test cases table has a row with Level http or e2e' },
+    commitRules: { type: 'string', description: 'The commit rules of the project\'s CLAUDE.md (grouping, messages), quoted; "" when it has none' },
+    separateCommits: { type: 'boolean', description: 'True when CLAUDE.md asks for code, tests and docs in separate commits' },
     acceptanceCriteria: { type: 'integer', description: 'Number of top-level checkbox items in the issue\'s acceptance criteria section, as read from GitHub' },
     problem: { type: 'string', description: `Report starting with exactly "${MCP_DOWN}" when GitHub cannot be reached; otherwise omit` },
   },
@@ -994,7 +996,8 @@ Instructions:
 4. Write the plan in markdown with sections: Files to change (mark each file QA or Dev); Tests (one entry per "Test cases" row id, or per test-plan item; ${e2eRule(false)}); Risks; Order of commits (failing test first, then the implementation); Open questions (only if there are any).
 5. Post the plan on issue #${issue.number} as a comment whose first line is \`<!-- devflow-plan -->\`. If the issue already has a comment starting with that marker, edit it instead of adding another.
 6. Look for open questions in two roles. BA: something the spec, the issue and its Decisions do not answer that would change behaviour or a contract. QA: a "Test cases" row that cannot be tested as written (no clear expected result, contradicts the acceptance criteria or another row). Start each question with "[BA] " or "[QA] ". If there is any, return status "blocked" with all of them (still post the plan, with an "Open questions" section). Otherwise return status "ready" and questions = [].
-Return status, the plan text exactly as posted, questions, qaFiles, devFiles, ${readReturn(src)}, httpOrE2eRows (true when the issue's Test cases table, as you read it on GitHub, has a row whose Level is http or e2e) and acceptanceCriteria (the number of top-level \`- [ ]\` / \`- [x]\` items under the first heading or bold line containing "Acceptance criteria" in the issue on GitHub, up to the next heading or bold line; 0 when there is none).`
+7. From CLAUDE.md take its commit rules (how commits are grouped and named): commitRules = those rules quoted, "" when it says nothing about them; separateCommits = true only when it asks for code, tests and docs in separate commits.
+Return status, the plan text exactly as posted, questions, qaFiles, devFiles, commitRules, separateCommits, ${readReturn(src)}, httpOrE2eRows (true when the issue's Test cases table, as you read it on GitHub, has a row whose Level is http or e2e) and acceptanceCriteria (the number of top-level \`- [ ]\` / \`- [x]\` items under the first heading or bold line containing "Acceptance criteria" in the issue on GitHub, up to the next heading or bold line; 0 when there is none).`
 }
 
 function integratePrompt(issue, branch) {
@@ -1139,9 +1142,40 @@ Instructions:
 Return status, tests (row id and test name), filesChanged (the files you created or edited), questions, and ${readReturn(src)}.`
 }
 
-function commitPrompt(issue, branch, own, qa, dev) {
+// What the plan agent read from CLAUDE.md and the plan: the commit rules, whether code, tests and docs go in
+// separate commits, and the plan's "Order of commits". The short path has no plan, so no order.
+function guideFor(plan) {
+  const text = plan && typeof plan.plan === 'string' ? plan.plan : ''
+  const m = /Order of commits[^\n]*(?:\n(?!#)[^\n]*)*/i.exec(text)
+  return {
+    rules: plan && typeof plan.commitRules === 'string' ? plan.commitRules.trim() : '',
+    separate: !!(plan && plan.separateCommits === true),
+    order: m ? m[0].trim() : '',
+  }
+}
+
+function guideBlock(guide) {
+  const g = guide || guideFor(null)
+  const rules = g.rules
+    ? `Commit rules from the project's CLAUDE.md (follow them):\n${g.rules}`
+    : `Commit rules: read the project's CLAUDE.md and follow any it has for grouping and naming commits.`
+  return g.order ? `${rules}\nThe plan's order of commits:\n${g.order}` : rules
+}
+
+function commitPrompt(issue, branch, own, qa, dev, guide) {
   const testCheck = cfg.checks.find((c) => /test/i.test(c.name)) || cfg.checks[0]
-  return `Commit the work on branch ${branch} for issue #${issue.number}: the QA tests first, then the implementation. Do not edit any file.
+  const scope = scopeFor(issue)
+  const separate = !!(guide && guide.separate)
+  const devSteps = separate
+    ? `4. Code commit: stage the dev files that are not docs files by name and commit them with the type that fits (feat|fix|chore|refactor) and scope "${scope}". Skip this commit only if there are none.
+5. Docs commit: stage by name the changed repository-root \`*.md\` files, \`docs/**\` and changelog fragment files among the dev files (never \`skills/**\` or \`agents/**\`: they are behaviour here, so they belong to the code commit) and commit them: \`docs(${scope}): <what the docs cover>\`. If there are none, skip the docs commit.
+6.`
+    : `4. Stage the dev files by name and commit them with the type that fits (feat|fix|chore|refactor) and scope "${scope}". Skip this commit only if the dev list is empty.
+5.`
+  const head = separate ? 'the QA test commit first, then the code commit, then the docs commit' : 'the QA tests first, then the implementation'
+  return `Commit the work on branch ${branch} for issue #${issue.number}: ${head}. Do not edit any file.
+
+${guideBlock(guide)}
 
 QA files: ${JSON.stringify(qa.filesChanged)}
 Dev files: ${JSON.stringify(dev.filesChanged)}
@@ -1149,10 +1183,9 @@ Tests written (row id -> test): ${JSON.stringify(qa.tests)}
 
 Steps, in order:
 1. \`git status --porcelain\`. Every changed or new file must be in one of the two lists; if not, return ok=false naming the extra files.
-2. Stage the QA files by name and commit them: \`test(${scopeFor(issue)}): <what the tests cover>\` (Conventional Commits, English, no AI attribution).
+2. ${separate ? 'QA test commit: stage' : 'Stage'} the QA files by name and commit them:\`test(${scope}): <what the tests cover>\` (Conventional Commits, English, no AI attribution).
 3. Prove they fail without the implementation: \`git stash push -u -m devflow-red-${issue.number} -- <every dev file>\`, run \`${testCheck.run}\`, note how the QA tests fail, then \`git stash pop\`. If the stash pop does not restore every dev file cleanly, stop and return ok=false with the problem (the stash keeps the work). failedFirst = true only if at least one QA test failed because the behaviour is missing (not a syntax or collection error); describe it in failureNote.
-4. Stage the dev files by name and commit them with the type that fits (feat|fix|chore|refactor) and scope "${scopeFor(issue)}". Skip this commit only if the dev list is empty.
-5. \`git status --porcelain\` must be empty. Never push, never amend or rewrite a commit, never stage everything at once.
+${devSteps} \`git status --porcelain\` must be empty. Never push, never rewrite a commit, never stage everything at once.
 Return ok, commits ("<sha> <message>", in order), failedFirst, failureNote.`
 }
 
@@ -1186,7 +1219,7 @@ ${list}
 Report passed=true only if all of them exit 0. For each failing check return its name, the relevant trimmed output (the failing assertions / errors, at most about 60 lines; no passing noise) and files: the repository files the failure is attributed to (the failing test files, or the files the errors point at; [] when you cannot tell). Do not edit any file and do not commit.`
 }
 
-function fixPrompt(issue, branch, why, details, qaFiles, disputed) {
+function fixPrompt(issue, branch, why, details, qaFiles, guide, disputed) {
   const src = sourceFor(issue)
   const qaRule =
     qaFiles && qaFiles.length
@@ -1208,7 +1241,8 @@ ${details}
 Instructions:
 - Follow the project's CLAUDE.md. Fix the cause, not the symptom; never weaken or delete a test, and never edit acceptance criteria, to make something pass.
 - Stay inside the issue's scope. Record unrelated problems in "outOfScope" without changing them.${qaRule}${disputeRule}
-- Commit with Conventional Commits in English, scope "${scopeFor(issue)}", staging files by name. Never rewrite existing commits. Do not push.
+- ${guideBlock(guide)}
+- Commit with Conventional Commits in English, scope "${scopeFor(issue)}", staging files by name. Add new commits only; never rewrite existing ones. Do not push.${guide && guide.separate ? ` Keep code and docs apart: the fix in one commit, then the changed repository-root \`*.md\` files, \`docs/**\` and changelog fragment files in a \`docs(${scopeFor(issue)}): ...\` commit (never \`skills/**\` or \`agents/**\`); skip the docs commit when there are none.` : ''}
 - If you cannot fix it without a decision the spec does not make, return status "blocked" with blockedReason. ${DECISIONS_NOTE}
 When a problem says an out-of-scope item is required by the acceptance criteria, implement it (test first) and copy that item exactly into "outOfScopeDone".
 Return the same structure as the implement stage; "commits" lists only the commits you made now. ${src.kind === 'epic' ? `In "specRead" put "epic #${src.n}" and in "epicRead" whether you read it: ${epicStep(src.n, EPIC_MCP)}` : `In "specRead" put the spec path if you read the spec (for example with \`git show ${baseRef}:<path>\`), otherwise "none".`}`
@@ -1445,7 +1479,7 @@ async function checkLoop(issue, branch, state) {
 
 async function runFix(issue, branch, state, why, details, disputed) {
   phase('Implement')
-  const fix = await agent(fixPrompt(issue, branch, why, details, state.qaFiles, disputed), {
+  const fix = await agent(fixPrompt(issue, branch, why, details, state.qaFiles, state.guide, disputed), {
     label: `fix #${issue.number}`,
     phase: 'Implement',
     schema: IMPLEMENT_SCHEMA,
@@ -1544,6 +1578,7 @@ async function runIssue(issue) {
     touchesUi: false,
     verification: null,
     qaFiles: [],
+    guide: guideFor(null),
     manualChecks: [],
     weakened: [],
     scanProblem: '',
@@ -1719,6 +1754,7 @@ async function runIssue(issue) {
       if (srcPlan.kind === 'epic' && !readSource(plan, srcPlan)) return block('Plan', `Plan did not read epic #${srcPlan.n}`)
     }
 
+    state.guide = guideFor(plan)
     const own = { qaFiles: plan.qaFiles || [], devFiles: plan.devFiles || [] }
     const shared = overlap(own.qaFiles, own.devFiles)
     if (shared.length) return block('Plan', `Ownership overlap: ${shared.join(', ')} is planned for both the QA and the dev agent.`)
@@ -1762,7 +1798,7 @@ async function runIssue(issue) {
       if (specPathForPlan && !readSpec(qa, specPathForPlan)) return block('Implement', `The QA agent did not read the spec ${specPathForPlan}`)
       if (srcPlan.kind === 'epic' && !readSource(qa, srcPlan)) return block('Implement', `The QA agent did not read epic #${srcPlan.n}`)
 
-      const committed = await agent(commitPrompt(issue, branch, own, qa, dev), {
+      const committed = await agent(commitPrompt(issue, branch, own, qa, dev, state.guide), {
         label: `commit #${issue.number}`,
         phase: 'Implement',
         schema: COMMIT_SCHEMA,
