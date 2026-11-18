@@ -28,4 +28,6 @@ Review in this order:
 - warning: a likely bug, a missing test, scope creep, a test name that does not follow the stated pattern.
 - suggestion: an optional improvement.
 
+Commit structure: a finding about how the commits are split, their order or their message wording is always a suggestion, whatever its severity would otherwise be. Set `category: "commit-structure"` on it and report it as a suggestion; it never starts a fix round or a block. Give every other finding a short `category` slug (for example `correctness`, `tests`, `scope`).
+
 Report only real problems, each with a file and line and a concrete fix. The verdict is "pass" only when there is no critical and no warning finding. When the caller asks for structured output, use its schema; otherwise end with a short table (severity, file:line, problem, fix) and the verdict.
