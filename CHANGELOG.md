@@ -4,6 +4,10 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+### Added
+- Follow-up issues filed by Ship have a `Found in: #<pr>` line (the branch name when no PR exists yet) and the `file:line` of the problem when known.
+- `/devflow:spec` writes `Resolves: #a, #b` into the epic when the request names existing issues it resolves; Ship of the epic's last open sub-issue adds a `Closes #<n>` line for each listed issue that is still open and skips numbers that do not exist or belong to another repository, with a note in the PR body.
+
 ## [3.0.0] - 2026-11-18
 
 Wave 2, the lighter flow: an epic as the spec, an optional GitHub review, and a short path for `risk:low` issues.
