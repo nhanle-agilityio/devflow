@@ -38,6 +38,7 @@ Refuse if any of the spec's issues still has an open PR: list them (issue, PR) a
 
 1. `--version X.Y.Z` wins. The tag is `<release.tagPrefix><version>`; stop if that tag already exists.
 2. Otherwise find the latest tag with the prefix and propose the next semver: any `feat` makes a minor bump, only `fix`, `chore`, `docs`, `refactor`, `test` makes a patch bump, a `BREAKING CHANGE` footer or a `!` after the type makes a major bump (read the PR bodies and commit messages for it). With no earlier tag propose `0.1.0`. Ask the user to confirm or give another version.
+3. **Predecessor check**, before proposing a version: take the previous released version, the newest semver version heading in the changelog (`CHANGELOG.md`; `[Unreleased]` and non-semver headings are ignored). When it has no tag `<release.tagPrefix><version>` (check the tags fetched in preflight), refuse to propose a version, naming it and the missing tag, and continue only after the user says so. The check is skipped when there is no earlier version heading.
 
 ## 3. Notes
 

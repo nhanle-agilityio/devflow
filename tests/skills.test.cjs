@@ -657,3 +657,51 @@ test('test_t11_6_report_read_only', () => {
     assert.ok(!t.includes(w), `SKILL.md does not name ${w}`);
   }
 });
+
+// ---- T14: missing-tag check in doctor, predecessor check in release ----
+const doctorTagCheck = () => {
+  const line = read('skills/doctor/SKILL.md').split('\n').find((l) => /^\d+\. \*\*Release tag\.\*\*/.test(l));
+  assert.ok(line, 'doctor has a "Release tag" check');
+  return line;
+};
+const releasePredecessor = () => {
+  const t = read('skills/release/SKILL.md');
+  const v = section(t, /^## 2\. Version/m, /^## 3\. /m);
+  const i = v.search(/predecessor/i);
+  assert.ok(i >= 0, 'version step has a predecessor check');
+  return v.slice(i);
+};
+
+test('T14.1 doctor warns when the declared version has no tag', () => {
+  const l = doctorTagCheck();
+  assert.match(l, /`warn`/);
+  assert.match(l, /<release\.tagPrefix><version>/);
+  assert.match(l, /nam(e|ing) the missing tag/i);
+});
+
+test('T14.2 doctor version source and mismatch', () => {
+  const l = doctorTagCheck();
+  assert.match(l, /\.claude-plugin\/plugin\.json/);
+  assert.match(l, /newest changelog version heading/i);
+  assert.match(l, /differ[^.]*`warn`|mismatch[^.]*`warn`/i);
+});
+
+test('T14.3 release refuses when the previous released version has no tag', () => {
+  const p = releasePredecessor();
+  assert.match(p, /previous released version/i);
+  assert.match(p, /no tag/i);
+  assert.match(p, /refus/i);
+  assert.match(p, /nam(e|es|ing) it/i);
+  assert.match(p, /only after the user says so/i);
+});
+
+test('T14.4 release check skipped without an earlier heading; non-semver ignored', () => {
+  const p = releasePredecessor();
+  assert.match(p, /skipped[^.]*no earlier version heading|no earlier version heading[^.]*skipped/i);
+  assert.match(p, /non-semver headings are ignored/i);
+});
+
+test('T14.5 doctor tag check skipped without any declared version', () => {
+  const l = doctorTagCheck();
+  assert.match(l, /skipped[^.]*neither|neither[^.]*skipped/i);
+});
