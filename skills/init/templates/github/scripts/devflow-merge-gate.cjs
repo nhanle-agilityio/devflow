@@ -23,6 +23,7 @@ const DEFAULTS = {
   baseBranch: 'main',
   labels: {
     devflow: 'devflow', riskLow: 'risk:low', riskHigh: 'risk:high', blocked: 'agent:blocked', stacked: 'stacked', decisionsReview: 'decisions:review',
+    inProgress: 'agent:in-progress', review: 'agent:review',
     priority: ['priority:critical', 'priority:high', 'priority:normal', 'priority:low'],
   },
   mergeGate: { enabled: false, dryRun: true, requiredChecks: ['devflow/review'], method: 'merge' },
@@ -281,6 +282,43 @@ async function blockOnConflict({ github, context }, config, pr, dryRun) {
   });
 }
 
+async function cleanStateLabels({ github, context, core }, { labels }, number, issue, dryRun) {
+  const { owner, repo } = context.repo;
+  if (issue.pull_request) return;
+  const present = new Set((issue.labels || []).map((label) => typeof label === 'string' ? label : label.name));
+  for (const name of new Set([labels.inProgress, labels.review, labels.blocked])) {
+    if (!present.has(name)) continue;
+    if (dryRun) {
+      core.info(`#${number}: would remove label ${name}`);
+      continue;
+    }
+    try {
+      await github.rest.issues.removeLabel({ owner, repo, issue_number: number, name });
+    } catch (e) {
+      core.warning(`#${number}: could not remove label ${name}: ${e.message}`);
+    }
+  }
+}
+
+async function sweepClosedIssues(ctx, config, dryRun) {
+  const { github, context, core } = ctx;
+  const { owner, repo } = context.repo;
+  let issues;
+  try {
+    ({ data: issues } = await github.rest.issues.listForRepo({
+      owner, repo, state: 'closed', sort: 'updated', direction: 'desc', per_page: 100,
+    }));
+  } catch (e) {
+    core.warning(`Could not list closed issues for label cleanup: ${e.message}`);
+    return;
+  }
+  const repositoryPath = `/repos/${owner}/${repo}`.toLowerCase();
+  for (const issue of issues.slice(0, 100)) {
+    if (issue.state !== 'closed' || !issue.repository_url?.toLowerCase().endsWith(repositoryPath)) continue;
+    await cleanStateLabels(ctx, config, issue.number, issue, dryRun);
+  }
+}
+
 async function mergeAndRetarget({ github, context, core }, config, pr, dryRun) {
   const { owner, repo } = context.repo;
   const { baseBranch, mergeGate } = config;
@@ -409,6 +447,18 @@ async function evaluate(ctx, config, listed, state) {
 
   const action = await mergeAndRetarget(ctx, config, pr, dryRun);
   state.merged = true;
+  if (action === 'merged') {
+    for (const n of linkedIssues(pr.body)) {
+      let issue;
+      try {
+        ({ data: issue } = await github.rest.issues.get({ owner, repo, issue_number: n }));
+      } catch (e) {
+        ctx.core.warning(`#${n}: could not read issue for label cleanup: ${e.message}`);
+        continue;
+      }
+      await cleanStateLabels(ctx, config, n, issue, dryRun);
+    }
+  }
   return { action, reason: 'all checks green, no unresolved threads' };
 }
 
@@ -437,11 +487,12 @@ module.exports = async function gate({ github, context, core, config }) {
       return;
     }
     const dryRun = cfg.mergeGate.dryRun !== false;
+    await sweepClosedIssues(ctx, cfg, dryRun);
     const only = Number(context.payload?.inputs?.pr) || null;
     const state = { merged: false, slotTaken: false };
     const candidates = await listCandidates(ctx, cfg, only, state);
     const rows = [];
-    // Never merge with zero required checks: change nothing and report every candidate as skipped.
+    // Never merge with zero required checks: report every candidate as skipped.
     if (effectiveRequiredChecks(cfg).length === 0) {
       for (const listed of candidates) rows.push({ pr: listed.number, action: 'skipped', reason: NO_CHECKS_REASON });
       await writeSummary(core, rows, dryRun);
