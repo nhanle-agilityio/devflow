@@ -47,7 +47,7 @@ Categories, in this order. Each issue or PR appears once, in the first matching 
 2. **PR waiting for a merge.** Open PRs labelled `labels.devflow` that are mergeable, not behind and not draft, with green checks, which a human merges (`risk:high`, or the merge gate is off or does not take it): merge it yourself. Claude never merges.
 3. **PR in conflict or behind.** Open PRs labelled `labels.devflow` that conflict or are behind their base: `/devflow:sync #pr`.
 4. **Ready.** Open issues labelled `labels.ready` with no open PR: `/devflow:next-task` or `/devflow:dispatch`.
-5. **Sub-issue not ready.** Open sub-issues of an open epic (label `type:epic`) that do not carry `labels.ready` (and are not blocked or in progress): label it `labels.ready` once triaged, by hand.
+5. **Sub-issue not ready.** Open sub-issues of an open epic (label `type:epic`) that do not carry `labels.ready` (and are not blocked, in progress, labelled `labels.review` or already with an open PR): label it `labels.ready` once triaged, by hand.
 6. **Epic to accept.** Open epics whose sub-issues are all merged (Merged state rule) and that have no `<!-- devflow-accept -->` result comment: `/devflow:accept #n`.
 
 An item that cannot be classified (state or checks unreadable, mergeability still unknown) is listed as "check by hand" with its link. There is no cap on the number of lines. When no category has an item, print "Nothing to do: nothing is waiting on you."
