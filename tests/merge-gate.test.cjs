@@ -60,6 +60,7 @@ function makePr(number, over = {}) {
 
 // In-memory fake of the Octokit surface the gate uses. `calls` records every call as [name, args].
 function makeEnv({
+  listedIssues = [], removeLabelError,
   prs = [], runs = {}, statuses = {}, behind = {}, unresolved = {}, comments = [], issues = {}, files = {},
 } = {}) {
   const calls = [];
@@ -100,7 +101,17 @@ function makeEnv({
         return { data: issues[a.issue_number] || { state: 'open', body: '' } };
       }),
       addLabels: rec('addLabels'),
-      removeLabel: rec('removeLabel'),
+      listForRepo: rec('issues.listForRepo', ({ owner, repo, state, per_page = 30, page = 1 }) => ({
+        data: listedIssues.filter((issue) =>
+          issue.repository_url === `https://api.github.com/repos/${owner}/${repo}`
+          && (state === 'all' || issue.state === (state || 'open')),
+        ).slice((page - 1) * per_page, page * per_page),
+      })),
+      removeLabel: rec('removeLabel', (args) => {
+        const error = removeLabelError?.(args);
+        if (error) throw error;
+        return { data: {} };
+      }),
       createComment: rec('createComment', (a) => {
         comments.push({ body: a.body });
         return { data: {} };
@@ -112,6 +123,7 @@ function makeEnv({
   const github = {
     rest,
     paginate: async (fn, params) => {
+      if (fn === rest.issues.listForRepo) calls.push(['paginate issues.listForRepo', params]);
       const res = await fn(params);
       return Array.isArray(res.data) ? res.data : res.data.check_runs;
     },
@@ -132,8 +144,8 @@ function makeEnv({
     addTable: (rows) => ((summary.rows = rows), chain),
     write: async () => chain,
   };
-  const messages = { failed: null };
-  const core = { info() {}, warning() {}, setFailed: (m) => (messages.failed = m), summary: chain };
+  const messages = { failed: null, warnings: [] };
+  const core = { info() {}, warning: (m) => messages.warnings.push(m), setFailed: (m) => (messages.failed = m), summary: chain };
   const context = { repo: { owner: 'o', repo: 'r' }, payload: {} };
   const names = (n) => calls.filter(([c]) => c === n);
   const decisions = () => (summary.rows || []).slice(1).map(([pr, action, reason]) => ({ pr, action, reason }));
@@ -1084,4 +1096,139 @@ test('T5.6 reusable workflow inputs and secrets are unchanged from 3.0.0', () =>
     inputs: { 'devflow-ref': { required: 'true', type: 'string' } },
     secrets: { DEVFLOW_GATE_TOKEN: { required: 'true' }, DEVFLOW_READ_TOKEN: { required: 'false' } },
   });
+});
+
+const STATE_LABELS = ['agent:in-progress', 'agent:review', 'agent:blocked'];
+
+function stateIssue(number, names = STATE_LABELS, overrides = {}) {
+  return {
+    number,
+    state: 'closed',
+    body: '',
+    repository_url: 'https://api.github.com/repos/o/r',
+    labels: names.map((name) => ({ name })),
+    ...overrides,
+  };
+}
+
+async function runStateLabelMerge(names, labels) {
+  const env = makeEnv({
+    prs: [makePr(1, { body: 'Closes #5 and fixes #6' })],
+    issues: {
+      5: stateIssue(5, names, { state: 'open' }),
+      6: stateIssue(6, names, { state: 'open' }),
+    },
+    ...green(1),
+  });
+  await run(env, { ...CONFIG(), labels });
+  assert.equal(env.decisions()[0].action, 'merged');
+  const mergeIndex = env.calls.findIndex(([name]) => name === 'pulls.merge');
+  assert.ok(mergeIndex >= 0);
+  assert.ok(env.calls.slice(0, mergeIndex).every(([name]) => name !== 'removeLabel'),
+    'linked issue labels must be removed after the merge');
+  return env;
+}
+
+function assertLabelRemovals(env, issues, message) {
+  const expected = issues.flatMap(({ number, labels }) =>
+    labels.map(({ name }) => ({ owner: 'o', repo: 'r', issue_number: number, name })));
+  const key = ({ issue_number, name }) => `${issue_number}:${name}`;
+  const byIssueAndLabel = (a, b) => key(a).localeCompare(key(b));
+  assert.deepEqual(env.names('removeLabel').map(([, args]) => args).sort(byIssueAndLabel),
+    expected.sort(byIssueAndLabel), message);
+}
+
+test('T20.1 gate merge removes state labels from both linked issues', async () => {
+  const env = await runStateLabelMerge(STATE_LABELS);
+  assertLabelRemovals(env, [stateIssue(5), stateIssue(6)], 'merged PR must clean state labels on issues #5 and #6');
+});
+
+test('T20.2 gate merge keeps the bug label', async () => {
+  const env = await runStateLabelMerge([...STATE_LABELS, 'bug']);
+  assertLabelRemovals(env, [stateIssue(5), stateIssue(6)], 'gate must remove state labels while keeping bug');
+});
+
+test('T20.3 gate merge uses custom state label names', async () => {
+  const labels = { inProgress: 'doing', review: 'in-review', blocked: 'waiting' };
+  const custom = Object.values(labels);
+  const env = await runStateLabelMerge([...STATE_LABELS, ...custom], labels);
+  assertLabelRemovals(env, [stateIssue(5, custom), stateIssue(6, custom)],
+    'gate must remove configured state labels while keeping the default names');
+});
+
+test('T20.4 sweep cleans a closed issue after a human merge', async () => {
+  const closed = stateIssue(5, ['agent:in-progress', 'agent:review'], { state_reason: 'completed' });
+  const pr = stateIssue(6, STATE_LABELS, { pull_request: { merged_at: '2026-01-01T10:00:00Z' } });
+  const env = makeEnv({ listedIssues: [closed, pr] });
+  await run(env, CONFIG());
+  assertLabelRemovals(env, [closed], 'sweep must clean the human-merged issue and skip the pull request');
+});
+
+test('T20.5 sweep cleans blocked from an issue closed as not planned', async () => {
+  const closed = stateIssue(5, ['agent:blocked'], { state_reason: 'not_planned' });
+  const env = makeEnv({ listedIssues: [closed] });
+  await run(env, CONFIG());
+  assertLabelRemovals(env, [closed], 'sweep must remove blocked from the issue closed as not planned');
+});
+
+test('T20.6 sweep leaves an open issue untouched', async () => {
+  const closed = stateIssue(5);
+  const open = stateIssue(6, STATE_LABELS, { state: 'open' });
+  const env = makeEnv({ listedIssues: [closed, open] });
+  await run(env, CONFIG());
+  assertLabelRemovals(env, [closed], 'sweep must clean the closed issue and leave the open issue untouched');
+});
+
+test('T20.7 sweep requests one page of 100 recently updated closed issues', async () => {
+  const listedIssues = Array.from({ length: 150 }, (_, i) => stateIssue(i + 1, ['agent:review'], {
+    updated_at: new Date(Date.UTC(2026, 0, 1, 0, 150 - i)).toISOString(),
+  }));
+  const env = makeEnv({ listedIssues });
+  await run(env, CONFIG());
+  assert.deepEqual(env.names('issues.listForRepo'), [['issues.listForRepo', {
+    owner: 'o', repo: 'r', state: 'closed', sort: 'updated', direction: 'desc', per_page: 100,
+  }]], 'sweep must make one closed-issue request for the 100 most recently updated issues');
+  assert.equal(env.names('paginate issues.listForRepo').length, 0, 'sweep must not paginate');
+  assertLabelRemovals(env, listedIssues.slice(0, 100), 'sweep must clean only the first 100 issues');
+});
+
+test('T20.8 sweep is confined to the gate repository', async () => {
+  const local = stateIssue(5);
+  const foreign = stateIssue(6, STATE_LABELS, { repository_url: 'https://api.github.com/repos/o/other' });
+  const env = makeEnv({ listedIssues: [local, foreign] });
+  await run(env, CONFIG());
+  assert.ok(env.names('issues.listForRepo').every(([, { owner, repo }]) => owner === 'o' && repo === 'r'),
+    'sweep must never list another repository');
+  assertLabelRemovals(env, [local], 'sweep must clean the local issue without touching the foreign issue');
+});
+
+test('T20.9 sweep runs when no PR is evaluated', async () => {
+  const closed = stateIssue(5, ['agent:review']);
+  const env = makeEnv({ listedIssues: [closed] });
+  await run(env, CONFIG());
+  assert.equal(env.decisions().length, 0);
+  assertLabelRemovals(env, [closed], 'enabled gate must sweep even with no PR to evaluate');
+});
+
+test('T20.10 removeLabel 403 warns and cleanup continues', async () => {
+  const issues = [stateIssue(5, ['agent:review']), stateIssue(6, ['agent:blocked'])];
+  const env = makeEnv({
+    listedIssues: issues,
+    removeLabelError: ({ issue_number }) => issue_number === 5
+      ? Object.assign(new Error('HTTP 403 Forbidden'), { status: 403 })
+      : undefined,
+  });
+  await run(env, CONFIG());
+  assert.ok(env.messages.warnings.length > 0, 'a removeLabel 403 must produce a core.warning');
+  assertLabelRemovals(env, issues, 'a removeLabel 403 must not stop cleanup on another issue');
+});
+
+test('T20.12 workflow inputs and secrets match the fixed interface', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const file = path.join(__dirname, '..', '.github', 'workflows', 'devflow-merge-gate.yml');
+  assert.deepEqual(readWorkflowCall(fs.readFileSync(file, 'utf8')), {
+    inputs: { 'devflow-ref': { required: 'true', type: 'string' } },
+    secrets: { DEVFLOW_GATE_TOKEN: { required: 'true' }, DEVFLOW_READ_TOKEN: { required: 'false' } },
+  }, 'merge-gate workflow_call inputs and secrets must keep their current interface');
 });
