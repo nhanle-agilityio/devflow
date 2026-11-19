@@ -2121,3 +2121,96 @@ test('a question that changes a criterion blocks with its recommended option and
   assert.equal(rep[0].status, 'blocked');
   assert.match(prompt(calls, 'blocked'), /Recommended: A \(r\) \[changes a criterion: typed answer needed\]/);
 });
+
+// ---- #112: fixed rules for branch resume and base conflicts ----
+const Q112 = { text: 'does the conflicting behaviour stay?', tag: 'Dev', recommended: 'keep both', reason: 'r', productDecision: true, reversible: true, changesCriterion: false, dropsMustRow: false, changesContract: false, changesStoredFormat: false, lowersRisk: false, skipsCheck: false, needsDestructiveGit: false, outsideRepo: false };
+const T7_LABELS = { labels: ['type:feat'] };
+
+test('T7.1 Branch resumes a remote branch starting with <type>/<issue>- without a question and names it in Assumptions', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [12] }, { ...T7_LABELS, branch: { branch: 'feat/12-foo', resumed: true, commits: ['abc feat(#12): x'], matchedByName: true } });
+  assert.equal(rep[0].status, 'pr');
+  const p = prompt(calls, 'branch');
+  assert.match(p, /starts with `<type>\/12-`|starts with "feat\/12-"|`feat\/12-`/);
+  assert.match(p, /origin/);
+  assert.match(p, /without (asking )?a question|do not ask/i);
+  assert.match(p, /matchedByName/);
+  assert.match(prompt(calls, 'ship'), /feat\/12-foo/);
+  assert.match(prompt(calls, 'ship'), /name starts with/);
+});
+
+test('T7.2 Branch also resumes a local-only branch with that prefix', async () => {
+  const { calls } = await run({ ...BASE, issues: [12] }, T7_LABELS);
+  assert.match(prompt(calls, 'branch'), /git branch --list/);
+  assert.match(prompt(calls, 'branch'), /local/i);
+});
+
+test('T7.3 a branch with another type prefix does not match and a new branch is created', async () => {
+  const { calls } = await run({ ...BASE, issues: [12] }, T7_LABELS);
+  const p = prompt(calls, 'branch');
+  assert.match(p, /another (<type>|type) prefix|different type/i);
+  assert.match(p, /fix\/12-/);
+  assert.match(p, /does not match/);
+});
+
+test('T7.4 several matches: the one with an open devflow PR wins and is named in Assumptions', async () => {
+  const { calls } = await run({ ...BASE, issues: [12] }, T7_LABELS);
+  const p = prompt(calls, 'branch');
+  assert.match(p, /several/i);
+  assert.match(p, /open (devflow )?PR/);
+  assert.match(p, /devflow/);
+});
+
+test('T7.5 several matches without a PR: the remote branch with the newest commit wins', async () => {
+  const { calls } = await run({ ...BASE, issues: [12] }, T7_LABELS);
+  assert.match(prompt(calls, 'branch'), /newest commit/);
+});
+
+test('T7.6 the prefix ends with the hyphen after the issue number', async () => {
+  const { calls } = await run({ ...BASE, issues: [12] }, T7_LABELS);
+  const p = prompt(calls, 'branch');
+  assert.match(p, /feat\/123-/);
+  assert.match(p, /feat\/12foo/);
+  assert.match(p, /hyphen/);
+});
+
+test('T7.7 a base conflict on a resumed branch goes to Integrate, which resolves it; no block', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [12] }, { ...T7_LABELS, branch: { branch: 'feat/12-foo', resumed: true, commits: ['abc feat(#12): x'], baseConflict: true, conflictFiles: ['src/x.py'] } });
+  assert.equal(rep[0].status, 'pr');
+  assert.ok(has(calls, 'integrate'));
+  const p = prompt(calls, 'integrate');
+  assert.match(p, /git merge --no-edit origin\/main/);
+  assert.match(p, /src\/x\.py/);
+  assert.match(p, /resolve/i);
+  assert.ok(!/git merge --abort[^.]*return ok=false with the conflicting files\. Return resumed/.test(prompt(calls, 'branch')));
+});
+
+test('T7.7b no base conflict, no Integrate call', async () => {
+  const { calls } = await run({ ...BASE, issues: [12] }, { ...T7_LABELS, branch: { resumed: true, commits: ['abc x'] } });
+  assert.ok(!has(calls, 'integrate'));
+});
+
+test('T7.8 a base conflict in behaviour the issue does not cover blocks with a questions comment', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [12] }, { ...T7_LABELS, branch: { resumed: true, commits: ['abc x'], baseConflict: true, conflictFiles: ['src/x.py'] }, integrateOut: { ok: false, integrationSha: '', merged: [], problem: 'conflict', questions: [Q112] } });
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(rep[0].reason, /^Integrate/);
+  assert.match(prompt(calls, 'blocked'), /devflow-questions/);
+  assert.match(prompt(calls, 'integrate'), /does not cover/);
+});
+
+test('T7.9 a conflict in a high-risk file is still resolved in Integrate (the PR is escalated by the risk step)', async () => {
+  const { calls } = await run({ ...BASE, config: { ...CFG, risk: { highPaths: ['hooks/**'] } }, issues: [12] }, { ...T7_LABELS, branch: { resumed: true, commits: ['abc x'], baseConflict: true, conflictFiles: ['hooks/guard.py'] } });
+  const p = prompt(calls, 'integrate');
+  assert.match(p, /hooks\/guard\.py/);
+  assert.match(p, /risk\.highPaths|high-risk/);
+  assert.match(p, /still resolve/i);
+});
+
+test('T7.10 the Branch, Integrate and Implement prompts say a commit-structure question is not asked and is a suggestion', async () => {
+  const { calls } = await run({ ...BASE, issues: [12] }, { ...T7_LABELS, branch: { resumed: true, commits: ['abc x'], baseConflict: true, conflictFiles: ['a'] } });
+  for (const l of ['branch', 'integrate', 'implement']) {
+    const p = prompt(calls, l);
+    assert.match(p, /commit-structure question/, l);
+    assert.match(p, /never ask/i, l);
+    assert.match(p, /suggestion/, l);
+  }
+});
