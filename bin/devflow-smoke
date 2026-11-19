@@ -1,0 +1,225 @@
+#!/usr/bin/env node
+'use strict';
+// devflow-smoke: read-only release smoke checker. Checks that one sandbox issue went through devflow as expected
+// (risk:low merged by the gate, or risk:high waiting for / merged by a human) and prints one ok/fail line per check.
+// Every GitHub read goes through one reader function (apiPath -> parsed JSON, null for 404); the default reader
+// runs `gh api -X GET <path>`, tests inject fixtures.
+
+const { spawnSync } = require('node:child_process');
+
+const USAGE = `Usage: devflow-smoke --repo owner/name --issue <n> --expect low|high
+
+Checks (one "ok <check>: ..." or "fail <check>: ..." line each):
+  issue        the issue exists; low: it is closed (high: open or closed)
+  closing PR   exactly one open or merged PR closes the issue, and it is labelled devflow
+  run marker   the PR body has a <!-- devflow-run {...} --> marker with path and reviewRounds
+  review       the PR body has a "## Review" section
+  risk line    the PR body's "Risk:" line matches --expect
+  merge        low: merged by the gate (its comment marker or the "Merged-by: devflow merge gate" trailer)
+               high: open, or merged with neither
+  risk label   high only: the PR is labelled risk:high
+
+Reads GitHub with "gh api" (GET only). Exit codes: 0 all checks pass, 1 a check failed, 2 usage error, gh missing
+or unauthenticated, or a GitHub read error.`;
+
+const DEVFLOW_LABEL = 'devflow';
+const RISK_HIGH_LABEL = 'risk:high';
+const GATE_MERGED_MARKER = '<!-- devflow-gate-merged -->';
+const GATE_TRAILER_RE = /^Merged-by: devflow merge gate\s*$/m;
+const PER_PAGE = 100;
+const MAX_PAGES = 10;
+
+class ExitError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+}
+
+function parseArgs(argv) {
+  const opts = {};
+  for (let i = 0; i < argv.length; i += 2) {
+    const k = argv[i];
+    if (!['--repo', '--issue', '--expect'].includes(k) || argv[i + 1] === undefined) {
+      throw new ExitError(2, `unexpected argument "${k}"\n${USAGE}`);
+    }
+    opts[k.slice(2)] = argv[i + 1];
+  }
+  if (!opts.repo || !/^[\w.-]+\/[\w.-]+$/.test(opts.repo)) throw new ExitError(2, `--repo owner/name is required\n${USAGE}`);
+  if (!opts.issue || !/^[1-9]\d*$/.test(opts.issue)) throw new ExitError(2, `--issue <number> is required\n${USAGE}`);
+  if (opts.expect !== 'low' && opts.expect !== 'high') throw new ExitError(2, `--expect must be low or high\n${USAGE}`);
+  return { repo: opts.repo, issue: Number(opts.issue), expect: opts.expect };
+}
+
+// gh arguments for one read: always an explicit GET, never a field or input flag (those make gh send a body).
+function ghArgs(apiPath) {
+  return ['api', '-X', 'GET', '-H', 'Accept: application/vnd.github+json', apiPath];
+}
+
+function makeGhReader(spawn = spawnSync) {
+  return (apiPath) => {
+    const r = spawn('gh', ghArgs(apiPath), { encoding: 'utf8' });
+    if (r.error) throw new ExitError(2, `gh api ${apiPath}: ${r.error.message}`);
+    if (r.status !== 0) {
+      if (/HTTP 404|Not Found/i.test(r.stderr || '')) return null;
+      throw new ExitError(2, `gh api ${apiPath} failed: ${(r.stderr || '').trim() || `exit ${r.status}`}`);
+    }
+    try {
+      return JSON.parse(r.stdout);
+    } catch (e) {
+      throw new ExitError(2, `gh api ${apiPath}: invalid JSON (${e.message})`);
+    }
+  };
+}
+
+// gh must exist and be logged in; otherwise exit 2 before any read.
+function checkGh(spawn = spawnSync) {
+  const r = spawn('gh', ['auth', 'status'], { encoding: 'utf8' });
+  if (r.error) {
+    throw new ExitError(2, r.error.code === 'ENOENT' ? 'gh not found on PATH; install the GitHub CLI' : `gh: ${r.error.message}`);
+  }
+  if (r.status !== 0) throw new ExitError(2, `gh is not authenticated (gh auth status failed); run "gh auth login"\n${(r.stderr || '').trim()}`);
+}
+
+function readPages(reader, apiPath) {
+  const all = [];
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const data = reader(`${apiPath}?per_page=${PER_PAGE}&page=${page}`);
+    if (!Array.isArray(data)) break;
+    all.push(...data);
+    if (data.length < PER_PAGE) break;
+  }
+  return all;
+}
+
+const labelNames = (x) => (x.labels || []).map((l) => (typeof l === 'string' ? l : l.name));
+
+function closesIssue(body, repo, n) {
+  const re = new RegExp(`\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s*:?\\s+(?:${repo.replace(/[.]/g, '\\.')})?#${n}(?!\\d)`, 'i');
+  return re.test(body || '');
+}
+
+function runMarker(body) {
+  const m = /<!--\s*devflow-run\s+(\{.*?\})\s*-->/.exec(body || '');
+  if (!m) return { ok: false, detail: 'no <!-- devflow-run --> marker' };
+  let data;
+  try {
+    data = JSON.parse(m[1]);
+  } catch {
+    return { ok: false, detail: 'devflow-run marker is not valid JSON' };
+  }
+  const missing = ['path', 'reviewRounds'].filter((k) => data == null || data[k] === undefined || data[k] === null);
+  if (missing.length) return { ok: false, detail: `devflow-run marker lacks ${missing.join(' and ')}` };
+  return { ok: true, detail: `path ${data.path}, reviewRounds ${data.reviewRounds}` };
+}
+
+function mergedByGate(reader, repo, pr) {
+  const comments = readPages(reader, `repos/${repo}/issues/${pr.number}/comments`);
+  if (comments.some((c) => (c.body || '').includes(GATE_MERGED_MARKER))) return 'gate comment marker';
+  if (pr.merge_commit_sha) {
+    const c = reader(`repos/${repo}/commits/${pr.merge_commit_sha}`);
+    const msg = c && c.commit ? c.commit.message : '';
+    if (GATE_TRAILER_RE.test(msg || '')) return 'Merged-by trailer';
+  }
+  return null;
+}
+
+// Returns [{ok, name, detail}] for one issue.
+function check(reader, { repo, issue: n, expect }) {
+  const results = [];
+  const add = (ok, name, detail) => results.push({ ok, name, detail });
+  const names = ['closing PR', 'run marker', 'review', 'risk line', 'merge'].concat(expect === 'high' ? ['risk label'] : []);
+
+  const issue = reader(`repos/${repo}/issues/${n}`);
+  if (!issue || issue.pull_request) {
+    add(false, 'issue', issue ? `#${n} is a pull request` : `#${n} not found in ${repo}`);
+    for (const name of names) add(false, name, 'no issue');
+    return results;
+  }
+  if (expect === 'low') add(issue.state === 'closed', 'issue', `#${n} is ${issue.state}${issue.state === 'closed' ? '' : ' (low expects closed)'}`);
+  else add(true, 'issue', `#${n} is ${issue.state}`);
+
+  // PRs that reference the issue, from its timeline; a PR closes it when its body has a closing keyword for #n
+  // and it is open or merged (a PR closed without merging closed nothing).
+  const refs = new Set();
+  for (const ev of readPages(reader, `repos/${repo}/issues/${n}/timeline`)) {
+    const src = ev && ev.event === 'cross-referenced' && ev.source && ev.source.issue;
+    if (!src || !src.pull_request) continue;
+    if (src.repository && src.repository.full_name && src.repository.full_name.toLowerCase() !== repo.toLowerCase()) continue;
+    refs.add(src.number);
+  }
+  const closing = [];
+  for (const num of [...refs].sort((a, b) => a - b)) {
+    const pr = reader(`repos/${repo}/pulls/${num}`);
+    if (!pr || !closesIssue(pr.body, repo, n)) continue;
+    if (pr.state === 'open' || pr.merged_at) closing.push(pr);
+  }
+  const list = closing.map((p) => `#${p.number}`).join(', ');
+  let pr = null;
+  if (closing.length !== 1) add(false, 'closing PR', closing.length ? `${closing.length} PRs close #${n} (${list}); expected exactly one` : `no open or merged PR closes #${n}`);
+  else if (!labelNames(closing[0]).includes(DEVFLOW_LABEL)) add(false, 'closing PR', `#${closing[0].number} is not labelled ${DEVFLOW_LABEL}`);
+  else {
+    pr = closing[0];
+    add(true, 'closing PR', `#${pr.number} (${pr.merged_at ? 'merged' : pr.state})`);
+  }
+  if (!pr) {
+    for (const name of names.slice(1)) add(false, name, 'no single devflow PR');
+    return results;
+  }
+
+  const body = pr.body || '';
+  const marker = runMarker(body);
+  add(marker.ok, 'run marker', marker.detail);
+  add(/^## Review\s*$/m.test(body), 'review', /^## Review\s*$/m.test(body) ? '"## Review" section present' : 'no "## Review" section');
+  const risk = /^\s*Risk:\s*(low|high)\b/im.exec(body);
+  add(Boolean(risk) && risk[1].toLowerCase() === expect, 'risk line', risk ? `Risk: ${risk[1].toLowerCase()} (expected ${expect})` : 'no "Risk:" line');
+
+  if (expect === 'low') {
+    if (!pr.merged_at) add(false, 'merge', `#${pr.number} is not merged`);
+    else {
+      const by = mergedByGate(reader, repo, pr);
+      add(Boolean(by), 'merge', by ? `merged by the gate (${by})` : 'merged without the gate comment marker or the Merged-by trailer');
+    }
+  } else {
+    if (!pr.merged_at) add(true, 'merge', `#${pr.number} is open, waiting for a human`);
+    else {
+      const by = mergedByGate(reader, repo, pr);
+      add(!by, 'merge', by ? `merged by the gate (${by}); risk:high must not be` : 'merged by a human');
+    }
+    const high = labelNames(pr).includes(RISK_HIGH_LABEL);
+    add(high, 'risk label', high ? `labelled ${RISK_HIGH_LABEL}` : `not labelled ${RISK_HIGH_LABEL}`);
+  }
+  return results;
+}
+
+// io: {out, err, reader?, spawn?}. Returns the exit code; never calls process.exit.
+function run(argv, io) {
+  try {
+    if (argv.includes('--help') || argv.includes('-h')) {
+      io.out(USAGE + '\n');
+      return 0;
+    }
+    const opts = parseArgs(argv);
+    let reader = io.reader;
+    if (!reader) {
+      checkGh(io.spawn);
+      reader = makeGhReader(io.spawn);
+    }
+    const results = check(reader, opts);
+    for (const r of results) io.out(`${r.ok ? 'ok' : 'fail'} ${r.name}: ${r.detail}\n`);
+    return results.every((r) => r.ok) ? 0 : 1;
+  } catch (e) {
+    if (!(e instanceof ExitError)) throw e;
+    io.err(`devflow-smoke: ${e.message}\n`);
+    return e.code;
+  }
+}
+
+if (require.main === module) {
+  process.exitCode = run(process.argv.slice(2), {
+    out: (s) => process.stdout.write(s),
+    err: (s) => process.stderr.write(s),
+  });
+}
+
+module.exports = { run, check, ghArgs, makeGhReader, checkGh, USAGE };
