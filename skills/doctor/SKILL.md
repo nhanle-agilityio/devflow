@@ -36,3 +36,18 @@ Run all checks even when one fails. If `.claude/devflow.json` is missing, report
 ## Report
 
 Print a table: check, status (`ok` / `warn` / `fail`; the head-branch setting line may be `unknown`), what to do. `fail` is something that stops the workflows (config invalid, MCP unreachable); `warn` is drift or leftovers. With `--fix`, add a line per fix applied or declined. End with the one command to run next, if any.
+
+## Waiting on you
+
+After the report, print a "Waiting on you" section: what needs a human or a command now, one line per item with one command. It is read-only: it never changes anything, also with `--fix` (no label, comment, branch or file is touched, and nothing here is offered as a fix). It needs `.claude/devflow.json` for the labels; without it, print one line saying so and skip it. Use the GitHub MCP server and the Merged state rule.
+
+Categories, in this order. Each issue or PR appears once, in the first matching category (blocked, PR waiting for a merge, conflict or behind, ready, sub-issue not ready, epic to accept):
+
+1. **Blocked.** Open issues labelled `labels.blocked` with an open question: `/devflow:answer #n`.
+2. **PR waiting for a merge.** Open PRs labelled `labels.devflow` that are mergeable, not behind and not draft, with green checks, which a human merges (`risk:high`, or the merge gate is off or does not take it): merge it yourself. Claude never merges.
+3. **PR in conflict or behind.** Open PRs labelled `labels.devflow` that conflict or are behind their base: `/devflow:sync #pr`.
+4. **Ready.** Open issues labelled `labels.ready` with no open PR: `/devflow:next-task` or `/devflow:dispatch`.
+5. **Sub-issue not ready.** Open sub-issues of an open epic (label `type:epic`) that do not carry `labels.ready` (and are not blocked, in progress, labelled `labels.review` or already with an open PR): label it `labels.ready` once triaged, by hand.
+6. **Epic to accept.** Open epics whose sub-issues are all merged (Merged state rule) and that have no `<!-- devflow-accept -->` result comment: `/devflow:accept #n`.
+
+An item that cannot be classified (state or checks unreadable, mergeability still unknown) is listed as "check by hand" with its link. There is no cap on the number of lines. When no category has an item, print "Nothing to do: nothing is waiting on you."
