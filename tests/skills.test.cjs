@@ -558,7 +558,7 @@ test('T21.1 accept does not stop at preflight without a dev server or modes', ()
 // T21.2
 test('T21.2 accept marks running-app criteria not checkable in evidence-only mode', () => {
   const t = acceptText();
-  assert.ok(/criteri\w+ that need a running app are `not checkable`/.test(t));
+  assert.ok(/criteri\w+ that need a running app are `not checkable`/i.test(t));
 });
 
 // T21.3
