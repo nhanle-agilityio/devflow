@@ -545,6 +545,44 @@ test('test_t10_4_accept_spec_path_kept', () => {
   assert.ok(t.includes('Gap: '));
 });
 
+// ---- T21 (#102): accept without a dev server ----
+// T21.1
+test('T21.1 accept does not stop at preflight without a dev server or modes', () => {
+  const t = acceptText();
+  assert.ok(!t.includes('acceptance cannot run'), 'no stop at preflight');
+  assert.ok(t.includes('Evidence-only mode'), 'evidence-only mode named');
+  assert.ok(/without `verify\.devServer`, or with empty `verify\.modes`/.test(t), 'both triggers named');
+  assert.ok(/does not stop/.test(t), 'says it does not stop');
+});
+
+// T21.2
+test('T21.2 accept marks running-app criteria not checkable in evidence-only mode', () => {
+  const t = acceptText();
+  assert.ok(/criteri\w+ that need a running app are `not checkable`/i.test(t));
+});
+
+// T21.3
+test('T21.3 accept takes other results from merged PR checks, matrix rows and manual rows', () => {
+  const t = acceptText();
+  assert.ok(t.includes("merged PRs' checks"));
+  assert.ok(t.includes('test-matrix rows'));
+  assert.ok(t.includes('manual rows recorded as pass in the PR body'));
+});
+
+// T21.4
+test('T21.4 accept marks a criterion with no evidence not checkable', () => {
+  const t = acceptText();
+  assert.ok(/criterion with no such evidence is `not checkable`/.test(t));
+});
+
+// T21.5
+test('T21.5 accept still posts the devflow-accept result in evidence-only mode', () => {
+  const t = acceptText();
+  const i = t.indexOf('Evidence-only mode');
+  assert.ok(i >= 0);
+  assert.ok(/still posts the `<!-- devflow-accept -->` result on the epic or spec PR/.test(t));
+});
+
 // ---- T11: /devflow:report takes an epic and shows per-issue metrics ----
 const reportText = () => read('skills/report/SKILL.md');
 
@@ -761,4 +799,50 @@ test("test_t17_4_spec_writes_resolves_into_epic", () => {
   assert.match(skill, /Resolves: #a, #b/);
   assert.match(skill, /names existing issues it resolves/);
   assert.match(tpl, /Resolves: #a, #b/);
+});
+
+// ---- T19: report shows local review, skipped steps and who merged ----
+const reportItem = (label) => {
+  const m = reportText().match(new RegExp('^- \\*\\*' + label + '\\*\\*[^\\n]*', 'm'));
+  assert.ok(m, `SKILL.md has the ${label} item`);
+  return m[0];
+};
+
+test('T19.1 report review falls back to the local review from ## Review and the devflow-run marker', () => {
+  const r = reportItem('Review');
+  assert.match(r, /no `devflow\/review` status/);
+  assert.ok(r.includes('## Review') && r.includes('devflow-run'));
+  assert.ok(r.includes('local review: pass, N round(s)') && r.includes('local review: fail, N round(s)'));
+});
+
+test('T19.2 report uses the devflow/review status when present', () => {
+  assert.match(reportItem('Review'), /with a `devflow\/review` status the status is used/);
+});
+
+test('T19.3 report writes the literal round(s)', () => {
+  const t = reportText();
+  assert.ok(t.includes('round(s)'));
+  assert.doesNotMatch(t, /\b[12] rounds?\b/);
+});
+
+test('T19.4 report shows Plan and Verify as skipped on the short path', () => {
+  assert.match(reportText(), /short path[^.]*Plan and Verify[^.]*"skipped \(short path\)"[^.]*neutral/i);
+});
+
+test('T19.5 report greys missing steps on the full path', () => {
+  const t = reportText();
+  assert.match(t, /full path[^.]*Plan, Review, Checks and Verify[^.]*grey[^.]*missing/i);
+  assert.match(t, /Verify[^.]*only when `verify` is configured/);
+});
+
+test('T19.6 report mergedBy is gate for the marker comment or the trailer', () => {
+  assert.match(reportText(), /`mergedBy` is `gate` when[^.]*<!-- devflow-gate-merged -->[^.]*Merged-by: devflow merge gate/);
+});
+
+test('T19.7 report mergedBy is human when the body has a devflow-run marker and no gate evidence', () => {
+  assert.match(reportText(), /otherwise `human` when the PR body has a `devflow-run` marker/);
+});
+
+test('T19.8 report mergedBy falls back to the 3.0.0 rule', () => {
+  assert.match(reportText(), /otherwise the 3\.0\.0 rule[^.]*`human`[^.]*other than the gate token owner[^.]*`unknown`/);
 });
