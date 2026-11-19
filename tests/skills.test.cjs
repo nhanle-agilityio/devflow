@@ -545,6 +545,44 @@ test('test_t10_4_accept_spec_path_kept', () => {
   assert.ok(t.includes('Gap: '));
 });
 
+// ---- T21 (#102): accept without a dev server ----
+// T21.1
+test('T21.1 accept does not stop at preflight without a dev server or modes', () => {
+  const t = acceptText();
+  assert.ok(!t.includes('acceptance cannot run'), 'no stop at preflight');
+  assert.ok(t.includes('Evidence-only mode'), 'evidence-only mode named');
+  assert.ok(/without `verify\.devServer`, or with empty `verify\.modes`/.test(t), 'both triggers named');
+  assert.ok(/does not stop/.test(t), 'says it does not stop');
+});
+
+// T21.2
+test('T21.2 accept marks running-app criteria not checkable in evidence-only mode', () => {
+  const t = acceptText();
+  assert.ok(/criteri\w+ that need a running app are `not checkable`/.test(t));
+});
+
+// T21.3
+test('T21.3 accept takes other results from merged PR checks, matrix rows and manual rows', () => {
+  const t = acceptText();
+  assert.ok(t.includes("merged PRs' checks"));
+  assert.ok(t.includes('test-matrix rows'));
+  assert.ok(t.includes('manual rows recorded as pass in the PR body'));
+});
+
+// T21.4
+test('T21.4 accept marks a criterion with no evidence not checkable', () => {
+  const t = acceptText();
+  assert.ok(/criterion with no such evidence is `not checkable`/.test(t));
+});
+
+// T21.5
+test('T21.5 accept still posts the devflow-accept result in evidence-only mode', () => {
+  const t = acceptText();
+  const i = t.indexOf('Evidence-only mode');
+  assert.ok(i >= 0);
+  assert.ok(/still posts the `<!-- devflow-accept -->` result on the epic or spec PR/.test(t));
+});
+
 // ---- T11: /devflow:report takes an epic and shows per-issue metrics ----
 const reportText = () => read('skills/report/SKILL.md');
 
