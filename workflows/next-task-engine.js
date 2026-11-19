@@ -19,7 +19,7 @@ export const meta = {
 
 // Test hook: the pure helpers below are function declarations (hoisted), so tests get them without a run.
 // They take every input as a parameter and never touch the run state.
-if (args && args.exports === true) return { parseDiff, scanWeakenedChecks, checkConfigGlobs, globToRegExp, priorityRank, orderIssues, isFixIssue, pathFor, hasHttpOrE2eRow, epicFor, classifyQuestion, questionsSchema, decisionLine, addDecisions, questionLine, warningQuestion, pickClaimWinner }
+if (args && args.exports === true) return { parseDiff, scanWeakenedChecks, checkConfigGlobs, globToRegExp, priorityRank, orderIssues, isFixIssue, pathFor, hasHttpOrE2eRow, epicFor, classifyQuestion, questionsSchema, decisionLine, addDecisions, questionLine, warningQuestion, pickClaimWinner, nextStep }
 
 // Run through /devflow:next-task only: it does the preflight and builds args. Calling this workflow
 // directly (e.g. /devflow:next-task-engine) arrives without args, so stop with a clear message.
@@ -414,6 +414,8 @@ const SHIP_SCHEMA = {
     url: { type: 'string' },
     reused: { type: 'boolean', description: 'true when an open PR for the branch already existed and was reused instead of opening a new one' },
     unstacked: { type: 'boolean', description: 'true when the parent PR was already merged and the PR targets the base' },
+    mergeState: { type: 'string', enum: ['clean', 'behind', 'conflict', 'unknown'], description: 'The opened or reused PR as GitHub reports it: conflict (merge conflicts), behind (base has commits the branch lacks), clean, or unknown when not computed yet' },
+    checksFailing: { type: 'boolean', description: 'true when a check run or status of the PR head has already failed (pending is not failing)' },
     followUps: {
       type: 'array',
       description: 'Issues created (or found open) for the out-of-scope items',
@@ -1609,6 +1611,7 @@ Steps:
 3. Label the new PR (a PR is an issue: use issue_write with the PR number; read its labels first, keep existing ones): ${prLabels.map((l) => '"' + l + '"').join(', ')}.${newPrOnlyLabel}
 4. On issue #${issue.number} add the label "${labels.review}" and remove "${labels.inProgress}" (keep other labels).${risk.escalation ? ` Also add "${labels.riskHigh}" to the issue and remove "${labels.riskLow}" (the change was escalated to high).` : ''}
 5. ${isolated ? 'Stay on the branch (this checkout is a dedicated worktree; do not switch branches).' : `\`git switch ${startBranch}\`.`}
+5b. Read the PR once more with pull_request_read (get, then get_status or get_check_runs): return mergeState = "conflict" when it has merge conflicts (mergeable false or mergeable_state dirty), "behind" when mergeable_state is behind, "clean" otherwise and "unknown" when GitHub has not computed it yet; return checksFailing = true only when a check run or status of the head has already failed (pending or missing is not failing). Read-only; do not wait.
 Return the PR number and URL. If any step fails, return ok=false with the problem.`
 }
 
@@ -1672,6 +1675,18 @@ const DECISIONS_SCHEMA = {
     problem: { type: 'string', description: `Report starting with exactly "${MCP_DOWN}" when GitHub cannot be reached; otherwise omit` },
   },
   required: ['ok', 'appended'],
+}
+
+// The next step for a result entry: answer, merge, sync, nothing or check by hand. Precedence for a PR: failing
+// checks, then conflict or behind, then a human merge (risk:high or decisions:review), then nothing.
+function nextStep(r, o) {
+  if (!r) return 'check by hand'
+  if (r.status === 'blocked') return Number(r.questionCount) > 0 ? 'answer' : 'check by hand'
+  if (r.status !== 'pr') return 'check by hand'
+  if (r.checksFailing === true) return 'check by hand'
+  if (r.mergeState === 'conflict' || r.mergeState === 'behind') return 'sync'
+  if (r.risk === 'high' || (r.decisionsReview === true && !(o && o.trustDecisions === true))) return 'merge'
+  return 'nothing'
 }
 
 // What the run decided per issue: [{question, option, reason}], whether any decision was new (not already in the issue's
@@ -1955,7 +1970,7 @@ Make no other changes. Return ok=true when those comments are gone.`, {
     })
     await verifyClaimRelease(stage)
     issue.inCleanup = false
-    return done({ issue: issue.number, status: 'blocked', reason: `${stage}: ${reason.split('\n')[0]}` })
+    return done({ issue: issue.number, status: 'blocked', reason: `${stage}: ${reason.split('\n')[0]}`, questionCount: Array.isArray(questions) ? questions.length : 0 })
   }
 
   // Claim: a lock on the issue, decided here from the claim comments the agent read back.
@@ -2447,6 +2462,9 @@ Make no other changes. Return ok=true when those comments are gone.`, {
       risk: risk.level === 'unknown' ? 'high' : risk.level,
       stackedOn: ship.unstacked ? [] : parentsOf(issue).map((p) => p.prNumber),
       branch,
+      mergeState: ship.mergeState || 'unknown',
+      checksFailing: ship.checksFailing === true,
+      decisionsReview: !!decidedNew[issue.number] || (decided[issue.number] || []).length > 0,
     })
   } catch (e) {
     // A throw inside the cleanup itself goes to the main loop; a normal block is never cleaned up twice.
@@ -2564,5 +2582,6 @@ for (const issue of queue) {
 }
 
 phase('Report')
+for (const r of report) r.next = nextStep(r, nt)
 log(report.map((r) => `#${r.issue}: ${r.status}${r.url ? ' ' + r.url : ''}${r.risk ? ' risk:' + r.risk : ''}${r.stackedOn && r.stackedOn.length ? ' stacked on ' + r.stackedOn.map((n) => '#' + n).join(', ') : ''}${r.reason ? ' (' + r.reason + ')' : ''}${r.notes && r.notes.length ? ' [' + r.notes.join('; ') + ']' : ''}`).join('\n'))
 return report
