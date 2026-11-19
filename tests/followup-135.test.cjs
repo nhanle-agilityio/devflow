@@ -76,7 +76,7 @@ function diffOf(file, hunk) {
   return `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n${hunk}\n`;
 }
 
-test('T1.1 deleting a 200-line test file yields one changed-existing-test hit', async () => {
+test('T1.1 a deleted 200-line test or fixture file yields one hit, not one per line', async () => {
   const files = ['tests/a.test.cjs', 'fixtures/a.txt'];
   const removed = Array.from({ length: 200 }, (_, i) => `-assert.equal(actual[${i}], ${i});`);
   const diff = files.map((file) => [
@@ -87,9 +87,10 @@ test('T1.1 deleting a 200-line test file yields one changed-existing-test hit', 
   assert.deepEqual(parseDiff(diff).map(({ file, deleted, removed }) => [file, deleted, removed.length]),
     files.map((file) => [file, true, 200]));
   const hits = scanWeakenedChecks(diff, checkConfigGlobs(config.checks));
-  const counts = files.map((file) => hits.filter((hit) => hit.kind === 'changed-existing-test' && hit.file === file).length);
-  assert.deepEqual(counts, [1, 1],
-    `Expected one changed-existing-test hit per deleted file, got ${files.map((file, i) => `${file}: ${counts[i]}`).join(', ')}`);
+  // A deleted test file keeps its single critical 'deleted test file' hit; a deleted fixture gets one changed-existing-test hit.
+  const kinds = files.map((file) => hits.filter((hit) => hit.file === file).map((hit) => hit.kind));
+  assert.deepEqual(kinds, [['deleted test file'], ['changed-existing-test']],
+    `Expected one hit per deleted file, got ${files.map((file, i) => `${file}: ${kinds[i].join('+')}`).join(', ')}`);
 });
 
 test('T1.2 review does not warn about an existing test line changed in a planned file', async () => {

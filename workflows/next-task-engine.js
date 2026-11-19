@@ -847,6 +847,7 @@ function scanWeakenedChecks(diffText, configGlobs, ignoreGlobs) {
   const isFixtureFile = (f) => /(^|\/)(fixtures?|__snapshots__|__fixtures__|testdata)\//.test(f) || /\.snap$/.test(f)
   const COMMENT_ONLY = /^\s*(#|\/\/|\/\*|\*|--\s)/
   const isProse = (f) => /\.(md|mdx|txt|rst|adoc)$/i.test(f) || /(^|\/)docs\//.test(f)
+  const stringsOrComments = /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)|\/\*.*?(?:\*\/|$)|\/\/.*|#.*/g
   const ADDED = [
     { kind: 'noqa', re: /#\s*noqa\b/i },
     { kind: 'type: ignore', re: /#\s*type:\s*ignore\b/ },
@@ -880,7 +881,13 @@ function scanWeakenedChecks(diffText, configGlobs, ignoreGlobs) {
   for (const f of parseDiff(diffText)) {
     if (!f.file) continue
     if (f.file !== '.claude/devflow.json' && ignoreRes.some((re) => re.test(f.file))) continue
-    if (f.deleted && isTestFile(f.file)) {
+    const testFile = isTestFile(f.file)
+    const testOrFixture = testFile || isFixtureFile(f.file)
+    // A deleted fixture file is one changed-existing-test hit; a deleted test file is the critical hit below.
+    if (f.deleted && testOrFixture && !testFile) {
+      hits.push({ file: f.file, line: 1, kind: 'changed-existing-test', text: f.file })
+    }
+    if (f.deleted && testFile) {
       hits.push({ file: f.file, line: 0, kind: 'deleted test file', text: '' })
       continue
     }
@@ -894,18 +901,19 @@ function scanWeakenedChecks(diffText, configGlobs, ignoreGlobs) {
     }
     for (let i = 0; i < f.added.length && !isProse(f.file); i++) {
       const a = f.added[i]
+      const checkText = testFile ? a.text : a.text.replace(stringsOrComments, (match, literal) => literal ? '""' : match)
       for (const p of ADDED) {
-        if (p.re.test(a.text)) hits.push({ file: f.file, line: a.line, kind: p.kind, text: a.text.trim() })
+        if (p.re.test(checkText)) hits.push({ file: f.file, line: a.line, kind: p.kind, text: a.text.trim() })
       }
       if (/_test\.go$/.test(f.file) && GO_SKIP.test(a.text)) hits.push({ file: f.file, line: a.line, kind: 'skipped test', text: a.text.trim() })
-      if (isTestFile(f.file) && HOLLOW.test(a.text)) hits.push({ file: f.file, line: a.line, kind: 'hollow assertion', text: a.text.trim() })
+      if (testFile && HOLLOW.test(a.text)) hits.push({ file: f.file, line: a.line, kind: 'hollow assertion', text: a.text.trim() })
       // "except ...:" with "pass" on the next added line
       const next = f.added[i + 1]
-      if (/^\s*except\b[^:]*:\s*(#.*)?$/.test(a.text) && next && next.line === a.line + 1 && /^\s*(pass|\.\.\.)\s*(#.*)?$/.test(next.text)) {
+      if (/^\s*except\b[^:]*:\s*(#.*)?$/.test(checkText) && next && next.line === a.line + 1 && /^\s*(pass|\.\.\.)\s*(#.*)?$/.test(next.text)) {
         hits.push({ file: f.file, line: a.line, kind: 'empty except', text: `${a.text.trim()} ${next.text.trim()}` })
       }
     }
-    if (isTestFile(f.file)) {
+    if (testFile) {
       const count = (lines, re) => lines.filter((l) => re.test(l.text)).length
       const lostTests = count(f.removed, TEST_DEF) - count(f.added, TEST_DEF)
       if (lostTests > 0) {
@@ -920,7 +928,7 @@ function scanWeakenedChecks(diffText, configGlobs, ignoreGlobs) {
     }
     // A changed or deleted line that existed before the branch, in a test or fixture file (QA files included).
     // Blank lines, comment-only lines and lines that come back unchanged apart from whitespace are not changes.
-    if (isTestFile(f.file) || isFixtureFile(f.file)) {
+    if (testOrFixture && !f.deleted) {
       const squash = (t) => t.replace(/\s+/g, '')
       const kept = new Map()
       for (const a of f.added) kept.set(squash(a.text), (kept.get(squash(a.text)) || 0) + 1)
@@ -2282,7 +2290,7 @@ async function runIssue(issue) {
           log(`#${issue.number}: ${reviewerMissing}`)
           notes.push(reviewerMissing)
         }
-        if (review && !down(review) && review.issueRead === false) {
+        if (review && (down(review) || review.issueRead === false)) {
           reviewerCannotRead = true
           log(`#${issue.number}: the reviewer could not read the issue; reviewing round ${round + 1} with the default agent.`)
           review = undefined
@@ -2308,6 +2316,8 @@ async function runIssue(issue) {
       const accepted = Array.isArray(review.acceptedWeakenings) ? review.acceptedWeakenings : []
       let injected = 0
       for (const h of hits) {
+        // A test file the Plan gives to Dev may be adapted; QA files stay guarded (#104).
+        if (h.kind === 'changed-existing-test' && overlap([h.file], own.devFiles).length) continue
         if (acceptedHit(h, accepted)) continue
         if (review.findings.some((f) => f.severity === 'critical' && f.file === h.file && Number(f.line) === Number(h.line))) continue
         injected++

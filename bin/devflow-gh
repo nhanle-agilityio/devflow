@@ -1,0 +1,20 @@
+#!/usr/bin/env node
+'use strict';
+// devflow-gh: detect whether an executable gh is on PATH without running it.
+// Usage: devflow-gh
+// Prints one JSON object with a boolean gh field and exits 0. Node, no dependencies.
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+const directories = process.env.PATH?.split(path.delimiter) ?? [];
+const gh = directories.some((directory) => {
+  const candidate = path.join(directory, 'gh');
+  try {
+    fs.accessSync(candidate, fs.constants.X_OK);
+    return fs.statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+});
+console.log(JSON.stringify({ gh }));
