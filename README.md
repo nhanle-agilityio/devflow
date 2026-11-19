@@ -185,6 +185,16 @@ A plugin cannot grant permissions, so the project's `.claude/settings.json` need
 
 No `deny` rules: the guard hook blocks merging, force pushes, protected branches, destructive git commands and `git add -A` in every project, and `/devflow:doctor` lists old deny rules that duplicate it as removable. The `mcp__github__*` pattern depends on how your GitHub MCP server is named; `/devflow:init` probes each connected GitHub MCP server by getting the authenticated user and uses the prefix of the one that answers (it asks which when several answer, and stops when none does); `/devflow:doctor` check 3 probes the same way, reports that prefix and warns only when the allow list has another GitHub MCP prefix and no allowed prefix belongs to a server that answers. Add each `checks[].run` command (for example `Bash(npm test:*)`). `git worktree` is for `--isolated` runs; also add each `worktree.setup` command and, for background sessions started by `/devflow:dispatch`, make sure everything above is allowed since they cannot answer prompts. `git merge` is for `/devflow:sync` (merging the base into a PR branch; the guard hook still blocks merging PRs and pushes to protected branches). Use your remote's name instead of `origin` if it differs.
 
+## Releasing devflow
+
+The release steps are at the bottom of `CHANGELOG.md` (the release task template). Before the release PR merges, a smoke run proves the release candidate end to end in the sandbox repository: load the plugin from the release branch with `--plugin-dir`, create two issues from `docs/smoke/low.md` and `docs/smoke/high.md`, run them with `/devflow:dispatch` as two lanes, then check each with the read-only checker:
+
+```bash
+node bin/devflow-smoke --repo nhanle-agilityio/devflow-sandbox --issue <n> --expect low   # or --expect high
+```
+
+It prints one `ok` / `fail` line per check (the issue, exactly one closing `devflow` PR, the `devflow-run` marker, the `## Review` section, the `Risk:` line, how it was merged, and for `high` the `risk:high` label) and exits 0 only when all pass, 1 when one fails, 2 when `gh` is missing or not logged in or the arguments are wrong. It only reads GitHub (`gh api` GET). The release PR merges only when both pass, and a human tags `vX.Y.Z` right after it merges.
+
 ## Out of scope
 
 Not planned: GitHub Projects board sync, uploading screenshots to PRs. Within one session issues still run sequentially; parallelism is across sessions.
