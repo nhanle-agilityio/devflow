@@ -42,7 +42,7 @@ Writes no spec file and opens no PR. The grill decisions, design and tasks live 
 
 ### E1. Tasks
 
- Pick a kebab-case `<slug>` (at most 5 words). Draft the epic from `${CLAUDE_SKILL_DIR}/templates/epic.md` (Goal, Design, `## Decisions` with the grill answers, and the Tasks table with risk and reason, depends-on and an empty issue column) and the task list. Split anything bigger than M. Record each task's risk with a one-line reason and its hotspot files (real file paths, as `/devflow:dispatch` uses them).
+ Pick a kebab-case `<slug>` (at most 5 words). Draft the epic from `${CLAUDE_SKILL_DIR}/templates/epic.md` (Goal, Design, `## Decisions` with the grill answers, and the Tasks table with risk and reason, depends-on and an empty issue column) and the task list. When the request names existing issues it resolves, write a line `Resolves: #a, #b` into the epic body (see the template); the Ship stage of the epic's last open sub-issue then adds a `Closes #<n>` line for each of them that is still open. Without such issues, write no `Resolves:` line. Split anything bigger than M. Record each task's risk with a one-line reason and its hotspot files (real file paths, as `/devflow:dispatch` uses them).
 
 ### E2. Draft and test matrix (QA)
 
