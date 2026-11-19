@@ -556,6 +556,65 @@ test('Ship files follow-ups with the bug template and a triage suggestion commen
   assert.match(ship, /suggest a priority .* and a risk/);
 });
 
+// ---- T17: follow-ups record where they were found; epics close the issues they resolve ----
+const T17_EPIC_BODY = 'Epic: #92\n\n## Acceptance criteria\n- [ ] x';
+const shipFor = async (body = T17_EPIC_BODY) => {
+  const rd = { specRead: 'epic #92', epicRead: true };
+  const { calls } = await run({ ...BASE, issues: [1] }, { body, planOut: rd, qaOut: rd, devOut: { ...rd, outOfScope: ['bug in src/a.js:10'] } });
+  return prompt(calls, 'ship');
+};
+
+test('T17.1 follow-up prompt requires Found in: #<pr> and file:line', async () => {
+  const ship = await shipFor();
+  assert.match(ship, /"Found in: #<PR number>"/);
+  assert.match(ship, /file:line/);
+});
+
+test('T17.2 follow-up without a PR takes the branch name in Found in:', async () => {
+  const ship = await shipFor();
+  assert.match(ship, /no PR exists yet[^.]*"Found in: feat\/1-x"/);
+});
+
+test('T17.3 follow-up without file:line writes only the Found in: line', async () => {
+  const ship = await shipFor();
+  assert.match(ship, /no known location[^.]*only the "Found in:" line/);
+});
+
+test('T17.5 ship of the last open sub-issue adds Closes for each open Resolves issue', async () => {
+  const ship = await shipFor();
+  assert.match(ship, /read epic #92/);
+  assert.match(ship, /"Resolves:" line/);
+  assert.match(ship, /last open sub-issue/);
+  assert.match(ship, /the issue being shipped counts as open/);
+  assert.match(ship, /"Closes #<n>" line for each listed issue that is still open/);
+});
+
+test('T17.6 no Closes lines when another sub-issue of the epic is still open', async () => {
+  const ship = await shipFor();
+  assert.match(ship, /another sub-issue of the epic is still open[^.]*add no "Closes/);
+});
+
+test('T17.7 a listed issue that is already closed gets no Closes line', async () => {
+  const ship = await shipFor();
+  assert.match(ship, /that is already closed gets no "Closes/);
+});
+
+test('T17.8 nonexistent or other-repository numbers are skipped with a note in the PR body', async () => {
+  const ship = await shipFor();
+  assert.match(ship, /does not exist or belongs to another repository[^.]*skip[^.]*note in the PR body/i);
+});
+
+test('T17.9 epic without a Resolves line adds no Closes lines', async () => {
+  const ship = await shipFor();
+  assert.match(ship, /no "Resolves:" line[^.]*add no "Closes/);
+});
+
+test('T17 an issue without an epic gets no epic Closes step', async () => {
+  const ship = await shipFor('plain issue');
+  assert.match(ship, /Ship issue #1/);
+  assert.doesNotMatch(ship, /"Resolves:" line/);
+});
+
 // ---------------------------------------------------------------------------------------------
 // Reviewer agent (P6)
 // ---------------------------------------------------------------------------------------------

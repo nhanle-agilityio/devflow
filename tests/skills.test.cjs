@@ -753,3 +753,12 @@ test('T22.7 doctor sub-issue not ready leaves out in-review sub-issues and ones 
   assert.match(l, /labels\.review/);
   assert.match(l, /open PR/i);
 });
+
+// T17.4
+test("test_t17_4_spec_writes_resolves_into_epic", () => {
+  const skill = read("skills/spec/SKILL.md");
+  const tpl = read("skills/spec/templates/epic.md");
+  assert.match(skill, /Resolves: #a, #b/);
+  assert.match(skill, /names existing issues it resolves/);
+  assert.match(tpl, /Resolves: #a, #b/);
+});
