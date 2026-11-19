@@ -28,6 +28,8 @@
     "stacked": "stacked",
     // triage: bugs and gaps nobody triaged yet; next-task never picks them, a human swaps it for ready.
     "triage": "needs-triage",
+    // decisionsReview: PR label when the run took a decision itself (see nextTask.onQuestion).
+    "decisionsReview": "decisions:review",
     // priority: highest first; no label = the "normal" entry. Orders next-task and the merge gate, never who merges.
     "priority": ["priority:critical", "priority:high", "priority:normal", "priority:low"]
   },
@@ -74,7 +76,12 @@
   "spec": { "testMatrix": true, "qaModel": "opus" },
   // reviewerAgent: the subagent type Review runs as ("" = the default agent).
   // parallelQa: a QA agent writes the acceptance tests from the spec while the dev agent implements (default true).
-  "nextTask": { "defaultLimit": 3, "maxFixRounds": 2, "maxReviewRounds": 2, "parallelQa": true, "reviewerAgent": "devflow:reviewer" },
+  // onQuestion: decide (default) = the run answers a question whose recommended option is reversible and safe (not a criterion,
+  // contract, stored format, risk, check, destructive git, outside the repo, or a risk.highPaths file), records it under
+  // "Decisions" and labels the PR decisionsReview; a review warning left after maxReviewRounds ships the same way. Every
+  // other question blocks. block = every question and leftover warning blocks (3.0.0). trustDecisions: false = the merge
+  // gate leaves decisionsReview PRs to a human.
+  "nextTask": { "defaultLimit": 3, "maxFixRounds": 2, "maxReviewRounds": 2, "parallelQa": true, "reviewerAgent": "devflow:reviewer", "onQuestion": "decide", "trustDecisions": false },
   // Parallel sessions: each ticket runs in its own git worktree under dir. setup commands run once in a fresh worktree.
   "worktree": { "dir": ".claude/worktrees", "setup": ["npm ci"] },
   // /devflow:dispatch: at most maxLanes background sessions at once. pluginDir (optional) is passed as --plugin-dir

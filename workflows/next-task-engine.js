@@ -19,7 +19,7 @@ export const meta = {
 
 // Test hook: the pure helpers below are function declarations (hoisted), so tests get them without a run.
 // They take every input as a parameter and never touch the run state.
-if (args && args.exports === true) return { parseDiff, scanWeakenedChecks, checkConfigGlobs, globToRegExp, priorityRank, orderIssues, isFixIssue, pathFor, hasHttpOrE2eRow, epicFor }
+if (args && args.exports === true) return { parseDiff, scanWeakenedChecks, checkConfigGlobs, globToRegExp, priorityRank, orderIssues, isFixIssue, pathFor, hasHttpOrE2eRow, epicFor, classifyQuestion, questionsSchema, decisionLine, addDecisions, questionLine, warningQuestion }
 
 // Run through /devflow:next-task only: it does the preflight and builds args. Calling this workflow
 // directly (e.g. /devflow:next-task-engine) arrives without args, so stop with a clear message.
@@ -51,6 +51,7 @@ const labels = Object.assign(
     riskHigh: 'risk:high',
     stacked: 'stacked',
     triage: 'needs-triage',
+    decisionsReview: 'decisions:review',
     priority: ['priority:critical', 'priority:high', 'priority:normal', 'priority:low'],
   },
   cfg.labels,
@@ -58,7 +59,7 @@ const labels = Object.assign(
 const priorityList = Array.isArray(labels.priority) ? labels.priority : []
 const riskCfg = Object.assign({ highPaths: [] }, cfg.risk)
 const testingCfg = Object.assign({ e2eFramework: false }, cfg.testing)
-const nt = Object.assign({ defaultLimit: 3, maxFixRounds: 2, maxReviewRounds: 2, parallelQa: true, reviewerAgent: 'devflow:reviewer' }, cfg.nextTask)
+const nt = Object.assign({ defaultLimit: 3, maxFixRounds: 2, maxReviewRounds: 2, parallelQa: true, reviewerAgent: 'devflow:reviewer', onQuestion: 'decide', trustDecisions: false }, cfg.nextTask)
 const verifyCfg = Object.assign({ modes: [], browserTool: 'playwright', lock: true }, cfg.verify)
 const branchPattern = cfg.branchPattern || '{type}/{issue}-{slug}'
 const startBranch = args.startBranch
@@ -167,6 +168,7 @@ const BRANCH_SCHEMA = {
     parentMerged: { type: 'boolean', description: 'true when the parent PR was already merged and the branch starts from the base' },
     resumed: { type: 'boolean', description: 'true when the branch already had commits of this issue and the run continues on it' },
     commits: { type: 'array', items: { type: 'string' }, description: 'When resumed: the commits already on the branch, "<sha> <message>"' },
+    questions: questionsSchema('Questions that stop the branch from being created; tag Dev'),
     problem: { type: 'string' },
   },
   required: ['ok', 'branch'],
@@ -183,11 +185,7 @@ const PLAN_SCHEMA = {
   properties: {
     status: { enum: ['ready', 'blocked'] },
     plan: { type: 'string', description: 'The plan in markdown, as posted on the issue' },
-    questions: {
-      type: 'array',
-      items: { type: 'string' },
-      description: 'Open questions the spec and issue do not answer, each starting with "[BA] " or "[QA] "',
-    },
+    questions: questionsSchema('Open questions the spec and issue do not answer; tag BA or QA'),
     qaFiles: { type: 'array', items: { type: 'string' }, description: 'Test files that hold the tests for the Test cases rows (owned by the QA agent)' },
     devFiles: { type: 'array', items: { type: 'string' }, description: 'Files the implementation changes (owned by the dev agent)' },
     specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
@@ -236,6 +234,7 @@ const IMPLEMENT_SCHEMA = {
       },
     },
     blockedReason: { type: 'string' },
+    questions: questionsSchema('Open questions that block you (status "blocked"); tag Dev, or QA for a QA fix agent'),
     problem: { type: 'string', description: `Report starting with exactly "${MCP_DOWN}" when GitHub cannot be reached; otherwise omit` },
     specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
     epicRead: { type: 'boolean', description: 'Epic issues only: false when the epic named by the issue\'s Epic: line is missing, closed, a pull request or could not be read; true when it was read' },
@@ -266,7 +265,7 @@ const QA_SCHEMA = {
       },
     },
     filesChanged: { type: 'array', items: { type: 'string' } },
-    questions: { type: 'array', items: { type: 'string' }, description: 'Questions that block a test, each starting with "[QA] "' },
+    questions: questionsSchema('Questions that block a test; tag QA'),
     problem: { type: 'string', description: `Report starting with exactly "${MCP_DOWN}" when GitHub cannot be reached; otherwise omit` },
     specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
     epicRead: { type: 'boolean', description: 'Epic issues only: false when the epic named by the issue\'s Epic: line is missing, closed, a pull request or could not be read; true when it was read' },
@@ -292,6 +291,7 @@ const INTEGRATE_SCHEMA = {
     ok: { type: 'boolean' },
     integrationSha: { type: 'string', description: 'git rev-parse HEAD after all parent branches are merged' },
     merged: { type: 'array', items: { type: 'string' }, description: 'The remote/branch names merged, in order' },
+    questions: questionsSchema('Questions that stop the integration; tag Dev'),
     problem: { type: 'string', description: `Report starting with exactly "${MCP_DOWN}" when GitHub cannot be reached` },
   },
   required: ['ok', 'integrationSha', 'merged'],
@@ -366,6 +366,7 @@ const REVIEW_SCHEMA = {
     issueRead: { type: 'boolean', description: 'True when you read the issue from GitHub as instructed; false when you could not (then report no findings)' },
     epicRead: { type: 'boolean', description: 'Epic issues only: false when the epic named by the issue\'s Epic: line is missing, closed, a pull request or could not be read; true when it was read' },
     problem: { type: 'string', description: `Report starting with exactly "${MCP_DOWN}" when GitHub cannot be reached; otherwise omit` },
+    questions: questionsSchema('Open questions the review cannot answer from the issue and the spec; tag BA, QA or Dev; [] when there is none'),
 
     acceptedWeakenings: {
       type: 'array',
@@ -544,6 +545,20 @@ const MANUAL_RULE =
 const DECISIONS_NOTE =
   'If the issue body has a "## Decisions" section, those decisions were made by a human after the spec was written: where they differ from the spec, the decisions win.'
 
+// Every prompt of an agent that can return questions carries this: the object shape and the definition of changesCriterion.
+const QUESTION_NOTE =
+  'Questions: return every open question as an object in "questions" with text, tag (BA, QA or Dev), recommended (the option you recommend, never empty), reason (why, never empty) and the booleans productDecision, reversible (the recommended option can be undone by a normal commit), changesCriterion, dropsMustRow, changesContract, changesStoredFormat, lowersRisk, skipsCheck, needsDestructiveGit and outsideRepo; set every boolean explicitly, true or false, and when unsure set it true (reversible: false). ' +
+  'changesCriterion means "the recommended option alters what an acceptance criterion requires"; a question that only mentions a criterion, with an option that satisfies every criterion as written, sets it false (merely mentioning a criterion leaves it false). ' +
+  'The run decides questions whose recommended option is safe and reversible and blocks the others, so always give the option you would pick.'
+
+// The decisions the run took for an issue so far ({question, option, reason}); later prompts get them as answers.
+function answersNote(issue) {
+  const list = decided[issue.number] || []
+  if (!list.length) return ''
+  return `\n\nAnswers (decisions the run took for the open questions; treat them as answered and do not ask them again):\n${list.map((d, i) => `${i + 1}. ${oneLine(d.question)} -> ${oneLine(d.option)} (${oneLine(d.reason)})`).join('\n')}`
+}
+const qEnd = (issue) => `\n\n${QUESTION_NOTE}${answersNote(issue)}`
+
 // Files in both lists. Paths are compared as written, without a leading "./".
 function overlap(a, b) {
   const norm = (f) => String(f).trim().replace(/^\.\//, '')
@@ -570,6 +585,122 @@ function hasHttpOrE2eRow(body) {
         .some((cell) => cell === 'http' || cell === 'e2e'),
     )
 }
+
+// ---------------------------------------------------------------------------------------------
+// Questions: every agent that can ask returns objects; the run decides or blocks per question.
+// ---------------------------------------------------------------------------------------------
+
+// Function declarations only: the test hook returns before any const of this file is initialised.
+function questionFlags() {
+  return ['productDecision', 'reversible', 'changesCriterion', 'dropsMustRow', 'changesContract', 'changesStoredFormat', 'lowersRisk', 'skipsCheck', 'needsDestructiveGit', 'outsideRepo']
+}
+
+// The array schema of a stage's questions: text, tag, recommended, reason and the ten booleans are required.
+function questionsSchema(description) {
+  const properties = {
+    text: { type: 'string', description: 'The question' },
+    tag: { enum: ['BA', 'QA', 'Dev'], description: 'Who should answer: BA (behaviour), QA (tests), Dev (code)' },
+    recommended: { type: 'string', description: 'The option you recommend; never empty' },
+    reason: { type: 'string', description: 'Why that option; never empty' },
+    productDecision: { type: 'boolean', description: 'True when the answer is a product decision' },
+    reversible: { type: 'boolean', description: 'True when the recommended option can be undone later by a normal commit' },
+    changesCriterion: { type: 'boolean', description: 'True when the recommended option alters what an acceptance criterion requires; false when the question only mentions a criterion and an option satisfies every criterion as written' },
+    dropsMustRow: { type: 'boolean', description: 'True when the recommended option drops a "must" Test cases row' },
+    changesContract: { type: 'boolean', description: 'True when the recommended option changes a public contract (API, CLI, config, file format others read)' },
+    changesStoredFormat: { type: 'boolean', description: 'True when the recommended option changes a stored format or data' },
+    lowersRisk: { type: 'boolean', description: 'True when the recommended option lowers the risk level of the change' },
+    skipsCheck: { type: 'boolean', description: 'True when the recommended option skips, weakens or removes a check or test' },
+    needsDestructiveGit: { type: 'boolean', description: 'True when the recommended option needs a history rewrite, a force push or another destructive git action' },
+    outsideRepo: { type: 'boolean', description: 'True when the recommended option touches anything outside this repository' },
+  }
+  return { type: 'array', description, items: { type: 'object', properties, required: ['text', 'tag', 'recommended', 'reason'].concat(questionFlags()) } }
+}
+
+// Pure. 'decide' only when the mode is decide, the recommended option and the reason are non-empty, reversible is true,
+// every other flag is false, and no changed file matches a high path. Anything missing or malformed is 'block'.
+function classifyQuestion(q, ctx) {
+  const c = ctx || {}
+  if (c.onQuestion !== 'decide') return 'block'
+  if (!q || typeof q !== 'object') return 'block'
+  if (typeof q.recommended !== 'string' || !q.recommended.trim()) return 'block'
+  if (typeof q.reason !== 'string' || !q.reason.trim()) return 'block'
+  for (const f of questionFlags()) {
+    if (typeof q[f] !== 'boolean') return 'block'
+    if (f === 'reversible' ? q[f] !== true : q[f] !== false) return 'block'
+  }
+  if (!Array.isArray(c.changedFiles)) return 'block'
+  const globs = c.highPaths === undefined || c.highPaths === null ? [] : c.highPaths
+  if (!Array.isArray(globs)) return 'block'
+  const res = globs.map((g) => globToRegExp(String(g)))
+  for (const f of c.changedFiles) {
+    const file = String(f).trim().replace(/^\.\//, '')
+    if (res.some((re) => re.test(file))) return 'block'
+  }
+  return 'decide'
+}
+
+function oneLine(x) {
+  return String(x === undefined || x === null ? '' : x).replace(/\r\n|\r|\n/g, ' ')
+}
+
+// "- <date> decided by run: <question> -> <option> (<reason>)", on one line.
+function decisionLine(date, question, option, reason) {
+  return `- ${date} decided by run: ${oneLine(question)} -> ${oneLine(option)} (${oneLine(reason)})`
+}
+
+// Appends the lines to the body's "## Decisions" section (created at the end when missing), skipping a line that is already
+// there. Returns {body, added}: the new body and the lines that were really appended.
+function addDecisions(body, lines) {
+  const src = String(body || '')
+  const rows = src.split('\n')
+  const start = rows.findIndex((l) => /^##\s+Decisions\s*$/.test(l.trim()))
+  const added = []
+  if (start === -1) {
+    const fresh = Array.from(new Set(lines))
+    if (!fresh.length) return { body: src, added }
+    const head = src.replace(/\s+$/, '')
+    return { body: `${head}${head ? '\n\n' : ''}## Decisions\n\n${fresh.join('\n')}\n`, added: fresh }
+  }
+  let end = rows.length
+  for (let i = start + 1; i < rows.length; i++) {
+    if (/^#{1,2}\s/.test(rows[i])) {
+      end = i
+      break
+    }
+  }
+  const have = new Set(rows.slice(start + 1, end).map((l) => l.trim()))
+  for (const l of lines) {
+    if (have.has(l.trim())) continue
+    have.add(l.trim())
+    added.push(l)
+  }
+  if (!added.length) return { body: src, added }
+  let at = end
+  while (at - 1 > start && rows[at - 1].trim() === '') at--
+  rows.splice(at, 0, ...added)
+  return { body: rows.join('\n'), added }
+}
+
+// A question as text for the questions comment: "[tag] text", then its recommended option, then the criterion suffix.
+function questionLine(q) {
+  const o = q && typeof q === 'object' ? q : { text: String(q || '') }
+  const text = String(o.text || '')
+  const tagged = /^\[(BA|QA|Dev)\] /.test(text) || !['BA', 'QA', 'Dev'].includes(o.tag) ? text : `[${o.tag}] ${text}`
+  const hasRec = typeof o.recommended === 'string' && o.recommended.trim() !== ''
+  const rec = hasRec ? `\n   Recommended: ${o.recommended.trim()}${typeof o.reason === 'string' && o.reason.trim() ? ` (${o.reason.trim()})` : ''}` : ''
+  const suffix = o.changesCriterion === true ? (hasRec ? ` [changes a criterion: typed answer needed]` : `\n   [changes a criterion: typed answer needed]`) : ''
+  return `${tagged}${rec}${suffix}`
+}
+
+// A review warning still open after the last round, as a question about shipping it. Every flag is false except
+// reversible, so only the changed files and the mode decide.
+function warningQuestion(f, rounds) {
+  const q = { text: `Review warning still open after ${rounds} fix round(s): ${f.file}:${f.line}: ${f.problem}`, tag: 'Dev', recommended: 'ship with the warning', reason: 'it is a warning, not a critical finding, and a human reviews the PR' }
+  for (const k of questionFlags()) q[k] = false
+  q.reversible = true
+  return q
+}
+
 
 // Glob to anchored RegExp: ** crosses "/", * and ? do not. "**/" also matches zero directories.
 function globToRegExp(glob) {
@@ -985,7 +1116,8 @@ Steps, in order:
    - Exists with commits of its own whose messages use scope "${scopeFor(issue)}": an earlier run of this issue that was blocked after Plan. Continue on it: \`git switch <branch>\` (when it is only on ${remote}: \`git fetch ${remote} <branch>\` and \`git switch -c <branch> --track ${remote}/<branch>\`; when both exist and differ, use the ${remote} one only if the local one has no commits of its own beyond it, otherwise return ok=false), then \`git merge --no-edit ${parentRef}\`. If that merge conflicts, run \`git merge --abort\` and return ok=false with the conflicting files. Return resumed=true and commits = the lines of \`git log --oneline ${parentRef}..HEAD\` (merge commits excluded).
    - Anything else (commits from another issue, or a dirty state): return ok=false with the problem; do not reuse or delete it.${parents.length === 1 ? `
    If the fetch fails because ${parents[0].branch} no longer exists on ${remote}, read PR #${parents[0].prNumber} with pull_request_read. Merged (\`merged_at\` is not null in that result): its changes are in ${base}, so run \`git fetch ${remote} ${base}\` and \`git switch -c <branch> ${baseRef}\` instead and return parentMerged=true. Closed without merging: return ok=false with the problem.` : ''}
-Return the branch name you created. Do not change anything on GitHub.
+Return the branch name you created. Do not change anything on GitHub. If you cannot continue without an answer, return ok=false with the question in "questions".
+${QUESTION_NOTE}
 
 Issue title: ${issue.title}
 Issue labels: ${issue.labels.join(', ')}`
@@ -1013,7 +1145,7 @@ Instructions:
 3. Work out file ownership.${qaMode ? ` The tests and the change are written in parallel by two agents: a QA agent writes the tests for the "Test cases" rows from the spec and the issue only, a dev agent writes the change. qaFiles = the test files that hold the Test cases tests (QA only); devFiles = every other file the change touches (dev only; dev may add extra tests, but only in files not in qaFiles). No file may be in both lists. When the issue has no Test cases rows that need an automated test (for example a docs-only checklist), qaFiles = [].` : ' qaFiles = []; devFiles = every file the change touches, tests included.'}
 4. Write the plan in markdown with sections: Files to change (mark each file QA or Dev); Tests (one entry per "Test cases" row id, or per test-plan item; ${e2eRule(false)}); Risks; Order of commits (failing test first, then the implementation); Open questions (only if there are any).
 5. Post the plan on issue #${issue.number} as a comment whose first line is \`<!-- devflow-plan -->\`. If the issue already has a comment starting with that marker, edit it instead of adding another.
-6. Look for open questions in two roles. BA: something the spec, the issue and its Decisions do not answer that would change behaviour or a contract. QA: a "Test cases" row that cannot be tested as written (no clear expected result, contradicts the acceptance criteria or another row). Start each question with "[BA] " or "[QA] ". If there is any, return status "blocked" with all of them (still post the plan, with an "Open questions" section). Otherwise return status "ready" and questions = [].
+6. Look for open questions in two roles. BA: something the spec, the issue and its Decisions do not answer that would change behaviour or a contract. QA: a "Test cases" row that cannot be tested as written (no clear expected result, contradicts the acceptance criteria or another row). Tag each question BA or QA. If there is any, return status "blocked" with all of them in questions (still post the plan, with an "Open questions" section). Otherwise return status "ready" and questions = []. ${QUESTION_NOTE}${answersNote(issue)}
 7. From CLAUDE.md take its commit rules (how commits are grouped and named): commitRules = those rules quoted, "" when it says nothing about them; separateCommits = true only when it asks for code, tests and docs in separate commits.
 Return status, the plan text exactly as posted, questions, qaFiles, devFiles, commitRules, separateCommits, ${readReturn(src)}, httpOrE2eRows (true when the issue's Test cases table, as you read it on GitHub, has a row whose Level is http or e2e) and acceptanceCriteria (the number of top-level \`- [ ]\` / \`- [x]\` items under the first heading or bold line containing "Acceptance criteria" in the issue on GitHub, up to the next heading or bold line; 0 when there is none).`
 }
@@ -1039,7 +1171,7 @@ Steps:
 4. After all merges, run every configured check; fix only what the integration itself broke:
 ${checks}
 5. Return integrationSha = the output of \`git rev-parse HEAD\` after all merges, and merged = the ${remote}/<branch> names merged, in order.
-If you cannot resolve a conflict or the checks cannot be made to pass without a decision, run \`git merge --abort\` if a merge is in progress, leave nothing half-done, and return ok=false with the conflicting files and the question in problem. Do not push and do not touch GitHub labels.`
+If you cannot resolve a conflict or the checks cannot be made to pass without a decision, run \`git merge --abort\` if a merge is in progress, leave nothing half-done, and return ok=false with the conflicting files and the question in problem (and in "questions"). Do not push and do not touch GitHub labels.${qEnd(issue)}`
 }
 
 // The path an issue takes: 'short' for risk:low without risk:high, needs-e2e or an http/e2e Test cases row.
@@ -1088,9 +1220,9 @@ Instructions:
 4. Stage files by name only; never stage everything at once. Make small commits. Add no Co-Authored-By or AI attribution unless CLAUDE.md says otherwise.
    ${MANUAL_RULE}${resumeNote(issue)}${rootCauseNote(issue)}${fragmentNote(issue)}
 5. Stay inside the issue's scope. Anything else you notice goes into "outOfScope", unchanged in the code.
-6. If a requirement is ambiguous in a way that changes behaviour or a contract and the spec does not answer it, do NOT guess: return status "blocked" with blockedReason stating the question. For minor ambiguity, decide, and record the decision in "assumptions".
+6. If a requirement is ambiguous in a way that changes behaviour or a contract and the spec does not answer it, do NOT guess: return status "blocked" with the question in "questions" (blockedReason repeats it). For minor ambiguity, decide, and record the decision in "assumptions".
 7. Do not push, open a PR, or touch GitHub labels.
-Return: status, a short summary, the commits you made ("<sha> <message>"), files changed, assumptions, outOfScope, touchesUi (true when the diff against ${parentRef} changes user-facing UI), ${readReturn(src)}, and manualChecks ([] when there are no such rows).`}`
+Return: status, a short summary, the commits you made ("<sha> <message>"), files changed, assumptions, outOfScope, touchesUi (true when the diff against ${parentRef} changes user-facing UI), ${readReturn(src)}, and manualChecks ([] when there are no such rows).`}${qEnd(issue)}`
 }
 
 // Changelog fragments (changelog.fragmentsDir): the entry goes into <fragmentsDir>/<issue>.md, never into the changelog file.
@@ -1145,7 +1277,7 @@ Instructions:
 4. Do NOT commit, stage or stash anything: the workflow commits the QA tests first and your change after them. Do not run git commands that change the working tree or the index.
 5. You may run the project's checks to see your own work, but do not edit anything to make a QA test pass; the QA tests may still be incomplete while you work.
 6. Stay inside the issue's scope. Anything else you notice goes into "outOfScope", unchanged in the code. ${MANUAL_RULE}${rootCauseNote(issue)}${fragmentNote(issue)}
-7. If a requirement is ambiguous in a way that changes behaviour or a contract and the spec and Decisions do not answer it, do NOT guess: return status "blocked" with blockedReason stating the question. For minor ambiguity, decide, and record the decision in "assumptions".
+7. If a requirement is ambiguous in a way that changes behaviour or a contract and the spec and Decisions do not answer it, do NOT guess: return status "blocked" with the question in "questions" (blockedReason repeats it). For minor ambiguity, decide, and record the decision in "assumptions".
 8. Do not push, open a PR, or touch GitHub labels.
 Return: status, a short summary, commits = [], every file you changed, assumptions, outOfScope, touchesUi (true when your change, compared with ${parentRef}, changes user-facing UI), ${readReturn(src)}, and manualChecks ([] when there are no such rows).`
 }
@@ -1176,7 +1308,7 @@ Instructions:
    No test may depend on branch state: not on a diff against the base branch, the current branch name, unpushed commits or the current date. A row that can only be checked that way is not written as a test: leave it out and report it in the result as a review check, not a test.
 5. Do NOT commit, stage or stash anything: the workflow commits your tests first. The tests are expected to fail until the change exists; you may run them to check they are collected and fail for the right reason (a missing behaviour, not a syntax or import error of your own).
 6. If a row cannot be tested as written (no clear expected result, contradicts the acceptance criteria or another row), do not invent the expectation: add a question starting with "[QA] " and return status "blocked". Otherwise questions = [].
-Return status, tests (row id and test name), filesChanged (the files you created or edited), questions, and ${readReturn(src)}.`
+Return status, tests (row id and test name), filesChanged (the files you created or edited), questions, and ${readReturn(src)}.${qEnd(issue)}`
 }
 
 // What the plan agent read from CLAUDE.md and the plan: the commit rules, whether code, tests and docs go in
@@ -1243,8 +1375,8 @@ Instructions:
 - You own only these files: ${JSON.stringify(qaFiles)}. Edit only them; a change to any other file blocks the run. The dev agent owns the code.
 - Decide for each problem whether the test is wrong or right. The contract is the issue, its acceptance criteria, its Test cases table and its Decisions, not the current code. If the test is wrong, fix it and keep it traceable to its row id. If the test is right (the code is wrong), do not change the test: return positions with {finding: <id>, position: "test is right"} for that problem; the dev fix agent then gets it. Never weaken or delete a test to make it pass.
 - Follow the project's CLAUDE.md. Commit your changes with Conventional Commits in English, scope "${scopeFor(issue)}", staging files by name. Never rewrite existing commits. Do not push. Make no commit when you change nothing.
-- If you cannot decide without a decision the spec does not make, return status "blocked" with blockedReason. ${DECISIONS_NOTE}
-Return the same structure as the implement stage; "commits" lists only the commits you made now. ${src.kind === 'epic' ? `In "specRead" put "epic #${src.n}" and in "epicRead" whether you read it: ${epicStep(src.n, EPIC_MCP)}` : `In "specRead" put the spec path if you read the spec, otherwise "none".`}`
+- If you cannot decide without a decision the spec does not make, return status "blocked" with the question in "questions" (tag QA) and blockedReason. ${DECISIONS_NOTE}
+Return the same structure as the implement stage; "commits" lists only the commits you made now. ${src.kind === 'epic' ? `In "specRead" put "epic #${src.n}" and in "epicRead" whether you read it: ${epicStep(src.n, EPIC_MCP)}` : `In "specRead" put the spec path if you read the spec, otherwise "none".`}${qEnd(issue)}`
 }
 
 function checkPrompt() {
@@ -1280,9 +1412,9 @@ Instructions:
 - Stay inside the issue's scope. Record unrelated problems in "outOfScope" without changing them.${qaRule}${disputeRule}${fragmentNote(issue).replace('\n   ', '\n- ')}
 - ${guideBlock(guide)}
 - Commit with Conventional Commits in English, scope "${scopeFor(issue)}", staging files by name. Add new commits only; never rewrite existing ones. Do not push.${guide && guide.separate ? ` Keep code and docs apart: the fix in one commit, then the changed repository-root \`*.md\` files, \`docs/**\` and changelog fragment files in a \`docs(${scopeFor(issue)}): ...\` commit (never \`skills/**\` or \`agents/**\`); skip the docs commit when there are none.` : ''}
-- If you cannot fix it without a decision the spec does not make, return status "blocked" with blockedReason. ${DECISIONS_NOTE}
+- If you cannot fix it without a decision the spec does not make, return status "blocked" with the question in "questions" and blockedReason. ${DECISIONS_NOTE}
 When a problem says an out-of-scope item is required by the acceptance criteria, implement it (test first) and copy that item exactly into "outOfScopeDone".
-Return the same structure as the implement stage; "commits" lists only the commits you made now. ${src.kind === 'epic' ? `In "specRead" put "epic #${src.n}" and in "epicRead" whether you read it: ${epicStep(src.n, EPIC_MCP)}` : `In "specRead" put the spec path if you read the spec (for example with \`git show ${baseRef}:<path>\`), otherwise "none".`}`
+Return the same structure as the implement stage; "commits" lists only the commits you made now. ${src.kind === 'epic' ? `In "specRead" put "epic #${src.n}" and in "epicRead" whether you read it: ${epicStep(src.n, EPIC_MCP)}` : `In "specRead" put the spec path if you read the spec (for example with \`git show ${baseRef}:<path>\`), otherwise "none".`}${qEnd(issue)}`
 }
 
 function verifyPrompt(issue, branch, impl) {
@@ -1374,7 +1506,8 @@ Severity: critical = wrong behaviour / data loss / security / rule violation; wa
 Implementation summary: ${state.summary}
 Assumptions recorded so far: ${JSON.stringify(state.assumptions)}
 Out of scope recorded so far: ${JSON.stringify(state.outOfScope)}
-Manual checks (rows checked by hand): ${JSON.stringify(state.manualChecks)}. A "must" Test cases row that is neither covered by a test nor in this list with result pass is a warning that names the row; a manual check with result fail is a warning too.`
+Manual checks (rows checked by hand): ${JSON.stringify(state.manualChecks)}. A "must" Test cases row that is neither covered by a test nor in this list with result pass is a warning that names the row; a manual check with result fail is a warning too.${qEnd(issue)}
+Questions (rare): if the issue and the spec leave a question open that you cannot judge, return it in "questions"; a finding is not a question.`
 }
 
 function shipPrompt(issue, branch, state, risk, trace) {
@@ -1405,10 +1538,13 @@ function shipPrompt(issue, branch, state, risk, trace) {
         : ''
   const prRisk = risk.level === 'low' ? labels.riskLow : labels.riskHigh
   const riskLine = `Risk: ${risk.level === 'unknown' ? 'high (the issue has no risk label; treated as high)' : risk.level}${risk.escalation ? ' - escalated from the issue label: ' + risk.escalation : risk.reason ? ' - ' + risk.reason : ''}`
-  const prLabels = [labels.devflow, prRisk].concat(stacked ? [labels.stacked] : [])
+  const decisionItems = (decided[issue.number] || []).map((d) => `${oneLine(d.question)} -> ${oneLine(d.option)} (${oneLine(d.reason)})`).concat((leftovers[issue.number] || []).map(oneLine))
+  const prLabels = [labels.devflow, prRisk].concat(stacked ? [labels.stacked] : []).concat(decidedNew[issue.number] ? [labels.decisionsReview] : [])
+  // A decision the run took earlier (line already on the issue) still marks a brand-new PR; a reused PR only gets the label for a new decision.
+  const newPrOnlyLabel = !decidedNew[issue.number] && (decided[issue.number] || []).length ? ` When no open PR was reused in step 0 (a new PR was opened), also add "${labels.decisionsReview}".` : ''
   const template = args.prTemplatePath
     ? `Read the PR body template at ${args.prTemplatePath} and fill every section from the data below (keep its headings).`
-    : 'Write the PR body with sections: What, How, Tests, Checks, Verification, Review notes, Assumptions, Out of scope.'
+    : 'Write the PR body with sections: What, How, Tests, Checks, Verification, Review notes, Decisions taken, Assumptions, Out of scope.'
   return `Ship issue #${issue.number}: push branch ${branch} and open the pull request. ${MCP_NOTE}
 
 devflow config:
@@ -1426,6 +1562,7 @@ Data:
 - Verification: ${state.verification ? JSON.stringify(state.verification) : state.verify || 'Not run (not required for this issue)'}
 - Manual checks (put them in the Tests section as a table: row, result, evidence): ${JSON.stringify(state.manualChecks)}
 - Review notes (suggestions that were NOT applied): ${JSON.stringify(state.suggestions)}
+- Decisions taken (a "## Decisions taken" section, one "- " line per entry, "None" when empty): ${JSON.stringify(decisionItems)}
 - Assumptions: ${JSON.stringify(state.assumptions)}
 - Out of scope: ${JSON.stringify(state.outOfScope)} (review already confirmed none of these is required by the acceptance criteria)${isFixIssue(issue, cfg) ? `
 - Root cause: ${(state.rootCause && state.rootCause.cause) || 'unknown'}; Introduced by: ${(state.rootCause && state.rootCause.introducedBy) || 'unknown'}; Why it was missed: ${(state.rootCause && state.rootCause.whyMissed) || 'unknown'}` : ''}
@@ -1437,12 +1574,12 @@ Verify: ${verifyValue}
 - Run marker (its own line in the PR body, verbatim): ${runMarker}
 ${stacked ? `- Stacked on ${parentList(issue)}.\n` : ''}
 Steps:
-0. Look for an open PR with head ${branch} in ${gh.owner}/${gh.repo} (a PR left by an earlier run). If one exists, reuse it: push normally (step 1), retarget its base to ${prBase}${parents.length === 1 ? ` (or to ${base} when step 1b finds the parent merged)` : ''} with update_pull_request when it differs, rewrite its title and body from the data as in step 2, add the labels of step 3 without removing any label already on it (never remove "${labels.riskHigh}" or any other label already on it${parents.length === 1 ? `, except "${labels.stacked}" when step 1b finds the parent merged` : ''}), do not open a new PR, return reused=true with its number and URL, then continue with step 4 (the issue labels). Steps 2 and 3 apply only when no such PR exists; step 2b still applies. If none exists, go on with step 1 and return reused=false.
+0. Look for an open PR with head ${branch} in ${gh.owner}/${gh.repo} (a PR left by an earlier run). If one exists, reuse it: push normally (step 1), retarget its base to ${prBase}${parents.length === 1 ? ` (or to ${base} when step 1b finds the parent merged)` : ''} with update_pull_request when it differs, rewrite its title and body from the data as in step 2, add the labels of step 3${decidedNew[issue.number] ? ` (including "${labels.decisionsReview}": this run took a new decision)` : ''} without removing any label already on it (never remove "${labels.riskHigh}" or any other label already on it${parents.length === 1 ? `, except "${labels.stacked}" when step 1b finds the parent merged` : ''}), do not open a new PR, return reused=true with its number and URL, then continue with step 4 (the issue labels). Steps 2 and 3 apply only when no such PR exists; step 2b still applies. If none exists, go on with step 1 and return reused=false.
 1. \`git push -u ${remote} ${branch}\`. Never push to ${base} or any protected branch; never force-push.${parents.length === 1 ? `
 1b. Read PR #${parents[0].prNumber} with pull_request_read; it may have been merged (and its branch deleted) while this issue was built. Merged (\`merged_at\` is not null in that result): its changes are in ${base}, so in steps 0, 2 and 3 use base ${base} (on a reused PR retarget to it, remove the stack line and the "${labels.stacked}" label), leave out the stack line and do not add the "${labels.stacked}" label, and return unstacked=true. Closed without merging: stop and return ok=false with the problem.` : ''}${epicClosesStep}
 2. Open a PR with head ${branch} and base ${prBase} in ${gh.owner}/${gh.repo}. Title: Conventional Commits style summary with scope "${scopeFor(issue)}", English, under 72 characters. Body as described,${isFixIssue(issue, cfg) ? ' with the sections "Root cause", "Introduced by" and "Why it was missed" filled from the Root cause data (this is a fix; write "unknown" where the data says so),' : ''} with a "Risk" section holding exactly this line: "${riskLine}"${stacked ? `, and the line "${stackLine}"` : ''}, with a "## Review" section holding exactly the three trace lines from the data, the run marker line from the data on a line of its own, ending with the line "Closes #${issue.number}". The body must not contain any at-sign mention of a bot or user, and no AI attribution.
 2b. Out of scope: for each out-of-scope item that describes a real problem in the product (not a note about style or a remark), search open issues in ${gh.owner}/${gh.repo} for one that already covers it; if there is none, create an issue titled "[follow-up #${issue.number}] <short summary>" with labels "${labels.triage}" only (never "${labels.ready}": a human triages it) and a body ${args.bugTemplatePath ? `from the bug template at ${args.bugTemplatePath} (keep its headings, "unknown" or "None" where you have nothing)` : 'with the sections Context, Expected, Actual, Repro, Introduced by, Risk, Acceptance criteria, Scope, Test cases and Dependencies'}; Context says it was found while working on #${issue.number}. The body also has a line "Found in: #<PR number>" (the number of the PR opened in step 2, or of the reused PR; when no PR exists yet, the line is "Found in: ${branch}", the branch name) and, when the location of the problem is known, the \`file:line\` of it (for example src/a.js:10); with no known location write only the "Found in:" line. Then comment on the new issue: suggest a priority (one of ${priorityList.join(', ')}) and a risk (${labels.riskLow} or ${labels.riskHigh}, judged against risk.highWhen and risk.highPaths; unsure means high), each with a one-line reason, and say that a human sets the labels and "${labels.ready}". Do not set those labels yourself. List every such issue in the PR body's "Out of scope" section as "- <item>: #<number>", and return them in followUps (existing=true for one that was already open). Items that are only remarks stay in the section as text.
-3. Label the new PR (a PR is an issue: use issue_write with the PR number; read its labels first, keep existing ones): ${prLabels.map((l) => '"' + l + '"').join(', ')}.
+3. Label the new PR (a PR is an issue: use issue_write with the PR number; read its labels first, keep existing ones): ${prLabels.map((l) => '"' + l + '"').join(', ')}.${newPrOnlyLabel}
 4. On issue #${issue.number} add the label "${labels.review}" and remove "${labels.inProgress}" (keep other labels).${risk.escalation ? ` Also add "${labels.riskHigh}" to the issue and remove "${labels.riskLow}" (the change was escalated to high).` : ''}
 5. ${isolated ? 'Stay on the branch (this checkout is a dedicated worktree; do not switch branches).' : `\`git switch ${startBranch}\`.`}
 Return the PR number and URL. If any step fails, return ok=false with the problem.`
@@ -1486,6 +1623,115 @@ function restorePrompt() {
 // Stage runners
 // ---------------------------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------------------------
+// Questions: decide or block
+// ---------------------------------------------------------------------------------------------
+
+const CHANGED_SCHEMA = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    files: { type: 'array', items: { type: 'string' }, description: 'Every file of the branch diff, one path per entry' },
+    problem: { type: 'string' },
+  },
+  required: ['ok', 'files'],
+}
+
+const DECISIONS_SCHEMA = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    appended: { type: 'array', items: { type: 'string' }, description: 'The lines that were really appended (a line already in the section is not appended again)' },
+    problem: { type: 'string', description: `Report starting with exactly "${MCP_DOWN}" when GitHub cannot be reached; otherwise omit` },
+  },
+  required: ['ok', 'appended'],
+}
+
+// What the run decided per issue: [{question, option, reason}], whether any decision was new (not already in the issue's
+// "## Decisions"), and the review warnings shipped open.
+const decided = {}
+const decidedNew = {}
+const leftovers = {}
+
+// Agents return question objects; a bare string (an older agent, a tagged reason) has no flags and so always blocks.
+function asQuestions(raw) {
+  return (Array.isArray(raw) ? raw : []).map((q) => {
+    if (q && typeof q === 'object') return q
+    const text = String(q === undefined || q === null ? '' : q)
+    const m = /^\[(BA|QA|Dev)\] /.exec(text)
+    return m ? { text, tag: m[1] } : { text }
+  })
+}
+
+const plainText = (q) => String((q && q.text) || '').replace(/^\[(BA|QA|Dev)\] /, '')
+
+// The files of the branch's full diff against its parent ref (not the last commit), or null when they cannot be read.
+async function changedFilesFor(issue, branch, qs) {
+  if (!branch) return null
+  const answers = (qs || []).map((q, i) => `${i + 1}. ${oneLine(plainText(q))} -> ${oneLine(q.recommended)}`).join('\n')
+  const r = await agent(
+    `List the files changed on branch ${branch} for issue #${issue.number}. Read-only: change nothing.${answers ? `\n\nThe run is about to take these decisions (context only, do not act on them):\n${answers}` : ''}\n\nRun \`git diff --name-only ${parentRefFor(issue)}...HEAD\` and return ok=true with files = its lines (every file of the whole branch, not only the last commit). If the command fails, return ok=false with the problem.`,
+    { label: `changed-files #${issue.number}`, phase: 'Implement', schema: CHANGED_SCHEMA, model: 'haiku' },
+  )
+  return r && r.ok === true && Array.isArray(r.files) ? r.files.map((f) => String(f)) : null
+}
+
+// Classifies every question of a stage. All of them decide, or the stage blocks with all of them.
+async function classifyAll(issue, branch, raw) {
+  const qs = asQuestions(raw)
+  const ctx = { onQuestion: nt.onQuestion, changedFiles: [], highPaths: riskCfg.highPaths }
+  let verdicts = qs.map((q) => classifyQuestion(q, ctx))
+  // The branch diff is read only when every question could still decide.
+  if (nt.onQuestion === 'decide' && qs.length && verdicts.every((v) => v === 'decide')) {
+    ctx.changedFiles = await changedFilesFor(issue, branch, qs)
+    verdicts = qs.map((q) => classifyQuestion(q, ctx))
+  }
+  const lines = qs.map(questionLine)
+  return { questions: qs, verdicts, allDecide: qs.length > 0 && verdicts.every((v) => v === 'decide'), lines, reason: `${lines.length} open question${lines.length === 1 ? '' : 's'} (listed in the questions comment on the issue)` }
+}
+
+// Takes the decisions: they become answers for the next agent calls and lines of the issue's "## Decisions".
+async function recordDecisions(issue, qs) {
+  const date = new Date().toISOString().slice(0, 10)
+  const items = qs.map((q) => ({ question: plainText(q), option: String(q.recommended).trim(), reason: String(q.reason).trim() }))
+  const lines = items.map((d) => decisionLine(date, d.question, d.option, d.reason))
+  // The issue body the run holds already has lines of an earlier run: those are not appended again.
+  const fresh = addDecisions(issue.body, lines)
+  decided[issue.number] = (decided[issue.number] || []).concat(items)
+  if (!fresh.added.length) return { ok: true }
+  issue.body = fresh.body
+  const r = await agent(
+    `Record decisions on GitHub issue #${issue.number} in ${gh.owner}/${gh.repo}. ${MCP_NOTE}\n\nRead the issue with issue_read (method get). Append each line below to the "## Decisions" section of the issue body, one line per decision, in this order, exactly as written. Create the section at the end of the body when it is missing. Skip a line that is identical to a line already in the section. Change nothing else in the body, and keep the labels as they are. Write the body with issue_write.\n\nLines:\n${fresh.added.join('\n')}\n\nReturn ok=true and appended = the lines you really appended (not the skipped ones). On failure return ok=false with the problem.`,
+    { label: `decisions #${issue.number}`, phase: 'Implement', schema: DECISIONS_SCHEMA, model: 'haiku' },
+  )
+  if (!r || !r.ok) return { ok: false, problem: (r && r.problem) || 'The agent that records decisions on the issue failed.' }
+  if ((Array.isArray(r.appended) ? r.appended : fresh.added).length) decidedNew[issue.number] = true
+  return { ok: true }
+}
+
+// Runs a stage; when it returns questions they are classified. All decide: the decisions are recorded and the stage runs
+// once more with them as answers. Otherwise (or when it asks again) {blocked: {reason, questions}}.
+async function withQuestions(issue, branch, step, getQs) {
+  let r = await step()
+  for (let attempt = 0; ; attempt++) {
+    const raw = r ? getQs(r) : []
+    if (!raw.length) return { result: r }
+    const c = await classifyAll(issue, branch, raw)
+    if (!c.allDecide || attempt >= 1) return { result: r, blocked: { reason: c.reason, questions: c.lines } }
+    const rec = await recordDecisions(issue, c.questions)
+    if (!rec.ok) return { result: r, blocked: { reason: rec.problem } }
+    r = await step()
+  }
+}
+
+// The questions of a dev-side result: its questions, or its blockedReason as a tagged question.
+function devQuestions(r, tag, none) {
+  if (r.status !== 'blocked') return []
+  if (Array.isArray(r.questions) && r.questions.length) return r.questions
+  const reason = r.blockedReason || none
+  return [/^\[(BA|QA|Dev)\] /.test(reason) ? reason : `[${tag}] ${reason}`]
+}
+
 // Run all checks; on failure ask for a fix and re-check, up to maxFixRounds fix attempts.
 // Returns {ok, reason}. Mutates state with the fix results.
 async function checkLoop(issue, branch, state) {
@@ -1521,15 +1767,17 @@ async function checkLoop(issue, branch, state) {
 
 async function runFix(issue, branch, state, why, details, disputed) {
   phase('Implement')
-  const fix = await agent(fixPrompt(issue, branch, why, details, state.qaFiles, state.guide, disputed), {
-    label: `fix #${issue.number}`,
-    phase: 'Implement',
-    schema: IMPLEMENT_SCHEMA,
-    model: 'sonnet',
-  })
+  const asked = await withQuestions(
+    issue,
+    branch,
+    () => agent(fixPrompt(issue, branch, why, details, state.qaFiles, state.guide, disputed), { label: `fix #${issue.number}`, phase: 'Implement', schema: IMPLEMENT_SCHEMA, model: 'sonnet' }),
+    (r) => devQuestions(r, 'Dev', `The fix agent reported blocked (${why}).`),
+  )
+  const fix = asked.result
   if (!fix) return { ok: false, reason: `The fix agent died (${why}).` }
   if (fix.problem && mcpDown(fix.problem)) return { ok: false, mcpDown: true, reason: fix.problem }
   if (epicUnread(fix, sourceFor(issue))) return { ok: false, reason: epicReason(sourceFor(issue)) }
+  if (asked.blocked) return Object.assign({ ok: false }, asked.blocked)
   if (fix.status === 'blocked') return { ok: false, reason: fix.blockedReason || `The fix agent reported blocked (${why}).` }
   merge(state, fix)
   const touched = overlap(fix.filesChanged, state.qaFiles)
@@ -1540,15 +1788,17 @@ async function runFix(issue, branch, state, why, details, disputed) {
 // The QA fix agent may edit only the QA test files; any other change blocks.
 async function runQaFix(issue, branch, state, why, details) {
   phase('Implement')
-  const fix = await agent(qaFixPrompt(issue, branch, why, details, state.qaFiles), {
-    label: `qa-fix #${issue.number}`,
-    phase: 'Implement',
-    schema: IMPLEMENT_SCHEMA,
-    model: 'sonnet',
-  })
+  const asked = await withQuestions(
+    issue,
+    branch,
+    () => agent(qaFixPrompt(issue, branch, why, details, state.qaFiles), { label: `qa-fix #${issue.number}`, phase: 'Implement', schema: IMPLEMENT_SCHEMA, model: 'sonnet' }),
+    (r) => devQuestions(r, 'QA', `The QA fix agent reported blocked (${why}).`),
+  )
+  const fix = asked.result
   if (!fix) return { ok: false, reason: `The QA fix agent died (${why}).` }
   if (fix.problem && mcpDown(fix.problem)) return { ok: false, mcpDown: true, reason: fix.problem }
   if (epicUnread(fix, sourceFor(issue))) return { ok: false, reason: epicReason(sourceFor(issue)) }
+  if (asked.blocked) return Object.assign({ ok: false }, asked.blocked)
   if (fix.status === 'blocked') return { ok: false, reason: fix.blockedReason || `The QA fix agent reported blocked (${why}).` }
   merge(state, fix)
   const out = outside(fix.filesChanged, state.qaFiles)
@@ -1722,12 +1972,14 @@ async function runIssue(issue) {
   pathKind = pathFor(issue, cfg)
   try {
     // Branch
-    const made = await agent(branchPrompt(issue), {
-      label: `branch #${issue.number}`,
-      phase: 'Implement',
-      schema: BRANCH_SCHEMA,
-      model: 'haiku',
-    })
+    const madeAsked = await withQuestions(
+      issue,
+      '',
+      () => agent(branchPrompt(issue), { label: `branch #${issue.number}`, phase: 'Implement', schema: BRANCH_SCHEMA, model: 'haiku' }),
+      (r) => (!r.ok && Array.isArray(r.questions) ? r.questions : []),
+    )
+    const made = madeAsked.result
+    if (madeAsked.blocked) return block('Branch', madeAsked.blocked.reason, madeAsked.blocked.questions)
     if (!made || !made.ok || !made.branch) {
       return block('Branch', (made && made.problem) || 'The branch agent failed or could not create the branch.')
     }
@@ -1746,12 +1998,14 @@ async function runIssue(issue) {
 
     // Integrate: several open parents are merged into the branch before any work starts.
     if (parentsOf(issue).length > 1) {
-      const integ = await agent(integratePrompt(issue, branch), {
-        label: `integrate #${issue.number}`,
-        phase: 'Implement',
-        schema: INTEGRATE_SCHEMA,
-        model: 'sonnet',
-      })
+      const integAsked = await withQuestions(
+        issue,
+        branch,
+        () => agent(integratePrompt(issue, branch), { label: `integrate #${issue.number}`, phase: 'Implement', schema: INTEGRATE_SCHEMA, model: 'sonnet' }),
+        (r) => (!r.ok && Array.isArray(r.questions) ? r.questions : []),
+      )
+      const integ = integAsked.result
+      if (integAsked.blocked) return block('Integrate', integAsked.blocked.reason, integAsked.blocked.questions)
       if (down(integ)) return block('Integrate', integ.problem)
       if (!integ || !integ.ok || !integ.integrationSha) {
         return block('Integrate', (integ && integ.problem) || 'The integrate agent failed or did not report an integration commit.')
@@ -1768,12 +2022,13 @@ async function runIssue(issue) {
     if (pathKind === 'short') {
       plan = { plan: SHORT_PLAN, qaFiles: [], devFiles: [] }
     } else {
-      plan = await agent(planPrompt(issue, branch), {
-        label: `plan #${issue.number}`,
-        phase: 'Implement',
-        schema: PLAN_SCHEMA,
-        model: 'sonnet',
-      })
+      const planAsked = await withQuestions(
+        issue,
+        branch,
+        () => agent(planPrompt(issue, branch), { label: `plan #${issue.number}`, phase: 'Implement', schema: PLAN_SCHEMA, model: 'sonnet' }),
+        (r) => (r.status === 'blocked' && Array.isArray(r.questions) ? r.questions : []),
+      )
+      plan = planAsked.result
       if (!plan) return block('Plan', 'The plan agent died.')
       if (down(plan)) return block('Plan', plan.problem)
       if (epicUnread(plan, srcPlan)) return block('Plan', epicReason(srcPlan))
@@ -1788,9 +2043,9 @@ async function runIssue(issue) {
         }
       }
       state.httpOrE2eRows = plan.httpOrE2eRows === true
+      if (planAsked.blocked) return block('Plan', planAsked.blocked.reason, planAsked.blocked.questions)
       if (plan.status === 'blocked') {
-        const qs = plan.questions || []
-        return block('Plan', qs.join('; ') || 'The plan agent reported blocked without questions.', qs)
+        return block('Plan', 'The plan agent reported blocked without questions.')
       }
       if (specPathForPlan && !readSpec(plan, specPathForPlan)) return block('Plan', `Plan did not read the spec ${specPathForPlan}`)
       if (srcPlan.kind === 'epic' && !readSource(plan, srcPlan)) return block('Plan', `Plan did not read epic #${srcPlan.n}`)
@@ -1808,31 +2063,43 @@ async function runIssue(issue) {
       state.qaFiles = own.qaFiles
       log(`#${issue.number}: QA writes ${own.qaFiles.join(', ')} while dev writes the change.`)
       // Each half catches its own error so both settle before the cleanup runs; the first error is rethrown.
-    const caught = []
-    const settle = (fn) => async () => {
-      try {
-        return await fn()
-      } catch (e) {
-        caught.push(e)
-        return null
+    const runPair = async () => {
+      const caught = []
+      const settle = (fn) => async () => {
+        try {
+          return await fn()
+        } catch (e) {
+          caught.push(e)
+          return null
+        }
       }
+      const [qa, dev] = await parallel([
+        settle(() => agent(qaPrompt(issue, branch, plan.plan, own), { label: `qa #${issue.number}`, phase: 'Implement', schema: QA_SCHEMA, model: 'sonnet' })),
+        settle(() => agent(implementPrompt(issue, branch, plan.plan, own), { label: `implement #${issue.number}`, phase: 'Implement', schema: IMPLEMENT_SCHEMA, model: 'sonnet' })),
+      ])
+      if (caught.length) throw caught[0]
+      return { qa, dev }
     }
-    const [qa, dev] = await parallel([
-      settle(() => agent(qaPrompt(issue, branch, plan.plan, own), { label: `qa #${issue.number}`, phase: 'Implement', schema: QA_SCHEMA, model: 'sonnet' })),
-      settle(() => agent(implementPrompt(issue, branch, plan.plan, own), { label: `implement #${issue.number}`, phase: 'Implement', schema: IMPLEMENT_SCHEMA, model: 'sonnet' })),
-    ])
-    if (caught.length) throw caught[0]
+    // Every open question, from both roles, is classified together.
+    const pairQuestions = (r) => {
+      const out = []
+      if (r.qa) {
+        const qq = Array.isArray(r.qa.questions) ? r.qa.questions : []
+        out.push(...qq)
+        if (r.qa.status === 'blocked' && !qq.length) out.push('[QA] The QA agent reported blocked without a question.')
+      }
+      if (r.dev) out.push(...devQuestions(r.dev, 'Dev', 'The implement agent reported blocked without a reason.'))
+      return out
+    }
+    const pairAsked = await withQuestions(issue, branch, runPair, pairQuestions)
+    const { qa, dev } = pairAsked.result
     if (!qa) return block('Implement', 'The QA agent died.')
       if (!dev) return block('Implement', 'The implement agent died.')
       if (down(qa)) return block('Implement', qa.problem)
       if (down(dev)) return block('Implement', dev.problem)
       if (epicUnread(qa, srcPlan)) return block('Implement', epicReason(srcPlan))
       if (epicUnread(dev, srcPlan)) return block('Implement', epicReason(srcPlan))
-      // Every open question, from both roles, goes into one comment and one block.
-      const questions = (qa.questions || []).slice()
-      if (dev.status === 'blocked') questions.push(`[Dev] ${dev.blockedReason || 'The implement agent reported blocked without a reason.'}`)
-      if (qa.status === 'blocked' && !(qa.questions || []).length) questions.push('[QA] The QA agent reported blocked without a question.')
-      if (questions.length) return block('Implement', questions.join('; '), questions)
+      if (pairAsked.blocked) return block('Implement', pairAsked.blocked.reason, pairAsked.blocked.questions)
       const qaOut = outside(qa.filesChanged, own.qaFiles)
       if (qaOut.length) return block('Implement', `The QA agent changed files outside its own: ${qaOut.join(', ')}.`)
       const devIn = overlap(dev.filesChanged, own.qaFiles)
@@ -1860,16 +2127,18 @@ async function runIssue(issue) {
       })
       merge(state, impl)
     } else {
-      impl = await agent(implementPrompt(issue, branch, plan.plan), {
-        label: `implement #${issue.number}`,
-        phase: 'Implement',
-        schema: IMPLEMENT_SCHEMA,
-        model: 'sonnet',
-      })
+      const implAsked = await withQuestions(
+        issue,
+        branch,
+        () => agent(implementPrompt(issue, branch, plan.plan), { label: `implement #${issue.number}`, phase: 'Implement', schema: IMPLEMENT_SCHEMA, model: 'sonnet' }),
+        (r) => devQuestions(r, 'Dev', 'The implement agent reported blocked without a reason.'),
+      )
+      impl = implAsked.result
       if (!impl) return block('Implement', 'The implement agent died.')
       if (down(impl)) return block('Implement', impl.problem)
       if (epicUnread(impl, srcAll)) return block('Implement', epicReason(srcAll))
       merge(state, impl)
+      if (implAsked.blocked) return block('Implement', implAsked.blocked.reason, implAsked.blocked.questions)
       if (impl.status === 'blocked') {
         const reason = impl.blockedReason || 'The implement agent reported blocked without a reason.'
         return block('Implement', reason, [`[Dev] ${reason}`])
@@ -2011,6 +2280,12 @@ async function runIssue(issue) {
       if (!review) return block('Review', 'The review agent died.')
       if (down(review)) return block('Review', review.problem)
       if (epicUnread(review, srcAll)) return block('Review', epicReason(srcAll))
+      if (Array.isArray(review.questions) && review.questions.length) {
+        const c = await classifyAll(issue, branch, review.questions)
+        if (!c.allDecide) return block('Review', c.reason, c.lines)
+        const rec = await recordDecisions(issue, c.questions)
+        if (!rec.ok) return block('Review', rec.problem)
+      }
       // Every hit is critical unless the reviewer accepted it; an accepted hit makes the PR risk:high at Ship.
       const accepted = Array.isArray(review.acceptedWeakenings) ? review.acceptedWeakenings : []
       let injected = 0
@@ -2036,7 +2311,16 @@ async function runIssue(issue) {
         .map((f) => `- [${f.severity}] ${f.file}:${f.line}: ${f.problem}\n  Suggested fix: ${f.fix}`)
         .join('\n')
       if (round === nt.maxReviewRounds) {
-        return block('Review', `Review still has critical/warning findings after ${nt.maxReviewRounds} fix round(s):\n${details}`)
+        const stillOpen = `Review still has critical/warning findings after ${nt.maxReviewRounds} fix round(s):\n${details}`
+        // With onQuestion decide a warning left open is classified like a question; a critical finding always blocks.
+        if (nt.onQuestion !== 'decide' || blocking.some((f) => f.severity !== 'warning')) return block('Review', stillOpen)
+        const c = await classifyAll(issue, branch, blocking.map((f) => warningQuestion(f, nt.maxReviewRounds)))
+        if (!c.allDecide) return block('Review', stillOpen)
+        leftovers[issue.number] = blocking.map((f) => `${f.file}:${f.line}: ${f.problem} (shipped open after ${nt.maxReviewRounds} fix round(s); ship with the warning)`)
+        decidedNew[issue.number] = true
+        notes.push(`review warning(s) left open after ${nt.maxReviewRounds} round(s) were shipped as decisions: ${blocking.map((f) => `${f.file}:${f.line}`).join(', ')}`)
+        log(`#${issue.number}: ${blocking.length} review warning(s) still open after ${nt.maxReviewRounds} round(s); shipping with decisions:review.`)
+        break
       }
       // Findings in a QA file go to the QA fix agent, the others to the dev fix agent; one round, counted once.
       const items = blocking.map((f, i) => ({

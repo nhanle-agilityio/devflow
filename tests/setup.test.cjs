@@ -277,3 +277,34 @@ test('test_t1_3_configs_without_review_still_validate', () => {
   assert.match(repoFile('skills/init/templates/devflow.json'), /review\.github|"review"\s*:\s*\{\s*"github"/);
   assert.equal(example.review && example.review.github, false, 'the example sets review.github to its default');
 });
+
+// --- #105 T4.26-T4.28: nextTask.onQuestion, nextTask.trustDecisions, labels.decisionsReview ---
+// T4.26
+test('T4.26 the schema and the annotated example define onQuestion, trustDecisions and decisionsReview', () => {
+  const nt = SCHEMA.properties.nextTask.properties;
+  assert.deepEqual([...nt.onQuestion.enum].sort(), ['block', 'decide']);
+  assert.equal(nt.onQuestion.default, 'decide');
+  assert.equal(nt.trustDecisions.type, 'boolean');
+  assert.equal(nt.trustDecisions.default, false);
+  const dr = SCHEMA.properties.labels.properties.decisionsReview;
+  assert.equal(dr.type, 'string');
+  assert.equal(dr.default, 'decisions:review');
+  const example = JSON.parse(stripJsonc(repoFile('skills/init/templates/devflow.json')));
+  assert.equal(example.nextTask.onQuestion, 'decide');
+  assert.equal(example.nextTask.trustDecisions, false);
+  assert.equal(example.labels.decisionsReview, 'decisions:review');
+  assert.deepEqual(validate(SCHEMA, example), []);
+});
+
+// T4.27
+test('T4.27 a 3.0.0 config without the new keys stays valid', () => {
+  assert.deepEqual(validate(SCHEMA, BASE), []);
+  assert.deepEqual(validate(SCHEMA, { ...BASE, nextTask: { maxFixRounds: 2, maxReviewRounds: 2 }, labels: { ready: 'agent:ready' } }), []);
+  assert.deepEqual(validate(SCHEMA, { ...BASE, nextTask: { onQuestion: 'block', trustDecisions: true }, labels: { decisionsReview: 'x:y' } }), []);
+});
+
+// T4.28
+test('T4.28 an invalid onQuestion value is rejected', () => {
+  assert.notDeepEqual(validate(SCHEMA, { ...BASE, nextTask: { onQuestion: 'maybe' } }), []);
+  assert.notDeepEqual(validate(SCHEMA, { ...BASE, nextTask: { trustDecisions: 'yes' } }), []);
+});
