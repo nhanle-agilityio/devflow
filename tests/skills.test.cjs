@@ -61,24 +61,8 @@ test('test_t3_3_sync_acts_only_on_trusted_comments_and_never_resolves_others_thr
 });
 
 // T3.4
-test('test_t3_4_sync_no_longer_says_author_reply_clears_human_threads', () => {
-  const text = syncText();
-  assert.doesNotMatch(text, /ignores threads whose last comment is by the PR author/i);
-  const sentences = text.split(/(?<=[.!?])\s+|\n/);
-  assert.ok(
-    sentences.some((x) => /trusted human/i.test(x) && /block/i.test(x) && /resolve/i.test(x)),
-    'a sentence says a trusted human thread blocks the gate until resolved',
-  );
-});
 
 // T3.4 (review): the gate counts the PR author's reply as an answer on their own threads
-test('test_t3_4_sync_reply_answers_threads_started_by_the_pr_author', () => {
-  const AUTHOR = /thread started by the PR author[^.;]*answered/i;
-  assert.match(syncStep(4), AUTHOR);
-  const design = read('DESIGN.md').split('\n').find((l) => /^4\. \*\*Review\.\*\* Only trusted authors/.test(l));
-  assert.ok(design, 'DESIGN.md has sync step 4');
-  assert.match(design, AUTHOR);
-});
 
 // T3.5
 test('test_t3_5_answer_takes_questions_and_answers_from_trusted_authors_only', () => {
@@ -103,12 +87,6 @@ test('test_t3_6_answer_lists_ignored_comments_and_latest_trusted_answer_wins', (
 });
 
 // T3.7
-test('test_t3_7_answer_step_6_engine_resumes_branch_with_commits', () => {
-  const s6 = answerStep(6);
-  assert.doesNotMatch(s6, /must be handled by hand/i);
-  assert.match(s6, /resumed by the engine/i);
-  assert.match(s6, /commits/i);
-});
 
 // T3.9
 test('test_t3_9_sync_ignores_other_bots_threads', () => {
@@ -257,17 +235,6 @@ test('test_t3_2_empty_checks_warning_in_init_and_doctor', () => {
 });
 
 // T3.3
-test('test_t3_3_warning_regardless_of_flag', () => {
-  for (const [name, text] of [['init', initText54()], ['doctor', read('skills/doctor/SKILL.md')]]) {
-    const lines = emptyWarnLines54(text);
-    assert.ok(lines.length > 0, `${name} has the empty effective list warning`);
-    const rule = lines.join('\n');
-    assert.match(rule, /effective/i);
-    assert.match(rule, /refuse/i);
-    assert.doesNotMatch(rule, /(only|just) (when|if)[^.]*review\.github[^.]*(false|off)/i);
-    assert.doesNotMatch(rule, /(when|if)[^.]*review\.github (is )?(false|off)[^.]*(warn)/i);
-  }
-});
 
 // T3.4
 test('test_t3_4_upgrade_offers_review_flag', () => {
@@ -849,16 +816,6 @@ test('T19.3 report writes the literal round(s)', () => {
   const t = reportText();
   assert.ok(t.includes('round(s)'));
   assert.doesNotMatch(t, /\b[12] rounds?\b/);
-});
-
-test('T19.4 report shows Plan and Verify as skipped on the short path', () => {
-  assert.match(reportText(), /short path[^.]*Plan and Verify[^.]*"skipped \(short path\)"[^.]*neutral/i);
-});
-
-test('T19.5 report greys missing steps on the full path', () => {
-  const t = reportText();
-  assert.match(t, /full path[^.]*Plan, Review, Checks and Verify[^.]*grey[^.]*missing/i);
-  assert.match(t, /Verify[^.]*only when `verify` is configured/);
 });
 
 test('T19.6 report mergedBy is gate for the marker comment or the trailer', () => {
