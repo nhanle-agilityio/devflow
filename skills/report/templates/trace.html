@@ -18,7 +18,7 @@ Sample data for testing (paste it in place of {{TRACE_JSON}}):
   --bg: #0e1116; --panel: #151a22; --panel-2: #1b212b; --line: #2b3240; --dot: #212733;
   --fg: #e6e9ef; --muted: #8e97a8;
   --human: #f2913d; --haiku: #45c4dc; --sonnet: #a08bff; --opus: #ec72c0;
-  --out: #3fbf8e; --block: #f0625f; --skip: #6b7385; --script: #c9d1de;
+  --out: #3fbf8e; --block: #f0625f; --skip: #6b7385; --neutral: #9aa7bd; --script: #c9d1de;
   --f-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", sans-serif;
   --f-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
   --f-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
@@ -78,6 +78,7 @@ button.ctl.alt { color: var(--fg); background: var(--panel-2); border-color: var
 .node.human { --c: var(--human); } .node.haiku { --c: var(--haiku); } .node.sonnet { --c: var(--sonnet); }
 .node.opus { --c: var(--opus); } .node.out { --c: var(--out); } .node.block { --c: var(--block); } .node.missing { --c: var(--skip); }
 .node.missing { opacity: .6; border-style: dashed; }
+.node.skipped { --c: var(--neutral); border-style: dotted; }
 .node.active { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 35%, transparent), 0 0 28px color-mix(in srgb, var(--c) 45%, transparent); transform: translateY(-2px); opacity: 1; }
 .node.pending { opacity: .25; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; } }
@@ -132,14 +133,18 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     by: ['by', 'bởi'], at: ['at', 'lúc'],
     s_ticket: ['Ticket', 'Ticket'], s_plan: ['Plan', 'Kế hoạch'], s_q: ['Questions', 'Câu hỏi'], s_pr: ['PR', 'PR'],
     s_review: ['Review', 'Review'], s_tests: ['Tests', 'Test'], s_merged: ['Merged', 'Đã merge'],
+    s_checks: ['Checks', 'Kiểm tra'], s_verify: ['Verify', 'Xác minh'],
     s_acc: ['Accepted', 'Nghiệm thu'], s_rel: ['Released', 'Phát hành'],
     b_human: ['you', 'người'], b_haiku: ['haiku', 'haiku'], b_sonnet: ['sonnet', 'sonnet'], b_opus: ['opus', 'opus'],
-    b_out: ['github', 'github'], b_block: ['blocked', 'bị chặn'], b_missing: ['missing', 'thiếu'],
+    b_out: ['github', 'github'], b_block: ['blocked', 'bị chặn'], b_missing: ['missing', 'thiếu'], b_skipped: ['skipped', 'bỏ qua'],
     lg_human: ['human', 'người'], lg_haiku: ['haiku', 'haiku'], lg_sonnet: ['sonnet', 'sonnet'], lg_opus: ['opus', 'opus'],
-    lg_out: ['GitHub', 'GitHub'], lg_block: ['blocked', 'bị chặn'], lg_missing: ['missing', 'thiếu'],
+    lg_out: ['GitHub', 'GitHub'], lg_block: ['blocked', 'bị chặn'], lg_missing: ['missing', 'thiếu'], lg_skipped: ['skipped', 'bỏ qua'],
     risk: ['risk', 'rủi ro'], low: ['low', 'thấp'], high: ['high', 'cao'], unknown: ['unknown', 'chưa rõ'],
     e_ticket: ['risk', 'rủi ro'],
     e_noplan: ['no plan comment', 'không có comment kế hoạch'],
+    e_skipped: ['skipped (short path)', 'bỏ qua (đường ngắn)'],
+    e_nochecks: ['no checks result', 'chưa có kết quả kiểm tra'], e_checks: ['checks ran', 'đã chạy kiểm tra'],
+    e_noverify: ['no verify result', 'chưa có kết quả xác minh'], e_verify: ['verified', 'đã xác minh'],
     e_qopen: ['unanswered questions', 'câu hỏi chưa trả lời'], e_qans: ['questions answered', 'đã trả lời câu hỏi'],
     e_nopr: ['no PR yet', 'chưa có PR'], e_stacked: ['stacked on', 'xếp chồng trên'], e_base: ['base', 'nền'],
     e_rev_none: ['no review status', 'chưa có trạng thái review'], e_pend: ['review pending', 'review đang chờ'],
@@ -167,7 +172,10 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
   function stepsOf(it, d) {
     const pr = it.pr, out = [];
     out.push({ key: 's_ticket', actor: 'opus', url: it.url, link: '#' + it.number, ev: () => t('risk') + ': ' + t(it.risk || 'unknown') });
-    out.push({ key: 's_plan', actor: it.plan ? 'sonnet' : 'missing', url: it.plan && it.plan.url, link: it.plan ? 'plan' : '', ev: () => (it.plan ? it.plan.excerpt : t('e_noplan')) });
+    /* The short path never runs Plan and Verify: neutral "skipped", not grey. Any other path expects them: grey when missing. */
+    const short = !!(it.metrics && it.metrics.path === 'short');
+    out.push({ key: 's_plan', actor: it.plan ? 'sonnet' : short ? 'skipped' : 'missing', url: it.plan && it.plan.url, link: it.plan ? 'plan' : '',
+      ev: () => (it.plan ? it.plan.excerpt : short ? t('e_skipped') : t('e_noplan')) });
     if (it.questions) {
       const q = it.questions, open = !q.answered;
       out.push({ key: 's_q', actor: open ? 'block' : 'human', url: open ? q.url : q.answerUrl || q.url, link: String(q.count), ev: () => (open ? t('e_qopen') : t('e_qans')) });
@@ -184,6 +192,13 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       ev: () => (ts && (ts.files.length || ts.count)
         ? ts.files.length + ' ' + t('e_files') + (ts.rows.length ? ', ' + ts.rows.length + ' ' + t('e_rows') : '') + (ts.testFirst === true ? ', ' + t('e_testfirst') : ts.testFirst === false ? ', ' + t('e_testlater') : '')
         : t('e_notests')) });
+    const ck = it.checks;
+    out.push({ key: 's_checks', actor: ck ? 'sonnet' : 'missing', url: ck && ck.url, link: '', ev: () => (ck ? t('e_checks') : t('e_nochecks')) });
+    const vf = it.verify;
+    if (vf || short || d.verifyConfigured) {
+      out.push({ key: 's_verify', actor: vf ? 'sonnet' : short ? 'skipped' : 'missing', url: vf && vf.url, link: '',
+        ev: () => (vf ? t('e_verify') : short ? t('e_skipped') : t('e_noverify')) });
+    }
     const merged = pr && pr.state === 'merged';
     out.push({ key: 's_merged', actor: merged ? (pr.byGate ? 'out' : 'human') : pr && pr.state === 'closed' ? 'block' : 'missing', url: pr && pr.url, link: merged ? (pr.mergedAt || '').slice(0, 10) : '',
       ev: () => (merged ? (pr.byGate ? t('e_gate') : pr.mergedByKnown === false ? t('e_unk') : t('e_hum') + ' ' + pr.mergedBy) : pr ? (pr.state === 'closed' ? t('e_closed') : t('e_open')) : t('e_nopr')) });
@@ -239,8 +254,8 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
   function build() {
     const tracks = $('#tracks');
     const legend = $('#legend');
-    ['human', 'haiku', 'sonnet', 'opus', 'out', 'block', 'missing'].forEach((k) => {
-      const c = el('span', 'chip'); const i = el('i'); i.style.setProperty('--c', 'var(--' + (k === 'missing' ? 'skip' : k) + ')');
+    ['human', 'haiku', 'sonnet', 'opus', 'out', 'block', 'missing', 'skipped'].forEach((k) => {
+      const c = el('span', 'chip'); const i = el('i'); i.style.setProperty('--c', 'var(--' + (k === 'missing' ? 'skip' : k === 'skipped' ? 'neutral' : k) + ')');
       c.appendChild(i); const sp = el('span'); sp.setAttribute('data-lg', k); c.appendChild(sp); legend.appendChild(c);
     });
     if (!data || !data.spec) { tracks.appendChild(el('div', 'empty')).setAttribute('data-tk', 'nodata'); $('#title').textContent = 'devflow trace'; return; }
