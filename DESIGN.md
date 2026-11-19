@@ -324,6 +324,8 @@ Per PR:
 
 Output: a table check → `ok` / `warn` / `fail` → what to do, a line per fix applied or declined, and the one command to run next.
 
+**Waiting on you** (last section of the output, read-only, never changes anything, also with `--fix`): one line per item with one command. Categories in order, each issue or PR once in the first matching one: blocked issues with open questions (`/devflow:answer #n`), PRs waiting for a human merge, PRs in conflict or behind (`/devflow:sync #pr`), ready issues (`/devflow:next-task` or `/devflow:dispatch`), sub-issues of an open epic without `labels.ready`, epics whose sub-issues are all merged and have no accept result (`/devflow:accept #n`). An item it cannot classify is listed as "check by hand"; with nothing to do it says so; no cap on lines.
+
 ## Testing and CI
 
 - `hooks/test_guard.py`: unittest for the guard. `tests/merge-gate.test.cjs`: the merge gate rules against a fake Octokit. `tests/lanes.test.cjs`: the lane planner, including `ignoreHotspots`.
