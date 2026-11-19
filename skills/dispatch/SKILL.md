@@ -1,7 +1,7 @@
 ---
 name: dispatch
 description: Split the ready GitHub issues into non-colliding lanes (by hotspot files and dependencies) and start one background Claude session per lane, each running /devflow:next-task in its own worktree. Never merges.
-argument-hint: "[max lanes]"
+argument-hint: "[max lanes] [--plan]"
 disable-model-invocation: true
 ---
 
@@ -9,7 +9,7 @@ disable-model-invocation: true
 
 Arguments: $ARGUMENTS
 
-Plans which ready issues can run in parallel and starts one background session per lane. Running this command is the user's go-ahead to start the sessions. This skill makes no commits, never merges and never pushes to a protected branch.
+Plans which ready issues can run in parallel and starts one background session per lane. With `--plan` in the arguments it only prints the plan and starts no session (a dry run, steps 0 to 3). The other argument, if any, is the max lanes. Running this command without `--plan` is the user's go-ahead to start the sessions. This skill makes no commits, never merges and never pushes to a protected branch.
 
 ## 0. Preflight
 
@@ -46,13 +46,13 @@ JSON
 
 (A quoted heredoc, so quotes or `$` in hotspot paths cannot break the shell command.)
 
-Input: `{"maxLanes": N, "ignoreHotspots": [...], "issues": [...]}`, with `ignoreHotspots` = `dispatch.ignoreHotspots` from the config (`["README.md", "CHANGELOG.md"]` if unset; exact paths or globs with `*` and `**`). Conflicts in such files are small and are resolved by the merge gate's branch update or `/devflow:sync`, so they do not join lanes. Output: `{"lanes": [{"issues": [...], "sharedHotspots": [...]}], "deferred": [{"issues": [...], "reason": "..."}], "ignoredHotspots": [...], "warnings": [...]}`. If it exits non-zero, show the message and stop. Show any `warnings`.
+Input: `{"maxLanes": N, "ignoreHotspots": [...], "issues": [...]}`, with `ignoreHotspots` = `dispatch.ignoreHotspots` from the config (`["README.md", "CHANGELOG.md"]` if unset; exact paths or globs with `*` and `**`). Conflicts in such files are small and are resolved by the merge gate's branch update or `/devflow:sync`, so they do not join lanes. Output: `{"lanes": [{"issues": [...], "sharedHotspots": [...]}], "deferred": [{"issues": [...], "reason": "..."}], "ignoredHotspots": [...], "warnings": [...]}`, where each lane is `{"issues": [...], "sharedHotspots": [...], "ignoredTouched": [...]}`: `ignoredTouched` lists the ignored hotspots (matched by exact path: `docs/a.md` and `docs/b.md` differ) that this lane's issues name and an earlier lane's issues also name, sorted, `[]` when none. If it exits non-zero, show the message and stop. Show any `warnings`.
 
-If there are no lanes, say so (and list the waiting issues) and stop.
+If there are no lanes, say "nothing to run" (and list the waiting issues) and stop, with or without `--plan`.
 
 ## 3. Show the plan, then start
 
-Print a table: lane, issues in run order, shared hotspots. Below it, list the ignored hotspots (`ignoredHotspots`, "not used for lanes: ..."), deferred lanes with their reason and the "waiting for #N" issues. Then continue straight to step 4; do not ask again.
+Print a table: lane, issues in run order, shared hotspots. Below it, list the ignored hotspots (`ignoredHotspots`, "not used for lanes: ..."), deferred lanes with their reason and the "waiting for #N" issues. Print each lane's `ignoredTouched` below its row (when not empty) as the files where `/devflow:sync` may work: both lanes edit them, so the later lane's PR may conflict there. With `--plan`, stop here: start no session, post nothing and change nothing. Otherwise continue straight to step 4; do not ask again.
 
 ## 4. Start one background session per lane
 
@@ -74,7 +74,7 @@ claude -w lane-<n> "/devflow:next-task #a #b --chain --isolated"
 
 ## 5. Report
 
-Print a table: lane, background session id, issues. Then explain:
+Print a table: lane, background session id, issues. For each lane with a non-empty `ignoredTouched`, print the list as the files where `/devflow:sync` may work for that lane. Then explain:
 
 - Follow the sessions with `claude agents`, `claude logs <id>`, `claude attach <id>`.
 - Each session claims its issues first; if an issue in a lane was already claimed elsewhere or gets blocked, the lane continues with the next issue, stacked on the last issue that shipped (or from the base); only issues with a real `Depends on` the failed one are skipped. Each posts a plan on every issue, implements test-first, and opens PRs stacked on the previous issue's PR inside its lane.

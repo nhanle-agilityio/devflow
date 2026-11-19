@@ -113,3 +113,63 @@ test('invalid input throws', () => {
   assert.throws(() => planLanes({ maxLanes: 2, issues: [{ number: 1, dependsOn: ['2'] }] }));
   assert.throws(() => planLanes({ maxLanes: 2, ignoreHotspots: 'x', issues: [] }));
 });
+
+// ignoredTouched (issue #96)
+const planIgn = (issues, ignoreHotspots) => planLanes({ maxLanes: 5, ignoreHotspots, issues });
+const touched = (r) => r.lanes.map((l) => l.ignoredTouched);
+
+test('T10.3 later lane lists the ignored hotspot an earlier lane also names', () => {
+  const r = plan([iss(1, ['README.md', 'a.js']), iss(2, ['README.md', 'b.js'])]);
+  assert.deepEqual(nums(r), [[1], [2]]);
+  assert.deepEqual(r.lanes[1].ignoredTouched, ['README.md']);
+});
+
+test('T10.4 first lane has ignoredTouched []', () => {
+  const r = plan([iss(1, ['README.md', 'a.js']), iss(2, ['README.md', 'b.js'])]);
+  assert.deepEqual(r.lanes[0].ignoredTouched, []);
+});
+
+test('T10.5 no common ignored file gives [] for every lane', () => {
+  const r = plan([iss(1, ['README.md', 'a.js']), iss(2, ['CHANGELOG.md', 'b.js'])]);
+  assert.deepEqual(touched(r), [[], []]);
+});
+
+test('T10.6 ignoredTouched is sorted', () => {
+  const r = planIgn(
+    [iss(1, ['docs/b.md', 'DESIGN.md', 'a.js']), iss(2, ['docs/b.md', 'DESIGN.md', 'b.js'])],
+    ['DESIGN.md', 'docs/**'],
+  );
+  assert.deepEqual(r.lanes[1].ignoredTouched, ['DESIGN.md', 'docs/b.md']);
+});
+
+test('T10.7 only the same named file counts, not the same glob', () => {
+  const r = planIgn([iss(1, ['docs/a.md', 'a.js']), iss(2, ['docs/b.md', 'b.js'])], ['docs/**']);
+  assert.deepEqual(touched(r), [[], []]);
+});
+
+test('T10.8 a shared non-ignored hotspot is not in ignoredTouched', () => {
+  const r = plan([iss(1, ['x.js', 'README.md']), iss(2, ['x.js'])]);
+  assert.deepEqual(nums(r), [[1, 2]]);
+  assert.deepEqual(r.lanes[0].ignoredTouched, []);
+});
+
+// Skill contract asserts
+const fs = require('node:fs');
+const path = require('node:path');
+const dispatchSkill = fs.readFileSync(path.join(__dirname, '..', 'skills', 'dispatch', 'SKILL.md'), 'utf8');
+
+test('T10.1 dispatch --plan prints the plan and starts no session', () => {
+  assert.match(dispatchSkill, /--plan/);
+  for (const w of ['lanes', 'order', 'shared hotspots', 'ignored hotspots', 'deferred', 'waiting'])
+    assert.ok(dispatchSkill.toLowerCase().includes(w), w);
+  assert.match(dispatchSkill, /--plan[^\n]*(starts? no|does not start|no session)/i);
+});
+
+test('T10.2 dispatch --plan says "nothing to run" when no issue is ready', () => {
+  assert.match(dispatchSkill, /nothing to run/);
+});
+
+test('T10.9 dispatch report prints ignoredTouched per lane for /devflow:sync', () => {
+  assert.match(dispatchSkill, /ignoredTouched/);
+  assert.match(dispatchSkill, /\/devflow:sync/);
+});
