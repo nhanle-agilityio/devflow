@@ -5,7 +5,6 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 ## [Unreleased]
 
 ### Added
-- Fixed rules for branch resume and base conflicts: an existing local or remote branch whose name starts with `<type>/<issue>-` is resumed without a question and named in the PR's Assumptions (several matches: the one with an open devflow PR, else the remote branch with the newest commit; another type prefix or a longer number does not match); a conflict from merging the base into a resumed branch is resolved in Integrate and blocks only for behaviour the issue does not cover; the Branch, Integrate and Implement prompts say a commit-structure question is never asked (#112)
 - Follow-up issues filed by Ship have a `Found in: #<pr>` line (the branch name when no PR exists yet) and the `file:line` of the problem when known.
 - `/devflow:spec` writes `Resolves: #a, #b` into the epic when the request names existing issues it resolves; Ship of the epic's last open sub-issue adds a `Closes #<n>` line for each listed issue that is still open and skips numbers that do not exist or belong to another repository, with a note in the PR body.
 
