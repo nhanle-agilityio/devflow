@@ -2206,6 +2206,13 @@ test('T7.8 a base conflict in behaviour the issue does not cover blocks with a q
   assert.match(rep[0].reason, /^Integrate/);
   assert.match(prompt(calls, 'blocked'), /devflow-questions/);
   assert.match(prompt(calls, 'integrate'), /does not cover/);
+  assert.match(prompt(calls, 'integrate'), /product decision: set productDecision=true/);
+});
+
+test('T7.2b a branch matched by name whose commits use no issue scope is continued, not ok=false', async () => {
+  const { calls } = await run({ ...BASE, issues: [12] }, T7_LABELS);
+  const p = prompt(calls, 'branch');
+  assert.match(p, /whose own commits do not use scope "#12"[^]*do not return ok=false for it[^]*matchedByName=true/);
 });
 
 test('T7.9 a conflict in a high-risk file is still resolved in Integrate (the PR is escalated by the risk step)', async () => {
