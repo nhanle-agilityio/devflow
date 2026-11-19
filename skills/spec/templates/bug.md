@@ -11,7 +11,7 @@ handle of the review bot into the body.
 
 ## Context
 
-<!-- Where it was found (spec link and criterion, the issue and PR being worked on, or who reported it) and why it matters. -->
+<!-- Where it was found (spec link and criterion, the issue and PR being worked on, or who reported it) and why it matters. A follow-up filed by Ship also has a line "Found in: #<pr>" (the branch name when no PR exists yet) and, when known, the file:line of the problem. -->
 
 ## Expected
 
