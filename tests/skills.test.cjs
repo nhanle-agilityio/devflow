@@ -753,3 +753,49 @@ test('T22.7 doctor sub-issue not ready leaves out in-review sub-issues and ones 
   assert.match(l, /labels\.review/);
   assert.match(l, /open PR/i);
 });
+
+// ---- T19: report shows local review, skipped steps and who merged ----
+const reportItem = (label) => {
+  const m = reportText().match(new RegExp('^- \\*\\*' + label + '\\*\\*[^\\n]*', 'm'));
+  assert.ok(m, `SKILL.md has the ${label} item`);
+  return m[0];
+};
+
+test('T19.1 report review falls back to the local review from ## Review and the devflow-run marker', () => {
+  const r = reportItem('Review');
+  assert.match(r, /no `devflow\/review` status/);
+  assert.ok(r.includes('## Review') && r.includes('devflow-run'));
+  assert.ok(r.includes('local review: pass, N round(s)') && r.includes('local review: fail, N round(s)'));
+});
+
+test('T19.2 report uses the devflow/review status when present', () => {
+  assert.match(reportItem('Review'), /with a `devflow\/review` status the status is used/);
+});
+
+test('T19.3 report writes the literal round(s)', () => {
+  const t = reportText();
+  assert.ok(t.includes('round(s)'));
+  assert.doesNotMatch(t, /\b[12] rounds?\b/);
+});
+
+test('T19.4 report shows Plan and Verify as skipped on the short path', () => {
+  assert.match(reportText(), /short path[^.]*Plan and Verify[^.]*"skipped \(short path\)"[^.]*neutral/i);
+});
+
+test('T19.5 report greys missing steps on the full path', () => {
+  const t = reportText();
+  assert.match(t, /full path[^.]*Plan, Review, Checks and Verify[^.]*grey[^.]*missing/i);
+  assert.match(t, /Verify[^.]*only when `verify` is configured/);
+});
+
+test('T19.6 report mergedBy is gate for the marker comment or the trailer', () => {
+  assert.match(reportText(), /`mergedBy` is `gate` when[^.]*<!-- devflow-gate-merged -->[^.]*Merged-by: devflow merge gate/);
+});
+
+test('T19.7 report mergedBy is human when the body has a devflow-run marker and no gate evidence', () => {
+  assert.match(reportText(), /otherwise `human` when the PR body has a `devflow-run` marker/);
+});
+
+test('T19.8 report mergedBy falls back to the 3.0.0 rule', () => {
+  assert.match(reportText(), /otherwise the 3\.0\.0 rule[^.]*`human`[^.]*other than the gate token owner[^.]*`unknown`/);
+});
