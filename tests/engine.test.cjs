@@ -342,7 +342,7 @@ test('scanWeakenedChecks ignores clean changes and moved assertions', async () =
   const { scanWeakenedChecks, checkConfigGlobs } = await helpers();
   const text = [
     diffOf('src/a.py', '@@ -1 +1,2 @@\n-x = 1\n+x = 2\n+# a comment about noqa-free code is fine'),
-    diffOf('tests/test_a.py', '@@ -3,2 +3,3 @@\n-    assert a == 1\n+    assert a == 2\n+    assert b == 3'),
+    diffOf('tests/test_a.py', '@@ -3,0 +4,2 @@\n+    assert a == 2\n+    assert b == 3'),
     diffOf('src/b.ts', '@@ -0,0 +1 @@\n+try { f() } catch (e) { log(e) }'),
   ].join('');
   assert.deepEqual(scanWeakenedChecks(text, checkConfigGlobs([{ name: 't', run: 'npm test' }])), []);
@@ -1991,4 +1991,112 @@ test('T1.18 "test is right" without a dev position leaves the finding open, no b
   assert.match(rep[0].reason, /^Review: Review still has/);
   assert.equal(count93(calls, 'qa-fix'), 2);
   assert.equal(count93(calls, 'fix'), 2);
+});
+
+// ---- #104: QA test rules: no unrelated fixture changes, no branch-state tests ----
+const scan104 = async (file, hunk, extra = '') => {
+  const { scanWeakenedChecks } = await helpers();
+  return scanWeakenedChecks(diffOf(file, hunk, extra), []).filter((h) => h.kind === 'changed-existing-test');
+};
+const Q104 = { qaFiles: ['tests/a.test.cjs'], devFiles: ['src/x.js'] };
+const CHANGED104 = '@@ -3 +3 @@\n-  assert.equal(a, 1);\n+  assert.equal(a, 2);';
+
+test('T3.1 the QA prompt forbids changing an existing test or fixture a Test cases row does not name', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] }, Q104);
+  const p = prompt(calls, 'qa #');
+  assert.match(p, /never change an existing test or fixture/i);
+  assert.match(p, /not named by a "Test cases" row/);
+  assert.match(p, /report it in (the|your) result/i);
+});
+
+test('T3.2 the QA prompt forbids branch-state tests and returns such a row as a review check', async () => {
+  const { calls } = await run({ ...BASE, issues: [1] }, Q104);
+  const p = prompt(calls, 'qa #');
+  assert.match(p, /no test may depend on branch state/i);
+  for (const w of ['diff against the base branch', 'current branch name', 'unpushed commits', 'current date']) assert.ok(p.includes(w), w);
+  assert.match(p, /review check, not a test/);
+});
+
+test('T3.3 a changed existing assertion outside qaFiles is a changed-existing-test hit', async () => {
+  const hits = await scan104('tests/test_a.py', '@@ -3 +3 @@\n-    assert a == 1\n+    assert a == 2');
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].file, 'tests/test_a.py');
+});
+
+test('T3.4 a deleted assertion line is a changed-existing-test hit', async () => {
+  const hits = await scan104('tests/test_a.py', '@@ -3 +2,0 @@\n-    assert a == 1');
+  assert.equal(hits.length, 1);
+});
+
+test('T3.5 a changed fixture line is a changed-existing-test hit', async () => {
+  const hunk = '@@ -2 +2 @@\n-  "name": "a",\n+  "name": "b",';
+  assert.equal((await scan104('tests/fixtures/users.json', hunk)).length, 1);
+  assert.equal((await scan104('web/fixtures/users.json', hunk)).length, 1);
+});
+
+test('T3.6 a new test file produces no changed-existing-test hit', async () => {
+  const hits = await scan104('tests/test_new.py', '@@ -0,0 +1,2 @@\n+def test_x():\n+    assert 1 == 1', 'new file mode 100644\n');
+  assert.deepEqual(hits, []);
+});
+
+test('T3.7 added lines only produce no changed-existing-test hit', async () => {
+  assert.deepEqual(await scan104('tests/test_a.py', '@@ -3,0 +4,2 @@\n+    assert a == 2\n+    assert b == 3'), []);
+});
+
+test('T3.8 a whitespace-only change produces no changed-existing-test hit', async () => {
+  assert.deepEqual(await scan104('tests/test_a.py', '@@ -3 +3 @@\n-    assert a == 1\n+        assert a == 1  '), []);
+});
+
+test('T3.9 a comment-only edit produces no changed-existing-test hit', async () => {
+  assert.deepEqual(await scan104('tests/test_a.py', '@@ -3 +3 @@\n-    # old note\n+    # new note'), []);
+  assert.deepEqual(await scan104('tests/a.test.cjs', '@@ -3 +3 @@\n-// old note\n+// new note'), []);
+});
+
+test('T3.10 a pure rename produces no changed-existing-test hit', async () => {
+  const { scanWeakenedChecks } = await helpers();
+  const text = 'diff --git a/tests/test_a.py b/tests/test_b.py\nsimilarity index 100%\nrename from tests/test_a.py\nrename to tests/test_b.py\n';
+  assert.deepEqual(scanWeakenedChecks(text, []).filter((h) => h.kind === 'changed-existing-test'), []);
+});
+
+test('T3.11 a changed pre-existing line in a qaFiles file is still a hit', async () => {
+  assert.equal((await scan104('tests/a.test.cjs', CHANGED104)).length, 1);
+});
+
+test('T3.12 a changed pre-existing line in a test file not in qaFiles is a hit', async () => {
+  assert.equal((await scan104('tests/other.test.cjs', CHANGED104)).length, 1);
+});
+
+test('T3.13 a changed-existing-test hit in a qaFiles file goes to the QA fix agent, one outside to the dev Fix agent', async () => {
+  const diff = diffOf('tests/a.test.cjs', CHANGED104) + diffOf('tests/other.test.cjs', CHANGED104);
+  const seen = { n: 0 };
+  const { calls } = await run({ ...BASE, issues: [1] }, { ...Q104, diff: () => (seen.n++ === 0 ? diff : '') });
+  const qf = prompt(calls, 'qa-fix');
+  const df = prompt(calls, 'fix');
+  assert.match(qf, /tests\/a\.test\.cjs:/);
+  assert.doesNotMatch(qf, /tests\/other\.test\.cjs:/);
+  assert.match(df, /tests\/other\.test\.cjs:/);
+  assert.doesNotMatch(df, /tests\/a\.test\.cjs:/);
+});
+
+test('T3.14 the review prompt and reviewer.md call a changed existing fixture or assertion a warning', async () => {
+  const md = fs.readFileSync(path.join(__dirname, '..', 'agents', 'reviewer.md'), 'utf8');
+  const { calls } = await run({ ...BASE, issues: [1] });
+  for (const text of [md, prompt(calls, 'review')]) {
+    assert.match(text, /changed-existing-test/);
+    assert.match(text, /existing fixture or assertion[^.]*warning/i);
+  }
+});
+
+test('T3.15 the spec skill QA step lists a branch-state row as a review check, not a test row', () => {
+  const md = fs.readFileSync(path.join(__dirname, '..', 'skills', 'spec', 'SKILL.md'), 'utf8');
+  assert.match(md, /only against branch state[^.]*review check[^.]*not a test row/i);
+});
+
+test('T3.16 an accepted changed-existing-test hit is not a blocking finding', async () => {
+  const diff = diffOf('tests/other.test.cjs', CHANGED104);
+  const review = { verdict: 'pass', findings: [], acceptedWeakenings: [{ file: 'tests/other.test.cjs', line: 3, reason: 'row T1.2 names it' }] };
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { ...Q104, diff, review });
+  assert.equal(rep[0].status, 'pr');
+  assert.ok(!has(calls, 'fix'));
+  assert.match(prompt(calls, 'ship'), /weakened checks kept after review: tests\/other\.test\.cjs:3 changed-existing-test/);
 });
