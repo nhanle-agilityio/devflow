@@ -342,10 +342,12 @@ test('scanWeakenedChecks ignores clean changes and moved assertions', async () =
   const { scanWeakenedChecks, checkConfigGlobs } = await helpers();
   const text = [
     diffOf('src/a.py', '@@ -1 +1,2 @@\n-x = 1\n+x = 2\n+# a comment about noqa-free code is fine'),
-    diffOf('tests/test_a.py', '@@ -3,0 +4,2 @@\n+    assert a == 2\n+    assert b == 3'),
+    diffOf('tests/test_a.py', '@@ -3,2 +3,3 @@\n-    assert a == 1\n+    assert a == 2\n+    assert b == 3'),
     diffOf('src/b.ts', '@@ -0,0 +1 @@\n+try { f() } catch (e) { log(e) }'),
   ].join('');
-  assert.deepEqual(scanWeakenedChecks(text, checkConfigGlobs([{ name: 't', run: 'npm test' }])), []);
+  // a changed existing assertion is a changed-existing-test hit (T3.3), not a removed assertion; this test covers the removed-assertion rule only
+  const hits = scanWeakenedChecks(text, checkConfigGlobs([{ name: 't', run: 'npm test' }])).filter((h) => h.kind !== 'changed-existing-test');
+  assert.deepEqual(hits, []);
 });
 
 test('checkConfigGlobs adds Makefile for make checks and script paths, not tool binaries', async () => {
