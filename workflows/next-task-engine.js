@@ -706,6 +706,8 @@ function scanWeakenedChecks(diffText, configGlobs, ignoreGlobs) {
     /(^|\/)(tests?|__tests__|spec|specs)\//.test(f) ||
     /(^|\/)(test_[^/]*\.py|[^/]*_test\.(py|go|rs)|[^/]*\.(test|spec)\.[cm]?[jt]sx?|[^/]*Tests?\.(java|kt)|[^/]*_spec\.rb)$/.test(f) ||
     /(^|\/)src\/test\//.test(f)
+  const isFixtureFile = (f) => /(^|\/)(fixtures?|__snapshots__|__fixtures__|testdata)\//.test(f) || /\.snap$/.test(f)
+  const COMMENT_ONLY = /^\s*(#|\/\/|\/\*|\*|--\s)/
   const isProse = (f) => /\.(md|mdx|txt|rst|adoc)$/i.test(f) || /(^|\/)docs\//.test(f)
   const ADDED = [
     { kind: 'noqa', re: /#\s*noqa\b/i },
@@ -776,6 +778,22 @@ function scanWeakenedChecks(diffText, configGlobs, ignoreGlobs) {
       if (lostAsserts > 0) {
         const first = f.removed.find((l) => ASSERT.test(l.text))
         hits.push({ file: f.file, line: first.line, kind: `removed ${lostAsserts} assertion(s)`, text: first.text.trim() })
+      }
+    }
+    // A changed or deleted line that existed before the branch, in a test or fixture file (QA files included).
+    // Blank lines, comment-only lines and lines that come back unchanged apart from whitespace are not changes.
+    if (isTestFile(f.file) || isFixtureFile(f.file)) {
+      const squash = (t) => t.replace(/\s+/g, '')
+      const kept = new Map()
+      for (const a of f.added) kept.set(squash(a.text), (kept.get(squash(a.text)) || 0) + 1)
+      for (const r of f.removed) {
+        const key = squash(r.text)
+        if (!key || COMMENT_ONLY.test(r.text)) continue
+        if (kept.get(key) > 0) {
+          kept.set(key, kept.get(key) - 1)
+          continue
+        }
+        hits.push({ file: f.file, line: r.line, kind: 'changed-existing-test', text: r.text.trim() })
       }
     }
   }
@@ -1154,7 +1172,8 @@ Instructions:
 1. ${step1} ${DECISIONS_NOTE}
 2. Read the project's CLAUDE.md for how tests are written (fixtures, test layers, naming).
 3. Write a test for every "Test cases" row with priority "must" (and "should" rows when cheap), from the spec, the issue and its Decisions only: black box, against the public interface. Do not read or depend on the dev agent's uncommitted changes (do not run git diff or open files outside your own and the existing code). Make each test traceable to its row id. ${TEST_NAMING} ${e2eRule(false)}
-4. Only create or edit these files: ${JSON.stringify(own.qaFiles)}. Never touch any other file.
+4. Only create or edit these files: ${JSON.stringify(own.qaFiles)}. Never touch any other file. Never change an existing test or fixture (a line that existed before this branch) that is not named by a "Test cases" row: add new tests and new fixture data instead, and if an existing test or fixture seems to need a change, leave it and report it in the result (questions, starting with "[QA] ").
+   No test may depend on branch state: not on a diff against the base branch, the current branch name, unpushed commits or the current date. A row that can only be checked that way is not written as a test: leave it out and report it in the result as a review check, not a test.
 5. Do NOT commit, stage or stash anything: the workflow commits your tests first. The tests are expected to fail until the change exists; you may run them to check they are collected and fail for the right reason (a missing behaviour, not a syntax or import error of your own).
 6. If a row cannot be tested as written (no clear expected result, contradicts the acceptance criteria or another row), do not invent the expectation: add a question starting with "[QA] " and return status "blocked". Otherwise questions = [].
 Return status, tests (row id and test name), filesChanged (the files you created or edited), questions, and ${readReturn(src)}.`
@@ -1347,7 +1366,7 @@ Review, in this order:
 3. Scope creep: changes not needed for the acceptance criteria.
 4. CLAUDE.md conventions and its "Never" list.
 5. Out of scope: an item in the out-of-scope list below that leaves behaviour unmet that the issue's acceptance criteria (or a "must" Test cases row) require is NOT out of scope: report it as critical, naming the criterion (for example "AC2.5 requires X; the out-of-scope note leaves it as is"). Only problems the criteria do not cover may stay out of scope.
-6. Weakened checks: a deterministic scan of the diff found the hits below (new noqa / type: ignore / eslint-disable / ts-ignore, skipped, focused or deleted tests, removed assertions, empty except or catch, edited check configuration). Each one is critical unless the issue itself asks for exactly that change. For each hit either report it as a critical finding (same file and line) or, only when the issue requires it, list it in acceptedWeakenings with the reason; an accepted hit stays in the PR and makes it risk:high. Also report as critical any other weakening of a check that the scan missed.
+6. Weakened checks: a deterministic scan of the diff found the hits below (new noqa / type: ignore / eslint-disable / ts-ignore, skipped, focused or deleted tests, removed assertions, empty except or catch, edited check configuration). Each one is critical unless the issue itself asks for exactly that change. For each hit either report it as a critical finding (same file and line) or, only when the issue requires it, list it in acceptedWeakenings with the reason; an accepted hit stays in the PR and makes it risk:high. Also report as critical any other weakening of a check that the scan missed. A hit of kind "changed-existing-test" (a changed or deleted line that existed before the branch, in a test or fixture file) is a warning, not critical: a changed existing fixture or assertion outside the issue's rows is a warning finding at the same file and line; accept it in acceptedWeakenings only when a "Test cases" row names the change.
 ${fragmentReview(issue)}Scan hits: ${hits && hits.length ? JSON.stringify(hits) : 'none'}
 Commit structure: a finding about how the commits are split, their order or their message wording is a suggestion, whatever its severity would otherwise be: set category: "commit-structure" on it and report it as a suggestion. Give every other finding a short category slug (for example correctness, tests, scope).
 Severity: critical = wrong behaviour / data loss / security / rule violation; warning = likely bug, missing test, scope creep; suggestion = optional improvement. Only report real problems with a file and line. verdict "pass" means no critical or warning findings.
@@ -1999,6 +2018,10 @@ async function runIssue(issue) {
         if (acceptedHit(h, accepted)) continue
         if (review.findings.some((f) => f.severity === 'critical' && f.file === h.file && Number(f.line) === Number(h.line))) continue
         injected++
+        if (h.kind === 'changed-existing-test') {
+          review.findings.push({ severity: 'warning', file: h.file, line: h.line, category: 'tests', problem: `Changed existing test or fixture line (changed-existing-test): ${h.text || h.file}`, fix: 'Restore the original line; keep the change only if a "Test cases" row of the issue names it.' })
+          continue
+        }
         review.findings.push({ severity: 'critical', file: h.file, line: h.line, problem: `Weakened check (${h.kind}): ${h.text || h.file}`, fix: 'Remove it and fix the cause instead; keep it only if the issue itself requires it.' })
       }
       state.weakened = hits.filter((h) => acceptedHit(h, accepted)).map((h) => Object.assign({}, h, { reason: (accepted.find((a) => a.file === h.file && Number(a.line) === Number(h.line)) || {}).reason || '' }))
