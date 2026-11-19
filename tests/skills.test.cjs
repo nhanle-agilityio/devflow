@@ -705,3 +705,45 @@ test('T14.5 doctor tag check skipped without any declared version', () => {
   const l = doctorTagCheck();
   assert.match(l, /skipped[^.]*neither|neither[^.]*skipped/i);
 });
+
+// ---- T22 (#103): doctor "Waiting on you" section ----
+const doctorWaiting = () => section(read('skills/doctor/SKILL.md'), /^## Waiting on you/m, /^## (?!Waiting on you)/m);
+
+test('T22.1 doctor ends with a read-only Waiting on you section with six categories and commands', () => {
+  const text = read('skills/doctor/SKILL.md');
+  const w = doctorWaiting();
+  assert.ok(text.trimEnd().endsWith(w.trimEnd()), 'Waiting on you is the last section');
+  assert.match(w, /read-only/i);
+  for (const re of [/\/devflow:answer #n/, /merge/i, /\/devflow:sync #pr/, /\/devflow:next-task/, /\/devflow:dispatch/, /\/devflow:accept #n/, /labels\.ready/]) {
+    assert.match(w, re);
+  }
+});
+
+test('T22.2 doctor lists an unclassifiable item as check by hand', () => {
+  assert.match(doctorWaiting(), /check by hand/i);
+});
+
+test('T22.3 doctor says so when nothing is waiting', () => {
+  assert.match(doctorWaiting(), /nothing (is waiting|to do)/i);
+});
+
+test('T22.4 doctor lists each issue or PR once in the first matching category', () => {
+  const w = doctorWaiting();
+  assert.match(w, /once[^.]*first matching category|first matching category[^.]*once/i);
+  const order = ['blocked', 'waiting for a merge', 'conflict or behind', 'ready', 'sub-issue', 'epic'];
+  let at = -1;
+  const orderLine = w.split('\n').find((l) => /first matching category/i.test(l)) || '';
+  for (const k of order) {
+    const i = orderLine.toLowerCase().indexOf(k);
+    assert.ok(i > at, `${k} follows the previous category in the order`);
+    at = i;
+  }
+});
+
+test('T22.5 doctor section has no cap on lines', () => {
+  assert.match(doctorWaiting(), /no cap/i);
+});
+
+test('T22.6 doctor Waiting on you never changes anything, also with --fix', () => {
+  assert.match(doctorWaiting(), /never changes anything[^.]*--fix|--fix[^.]*never changes anything/i);
+});
