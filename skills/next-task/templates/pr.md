@@ -55,6 +55,10 @@ Risk:
 
 <!-- Suggestions from the automated review that were not applied, with severity. "None" if empty. -->
 
+## Decisions taken
+
+<!-- Decisions the run took itself instead of blocking: a question it answered with the recommended option, a review warning shipped open. One line each: "- <question> -> <option> (<reason>)". "None" if empty. A PR with decisions carries the decisions:review label. -->
+
 ## Assumptions
 
 <!-- Decisions made on minor ambiguity that the spec did not answer. "None" if empty. -->

@@ -102,6 +102,8 @@ async function run(args, opts = {}) {
       const r = pick(opts.review, n, o.agentType);
       return Object.assign({ issueRead: true }, r ? JSON.parse(JSON.stringify(r)) : { verdict: 'pass', findings: [] });
     }
+    if (l.startsWith('changed-files')) return opts.changedFiles !== undefined ? pick(opts.changedFiles, n) : { ok: true, files: ['src/x.py'] };
+    if (l.startsWith('decisions')) return { ok: true, appended: ['- line'] };
     if (l.startsWith('ship')) return Object.assign({ ok: true, prNumber: 100 + n, url: 'u' + n }, pick(opts.ship, n) || {});
     if (l.startsWith('blocked')) return { ok: true, pushed: false };
     if (l.startsWith('restore')) return { ok: true };
@@ -840,7 +842,7 @@ test('test_t1_5_assigned_by_run_true_plan_block_removes_self', async () => {
 
 test('test_t1_6_assigned_by_run_true_review_block_removes_self', async () => {
   const review = { verdict: 'changes', findings: [{ severity: 'warning', file: 'src/x.py', line: 1, problem: 'p', fix: 'f' }] };
-  const { rep, calls } = await run({ ...BASE, issues: [1] }, { assignedByRun: true, review });
+  const { rep, calls } = await run({ ...BASE, config: { ...CFG, nextTask: { onQuestion: 'block' } }, issues: [1] }, { assignedByRun: true, review });
   assert.equal(rep[0].status, 'blocked');
   assert.match(rep[0].reason, /^Review:/);
   assert.match(prompt(calls, 'blocked'), /remove the authenticated user from the assignees/i);
@@ -1083,7 +1085,7 @@ test('test_t7_8_unknown_severity_blocks_fail_closed', async () => {
 });
 
 test('test_t7_9_warning_left_after_max_review_rounds_blocks_with_same_reason', async () => {
-  const cfg = { ...CFG, nextTask: { maxReviewRounds: 2 } };
+  const cfg = { ...CFG, nextTask: { maxReviewRounds: 2, onQuestion: 'block' } };
   const review = { verdict: 'pass', findings: [finding('warning')] };
   const { rep } = await run({ ...BASE, config: cfg, issues: [1] }, { review });
   assert.equal(rep[0].status, 'blocked');
@@ -1899,7 +1901,7 @@ test('T1.7 QA and dev fix rounds share maxFixRounds in the check loop', async ()
 });
 
 test('T1.8 a QA-file finding that stays open gets exactly maxReviewRounds rounds', async () => {
-  const { rep, calls } = await run(cfg93({ maxReviewRounds: 1 }), { ...Q93, review: always93([f93('tests/a.test.cjs')]) });
+  const { rep, calls } = await run(cfg93({ maxReviewRounds: 1, onQuestion: 'block' }), { ...Q93, review: always93([f93('tests/a.test.cjs')]) });
   assert.equal(rep[0].status, 'blocked');
   assert.match(rep[0].reason, /^Review:/);
   assert.equal(count93(calls, 'qa-fix'), 1);
@@ -1908,7 +1910,7 @@ test('T1.8 a QA-file finding that stays open gets exactly maxReviewRounds rounds
 });
 
 test('T1.9 a mixed round runs the QA fix agent, then the dev fix agent, and counts once', async () => {
-  const { rep, calls } = await run(cfg93({ maxReviewRounds: 1 }), { ...Q93, review: always93([f93('tests/a.test.cjs'), f93('src/x.js')]) });
+  const { rep, calls } = await run(cfg93({ maxReviewRounds: 1, onQuestion: 'block' }), { ...Q93, review: always93([f93('tests/a.test.cjs'), f93('src/x.js')]) });
   assert.equal(rep[0].status, 'blocked');
   const order = labels(calls).filter((l) => l === 'qa-fix' || l === 'fix');
   assert.deepEqual(order, ['qa-fix', 'fix']);
@@ -1916,7 +1918,7 @@ test('T1.9 a mixed round runs the QA fix agent, then the dev fix agent, and coun
 });
 
 test('T1.10 a QA fix round that changes nothing still counts and the dev fix agent still runs', async () => {
-  const { rep, calls } = await run(cfg93({ maxReviewRounds: 1 }), { ...Q93, review: always93([f93('tests/a.test.cjs'), f93('src/x.js')]), qaFixOut: { filesChanged: [] } });
+  const { rep, calls } = await run(cfg93({ maxReviewRounds: 1, onQuestion: 'block' }), { ...Q93, review: always93([f93('tests/a.test.cjs'), f93('src/x.js')]), qaFixOut: { filesChanged: [] } });
   assert.equal(rep[0].status, 'blocked');
   assert.equal(count93(calls, 'fix'), 1);
   assert.equal(count93(calls, 'review'), 2);
@@ -1988,7 +1990,7 @@ test('T1.17 reviewer.md and the review prompt name category commit-structure for
 });
 
 test('T1.18 "test is right" without a dev position leaves the finding open, no block', async () => {
-  const { rep, calls } = await run({ ...BASE, issues: [1] }, { ...Q93, ...right93, review: always93([f93('tests/a.test.cjs')]) });
+  const { rep, calls } = await run({ ...BASE, config: { ...CFG, nextTask: { onQuestion: 'block' } }, issues: [1] }, { ...Q93, ...right93, review: always93([f93('tests/a.test.cjs')]) });
   assert.equal(rep[0].status, 'blocked');
   assert.match(rep[0].reason, /^Review: Review still has/);
   assert.equal(count93(calls, 'qa-fix'), 2);
@@ -2101,4 +2103,21 @@ test('T3.16 an accepted changed-existing-test hit is not a blocking finding', as
   assert.equal(rep[0].status, 'pr');
   assert.ok(!has(calls, 'fix'));
   assert.match(prompt(calls, 'ship'), /weakened checks kept after review: tests\/other\.test\.cjs:3 changed-existing-test/);
+});
+
+// ---- #105: decide-or-block (smoke; the full matrix is in engine-decide.test.cjs) ----
+const Q105 = { text: 'which name', tag: 'BA', recommended: 'A', reason: 'r', productDecision: false, reversible: true, changesCriterion: false, dropsMustRow: false, changesContract: false, changesStoredFormat: false, lowersRisk: false, skipsCheck: false, needsDestructiveGit: false, outsideRepo: false };
+
+test('a safe plan question is decided, recorded and shipped with decisions:review', async () => {
+  let n = 0;
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { planOut: () => (n++ === 0 ? { status: 'blocked', questions: [Q105] } : {}) });
+  assert.equal(rep[0].status, 'pr');
+  assert.match(prompt(calls, 'decisions'), /decided by run: which name -> A \(r\)/);
+  assert.match(prompt(calls, 'ship'), /decisions:review/);
+});
+
+test('a question that changes a criterion blocks with its recommended option and the suffix', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { planBlocked: true, planOut: () => ({ questions: [{ ...Q105, changesCriterion: true }] }) });
+  assert.equal(rep[0].status, 'blocked');
+  assert.match(prompt(calls, 'blocked'), /Recommended: A \(r\) \[changes a criterion: typed answer needed\]/);
 });
