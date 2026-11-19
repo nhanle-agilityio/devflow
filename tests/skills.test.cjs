@@ -747,3 +747,9 @@ test('T22.5 doctor section has no cap on lines', () => {
 test('T22.6 doctor Waiting on you never changes anything, also with --fix', () => {
   assert.match(doctorWaiting(), /never changes anything[^.]*--fix|--fix[^.]*never changes anything/i);
 });
+
+test('T22.7 doctor sub-issue not ready leaves out in-review sub-issues and ones with an open PR', () => {
+  const l = doctorWaiting().split('\n').find((x) => /Sub-issue not ready/.test(x)) || '';
+  assert.match(l, /labels\.review/);
+  assert.match(l, /open PR/i);
+});
