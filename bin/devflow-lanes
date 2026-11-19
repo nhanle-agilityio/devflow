@@ -2,7 +2,7 @@
 'use strict';
 // devflow-lanes: group ready issues into lanes that can run in parallel without colliding.
 // Input (stdin JSON): {"maxLanes": N, "ignoreHotspots": [string], "issues": [{"number": int, "hotspots": [string], "dependsOn": [int]}]}
-// Output (stdout JSON): {"lanes": [{"issues": [int], "sharedHotspots": [string]}], "deferred": [...], "ignoredHotspots": [string], "warnings": [...]}
+// Output (stdout JSON): {"lanes": [{"issues": [int], "sharedHotspots": [string], "ignoredTouched": [string]}], "deferred": [...], "ignoredHotspots": [string], "warnings": [...]}
 
 const USAGE = `Usage: devflow-lanes < input.json
 
@@ -11,7 +11,8 @@ Hotspots matching ignoreHotspots (exact path, or glob with * and **; default ["R
 none) are dropped before grouping and listed in "ignoredHotspots".
 Issues that share a hotspot (exact path, trimmed) or depend on each other (inside the set) share a lane;
 inside a lane, parents come first, ties by issue number. Lanes are sorted by smallest issue number; lanes
-beyond maxLanes (default 3) go to "deferred". Prints {"lanes", "deferred", "ignoredHotspots", "warnings"} as JSON.
+beyond maxLanes (default 3) go to "deferred". Per lane, "ignoredTouched" lists the ignored hotspots (exact path) that
+the lane's issues name and an earlier lane's issues also name, sorted ([] when none). Prints {"lanes", "deferred", "ignoredHotspots", "warnings"} as JSON.
 Exits 1 on invalid input.`;
 
 const DEFAULT_IGNORE = ['README.md', 'CHANGELOG.md'];
@@ -72,14 +73,16 @@ function planLanes(input) {
   const { maxLanes, ignoreHotspots, issues: rawIssues } = validate(input);
   const ignore = ignoreHotspots.map(globToRegExp);
   const ignored = new Set();
-  const issues = rawIssues.map((x) => ({
-    ...x,
-    hotspots: x.hotspots.filter((h) => {
+  const issues = rawIssues.map((x) => {
+    const ignoredNamed = [];
+    const hotspots = x.hotspots.filter((h) => {
       if (!ignore.some((re) => re.test(h))) return true;
       ignored.add(h);
+      ignoredNamed.push(h);
       return false;
-    }),
-  }));
+    });
+    return { ...x, hotspots, ignoredNamed };
+  });
   const byNum = new Map(issues.map((x) => [x.number, x]));
   const parent = new Map(issues.map((x) => [x.number, x.number]));
   const find = (a) => {
@@ -134,11 +137,21 @@ function planLanes(input) {
     const counts = new Map();
     for (const m of members) for (const h of m.hotspots) counts.set(h, (counts.get(h) || 0) + 1);
     const sharedHotspots = [...counts].filter(([, c]) => c > 1).map(([h]) => h).sort();
-    return { issues: order, sharedHotspots, min: Math.min(...nums) };
+    const named = new Set(members.flatMap((m) => m.ignoredNamed));
+    return { issues: order, sharedHotspots, named, min: Math.min(...nums) };
   });
   all.sort((a, b) => a.min - b.min);
 
-  const lanes = all.slice(0, maxLanes).map(({ issues: i, sharedHotspots }) => ({ issues: i, sharedHotspots }));
+  // ignoredTouched: ignored hotspots (exact path) this lane names that an earlier lane also names.
+  const seenEarlier = new Set();
+  for (const lane of all) {
+    lane.ignoredTouched = [...lane.named].filter((h) => seenEarlier.has(h)).sort();
+    for (const h of lane.named) seenEarlier.add(h);
+  }
+
+  const lanes = all
+    .slice(0, maxLanes)
+    .map(({ issues: i, sharedHotspots, ignoredTouched }) => ({ issues: i, sharedHotspots, ignoredTouched }));
   const deferred = all
     .slice(maxLanes)
     .map(({ issues: i }) => ({ issues: i, reason: `over maxLanes (${maxLanes})` }));
