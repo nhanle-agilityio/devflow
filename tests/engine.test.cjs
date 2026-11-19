@@ -2152,17 +2152,17 @@ test('T7.3 a branch with another type prefix does not match and a new branch is 
   assert.match(p, /does not match/);
 });
 
+// The matching and ranking rules live only in the Branch prompt (a model applies them with git), so these tests
+// pin the rule text; they cannot be exercised without git.
 test('T7.4 several matches: the one with an open devflow PR wins and is named in Assumptions', async () => {
   const { calls } = await run({ ...BASE, issues: [12] }, T7_LABELS);
   const p = prompt(calls, 'branch');
-  assert.match(p, /several/i);
-  assert.match(p, /open (devflow )?PR/);
-  assert.match(p, /devflow/);
+  assert.match(p, /With several matches take the one with an open devflow PR[^]*, otherwise the origin branch whose newest commit is the most recent/);
 });
 
 test('T7.5 several matches without a PR: the remote branch with the newest commit wins', async () => {
   const { calls } = await run({ ...BASE, issues: [12] }, T7_LABELS);
-  assert.match(prompt(calls, 'branch'), /newest commit/);
+  assert.match(prompt(calls, 'branch'), /otherwise the origin branch whose newest commit is the most recent[^]*a branch that exists only locally ranks after every origin one/);
 });
 
 test('T7.6 the prefix ends with the hyphen after the issue number', async () => {
@@ -2181,7 +2181,18 @@ test('T7.7 a base conflict on a resumed branch goes to Integrate, which resolves
   assert.match(p, /git merge --no-edit origin\/main/);
   assert.match(p, /src\/x\.py/);
   assert.match(p, /resolve/i);
-  assert.ok(!/git merge --abort[^.]*return ok=false with the conflicting files\. Return resumed/.test(prompt(calls, 'branch')));
+  assert.match(prompt(calls, 'branch'), /baseConflict=true/);
+});
+
+test('T7.7c stacked on one parent: Integrate re-runs the merge Branch aborted (the parent branch) once, not twice', async () => {
+  const parents = [{ branch: 'feat/11-p', prNumber: 50, issue: 11 }];
+  const { rep, calls } = await run({ ...BASE, issues: [12] }, { ...T7_LABELS, parents, branch: { branch: 'feat/12-foo', resumed: true, commits: ['abc x'], baseConflict: true, conflictFiles: ['src/x.py'] } });
+  assert.equal(rep[0].status, 'pr');
+  const p = prompt(calls, 'integrate');
+  assert.match(p, /merging origin\/feat\/11-p into it conflicts in/);
+  assert.match(p, /git merge --no-edit origin\/feat\/11-p` first/);
+  assert.ok(!/git merge --no-edit origin\/main/.test(p));
+  assert.match(p, /the only parent was merged in the base merge above, so skip this step/);
 });
 
 test('T7.7b no base conflict, no Integrate call', async () => {
