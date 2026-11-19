@@ -3,7 +3,8 @@
 // Merges at most one `devflow` + `risk:low` PR per run, and only when everything is green.
 // Candidates are tried in priority order (the linked issue's labels.priority label, then PR number);
 // priority only changes the order, never the rules.
-// Config: .claude/devflow.json (baseBranch, github, labels, review, mergeGate). Claude itself never merges.
+// A PR labelled labels.decisionsReview (the run took decisions) waits for a human unless nextTask.trustDecisions is true.
+// Config: .claude/devflow.json (baseBranch, github, labels, review, mergeGate, nextTask). Claude itself never merges.
 // While review.github is off the devflow/review check is ignored; with no other required check left the gate
 // refuses to merge anything (see effectiveRequiredChecks).
 
@@ -21,7 +22,7 @@ const REVIEW_BOT = 'github-actions[bot]';
 const DEFAULTS = {
   baseBranch: 'main',
   labels: {
-    devflow: 'devflow', riskLow: 'risk:low', riskHigh: 'risk:high', blocked: 'agent:blocked', stacked: 'stacked',
+    devflow: 'devflow', riskLow: 'risk:low', riskHigh: 'risk:high', blocked: 'agent:blocked', stacked: 'stacked', decisionsReview: 'decisions:review',
     priority: ['priority:critical', 'priority:high', 'priority:normal', 'priority:low'],
   },
   mergeGate: { enabled: false, dryRun: true, requiredChecks: ['devflow/review'], method: 'merge' },
@@ -331,6 +332,10 @@ async function evaluate(ctx, config, listed, state) {
   if (names.has(labels.riskHigh)) return { action: 'skipped', reason: `${labels.riskHigh}: waits for a human` };
   if (!names.has(labels.riskLow)) return { action: 'skipped', reason: 'no risk label: waits for a human' };
   if (names.has(labels.blocked)) return { action: 'skipped', reason: 'blocked' };
+  // Decisions taken by the run: a human looks first, unless the project trusts them. Before any API call.
+  if (names.has(labels.decisionsReview) && config.nextTask?.trustDecisions !== true) {
+    return { action: 'skipped', reason: `${labels.decisionsReview}: waits for a human` };
+  }
   if (listed.base.ref !== baseBranch) {
     return { action: 'skipped', reason: `stacked on ${listed.base.ref}: waits for its parent` };
   }
