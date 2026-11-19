@@ -1163,6 +1163,9 @@ function integratePrompt(issue, branch, baseConflict) {
   const parents = parentsOf(issue)
   const list = parents.map((p, i) => `${i + 1}. ${remote}/${p.branch} (PR #${p.prNumber}, issue #${p.issue})`).join('\n')
   const checks = cfg.checks.map((c, i) => `${i + 1}. [${c.name}] ${c.run}`).join('\n')
+  // The ref Branch merged into the resumed branch: the parent PR's branch when stacked on exactly one, else the base.
+  const mergeRef = parentRefFor(issue)
+  const hasBase = baseConflict && baseConflict.length
   return `Integrate the branches of the open dependencies of issue #${issue.number} into branch ${branch} (already checked out, created from ${baseRef}). ${MCP_NOTE}
 
 devflow config:
@@ -1170,9 +1173,9 @@ ${cfgJson}
 
 ${issueBlock(issue)}
 
-${parents.length ? `Parent branches, in order:\n${list}\n\n` : ''}${baseConflict && baseConflict.length ? `Base merge: this branch was resumed from an earlier run, and merging ${baseRef} into it conflicts in: ${JSON.stringify(baseConflict)}. Run \`git merge --no-edit ${baseRef}\` first and resolve the conflict here, like a parent conflict: use the issue, its acceptance criteria and Decisions so that the behaviour of the branch and of the base both survive, stage files by name and complete the merge with the default message. A conflict in a file matching risk.highPaths (${JSON.stringify((cfg.risk && cfg.risk.highPaths) || [])}) is still resolved here (a high-risk file does not stop the run; the PR is escalated to risk:high afterwards). Block only when the conflict is in behaviour the issue does not cover: then run \`git merge --abort\` and return ok=false with the conflicting files and the question in problem and in "questions".\n\n` : ''}Steps:
+${parents.length ? `Parent branches, in order:\n${list}\n\n` : ''}${baseConflict && baseConflict.length ? `Base merge: this branch was resumed from an earlier run, and merging ${mergeRef} into it conflicts in: ${JSON.stringify(baseConflict)}. Run \`git merge --no-edit ${mergeRef}\` first and resolve the conflict here, like a parent conflict: use the issue, its acceptance criteria and Decisions so that the behaviour of the branch and of the base both survive, stage files by name and complete the merge with the default message. A conflict in a file matching risk.highPaths (${JSON.stringify((cfg.risk && cfg.risk.highPaths) || [])}) is still resolved here (a high-risk file does not stop the run; the PR is escalated to risk:high afterwards). Block only when the conflict is in behaviour the issue does not cover: then run \`git merge --abort\` and return ok=false with the conflicting files and the question in problem and in "questions".\n\n` : ''}Steps:
 1. \`git fetch ${remote}\`${parents.length ? ' (at least each parent branch above)' : ''}.
-2. For each parent in the order above (none: skip this step) run \`git merge --no-edit ${remote}/<branch>\`. If a parent branch no longer exists on ${remote}, read its PR with pull_request_read: merged means its changes are already in ${base}, so skip it (leave it out of merged); closed without merging means return ok=false with the problem. Keep the default merge commit message. Never rebase, never force, never rewrite commits.
+2. For each parent in the order above (none: skip this step${hasBase && parents.length === 1 ? '; the only parent was merged in the base merge above, so skip this step' : ''}) run \`git merge --no-edit ${remote}/<branch>\`. If a parent branch no longer exists on ${remote}, read its PR with pull_request_read: merged means its changes are already in ${base}, so skip it (leave it out of merged); closed without merging means return ok=false with the problem. Keep the default merge commit message. Never rebase, never force, never rewrite commits.
 3. If a merge conflicts, resolve it using the linked issues and the spec so that the behaviour of BOTH parents survives; stage files by name and complete the merge with the default message. Do not change anything that is not needed to resolve the conflict.
 4. After all merges, run every configured check; fix only what the integration itself broke:
 ${checks}
