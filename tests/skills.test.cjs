@@ -846,3 +846,30 @@ test('T19.7 report mergedBy is human when the body has a devflow-run marker and 
 test('T19.8 report mergedBy falls back to the 3.0.0 rule', () => {
   assert.match(reportText(), /otherwise the 3\.0\.0 rule[^.]*`human`[^.]*other than the gate token owner[^.]*`unknown`/);
 });
+
+// ---- T6: /devflow:answer accept ----
+const answerStep2 = () => answerStep(2);
+
+test('T6.1 answer accept answers every open question with its Recommended option', () => {
+  assert.match(answerStep2(), /`\/devflow:answer #n accept`[^.]*answers every open question with its `Recommended:` option/);
+});
+
+test('T6.2 answer accept with an override takes the typed answer for that question only', () => {
+  assert.match(answerStep2(), /`accept; 2: <answer>`[^.]*recommended options (for all questions )?except question 2[^.]*typed answer/);
+});
+
+test('T6.3 answer accept refuses a criterion-changing question and records nothing until all are answered', () => {
+  const s = answerStep2();
+  assert.match(s, /`accept` refuses a question whose recommended option changes an acceptance criterion/);
+  assert.match(s, /\[changes a criterion: typed answer needed\]/);
+  assert.match(s, /asks? for a typed answer/);
+  assert.match(s, /no answer is recorded until all (questions )?are answered/i);
+});
+
+test('T6.4 answer accept with no open questions says so and changes nothing', () => {
+  assert.match(answerStep2(), /`accept` with no open questions says so and changes nothing/);
+});
+
+test('T6.5 answer accept override out of range or repeated refuses the whole answer', () => {
+  assert.match(answerStep2(), /override number out of range or repeated refuses the whole answer/);
+});
