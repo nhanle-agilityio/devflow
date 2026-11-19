@@ -688,6 +688,32 @@ test('test_t11_5_trace_renders_290_data', () => {
   assert.ok(text.includes('#102 Second issue'));
 });
 
+// T1.1 (#125)
+test('test_t1_1_trace_short_path_shows_skipped_plan_and_verify', () => {
+  const short = { path: 'short', reviewRounds: 1, blocked: 0, claimedAt: null, mergedAt: null, durationHours: null, mergedBy: 'gate' };
+  const data = { spec: { slug: 'e', title: 'Epic', epic: null, pr: null }, issues: [traceIssue({ metrics: short })], release: null };
+  const count = (s, w) => s.split(w).length - 1;
+  const en = renderTrace(data, 'en');
+  assert.strictEqual(count(en, 'skipped (short path)'), 2, 'Plan and Verify are skipped');
+  assert.ok(en.includes('Checks'), 'Checks row present');
+  assert.ok(en.includes('Verify'), 'Verify row present');
+  assert.match(renderTrace(data, 'vi'), /skipped \(short path\)|bỏ qua \(đường ngắn\)/);
+  const html = read('skills/report/templates/trace.html');
+  assert.match(html, /\.node\.skipped\s*\{[^}]*--c:/, 'neutral skipped style exists');
+});
+
+// T1.2 (#125)
+test('test_t1_2_trace_full_path_shows_plan_review_checks_verify_greyed_when_missing', () => {
+  const full = { path: 'full', reviewRounds: 1, blocked: 0, claimedAt: null, mergedAt: null, durationHours: null, mergedBy: 'gate' };
+  const mk = (extra) => Object.assign({ spec: { slug: 'e', title: 'Epic', epic: null, pr: null }, issues: [traceIssue({ metrics: full, review: null })], release: null }, extra);
+  const withVerify = renderTrace(mk({ verifyConfigured: true }), 'en');
+  assert.ok(!withVerify.includes('skipped (short path)'), 'nothing skipped on the full path');
+  for (const w of ['Plan', 'Review', 'Checks', 'Verify']) assert.ok(withVerify.includes(w), w + ' row');
+  const without = renderTrace(mk({}), 'en');
+  assert.ok(without.includes('Checks'));
+  assert.ok(!without.includes('Verify'), 'Verify only when verify is configured');
+});
+
 // T11.6
 test('test_t11_6_report_read_only', () => {
   const t = reportText();
