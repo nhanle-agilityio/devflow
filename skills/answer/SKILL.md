@@ -1,7 +1,7 @@
 ---
 name: answer
 description: Answer the questions that blocked a devflow issue: append the decisions to the spec (via a small PR when the issue has a spec path), the issue and its epic, then set the issue ready again. Never merges.
-argument-hint: "#issue [1: answer; 2: answer ...]"
+argument-hint: "#issue [accept[; 2: answer] | 1: answer; 2: answer ...]"
 disable-model-invocation: true
 ---
 
@@ -31,6 +31,15 @@ Read the issue and all its comments. Find the latest comment whose body starts w
 2. Otherwise from comments posted after the questions comment, matched by number, by the authenticated user or by authors with `author_association` OWNER, MEMBER or COLLABORATOR, never bots. The latest trusted answer per question wins. Comments from anyone else are ignored and listed in the report as `ignored: not a collaborator`.
 
 Every question needs an answer. If any is missing, list the unanswered questions and stop; change nothing.
+
+### accept
+
+`/devflow:answer #n accept` answers every open question with its `Recommended:` option, taken from the questions comment. The form `accept; 2: <answer>` (after the issue number) takes the recommended options for all questions except question 2, which takes the typed answer; several overrides are separated by `;`. Rules:
+
+- `accept` refuses a question whose recommended option changes an acceptance criterion (the questions comment marks it with the suffix `[changes a criterion: typed answer needed]`) and asks for a typed answer for it. A question without a `Recommended:` option is treated the same way. No answer is recorded until all questions are answered: the other answers are not recorded either, and the user re-runs with `accept; <k>: <answer>`.
+- `accept` with no open questions says so and changes nothing.
+- An override number out of range or repeated refuses the whole answer and changes nothing.
+- A decision taken from a recommended option is recorded like any answer (steps 3 to 5), with the recommended option as the answer text.
 
 ## 3. Spec (BA role)
 
