@@ -2235,6 +2235,7 @@ test('T7.10 the Branch, Integrate and Implement prompts say a commit-structure q
 
 // ---- #113: next step per issue (T23) ----
 const NEXTS = ['answer', 'merge', 'sync', 'nothing', 'check by hand'];
+const FULL_LOW = { labels: ['risk:low', 'needs-e2e'] }; // full path (has a plan stage) and risk:low
 const decideOnce = () => {
   let n = 0;
   return { planOut: () => (n++ === 0 ? { status: 'blocked', questions: [Q105] } : {}) };
@@ -2253,7 +2254,7 @@ test('T23.2 a shipped risk:high PR has next merge', async () => {
 });
 
 test('T23.3 a risk:low PR with decisions:review and trustDecisions false has next merge', async () => {
-  const { rep } = await run({ ...BASE, issues: [1] }, { labels: ['risk:low'], ...decideOnce() });
+  const { rep } = await run({ ...BASE, issues: [1] }, { ...FULL_LOW, ...decideOnce() });
   assert.equal(rep[0].risk, 'low');
   assert.equal(rep[0].next, 'merge');
 });
@@ -2265,7 +2266,7 @@ test('T23.4 a shipped risk:low PR without the label has next nothing', async () 
 
 test('T23.5 decisions:review with trustDecisions true has next nothing', async () => {
   const cfg = { ...CFG, nextTask: { trustDecisions: true } };
-  const { rep } = await run({ ...BASE, config: cfg, issues: [1] }, { labels: ['risk:low'], ...decideOnce() });
+  const { rep } = await run({ ...BASE, config: cfg, issues: [1] }, { ...FULL_LOW, ...decideOnce() });
   assert.equal(rep[0].next, 'nothing');
 });
 
@@ -2310,7 +2311,7 @@ test('T23.12 failing checks come before conflict', async () => {
 });
 
 test('T23.13 every entry has next, one of the five allowed strings', async () => {
-  const { rep } = await run({ ...BASE, issues: [1, 2, 3, 4] }, { planBlocked: (n) => n === 2, taken: (n) => n === 3, labels: ['risk:low'] });
+  const { rep } = await run({ ...BASE, issues: [1, 2, 3, 4] }, { planBlocked: (n) => n === 2, taken: (n) => n === 3, ...FULL_LOW });
   assert.equal(rep.length, 4);
   for (const r of rep) assert.ok(NEXTS.includes(r.next), `#${r.issue}: ${r.next}`);
   assert.deepEqual(rep.map((r) => r.next), ['nothing', 'answer', 'check by hand', 'nothing']);
