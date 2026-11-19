@@ -197,6 +197,19 @@ Minor release: every new config key is optional and existing configs stay valid.
 
 ## Release process
 
-1. Bump `version` in `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`.
-2. Move the items to a new version heading in this file.
-3. Open a PR; after it merges, a human tags `vX.Y.Z` on `main` (Claude never merges or tags).
+This section is the release task template: a release task (an issue, or a human working by hand) copies these steps
+for version `X.Y.Z` and ticks them in the release PR. Claude never merges or tags.
+
+1. Open a release branch from `main`. Bump `version` in `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`
+   and every other place `tests/version.test.cjs` checks.
+2. Changelog: when `changelog.fragmentsDir` is set, run `node bin/devflow-changelog assemble --version X.Y.Z --date YYYY-MM-DD` and commit the result in the release PR; otherwise move the items under `[Unreleased]` to a new version heading in this file.
+3. When the release changes a reusable workflow (`.github/workflows/devflow-review.yml` or `devflow-merge-gate.yml`), the upgrade note of the release tells callers of the reusable workflow to move their pin to the new tag.
+4. Open the release PR.
+5. Smoke run, with the release candidate, in the sandbox repository (`nhanle-agilityio/devflow-sandbox`):
+   1. Load the plugin from the release branch with `claude --plugin-dir <checkout of the release branch>`.
+   2. Create two issues from the fixtures: one with the body of `docs/smoke/low.md` (labels `risk:low` and the ready label) and one with the body of `docs/smoke/high.md` (labels `risk:high` and the ready label).
+   3. Start both with `/devflow:dispatch` as two lanes (each lane runs `/devflow:next-task` on its issue).
+   4. Run the checker for both: `node bin/devflow-smoke --repo nhanle-agilityio/devflow-sandbox --issue <low> --expect low` and `node bin/devflow-smoke --repo nhanle-agilityio/devflow-sandbox --issue <high> --expect high`.
+   5. Record in the release PR: the number of conflicts, of "behind" updates and of `/devflow:sync` calls the two lanes needed, and the output of both checker runs.
+6. Merge the release PR only when both checks pass (a human merges). A release with a docs or UI change also needs its manual rows checked by a human before the merge.
+7. Tag `vX.Y.Z` on `main` right after the release PR merges (a human tags), so pinned callers and `/devflow:doctor` see the new version at once.

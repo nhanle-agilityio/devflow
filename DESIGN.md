@@ -59,6 +59,8 @@ skills/report/SKILL.md              /devflow:report (+ templates/trace.html, dat
 skills/doctor/SKILL.md              /devflow:doctor
 bin/devflow-lanes                   node, stdlib only: lane planner (JSON on stdin and stdout); called as ${CLAUDE_PLUGIN_ROOT}/bin/devflow-lanes
 bin/devflow-changelog               node, stdlib only: changelog fragments (has | preview | assemble); reads changelog.fragmentsDir and changelog.file from .claude/devflow.json
+bin/devflow-smoke                   node, stdlib only: read-only release smoke checker for one sandbox issue (gh api GET)
+docs/smoke/low.md, docs/smoke/high.md  release smoke fixture issue bodies (risk:low, risk:high)
 workflows/next-task-engine.js       meta.name "next-task-engine" → /devflow:next-task-engine (internal; users run /devflow:next-task)
 hooks/hooks.json                    PreToolUse guard (Bash|mcp__.*(merge_pull_request|push_files|create_or_update_file|delete_file)), PostToolUse formatter (Write|Edit|MultiEdit|NotebookEdit), SessionStart rules
 hooks/guard.py                      python3 (3.9+, stdlib only)
@@ -334,7 +336,17 @@ Output: a table check → `ok` / `warn` / `fail` → what to do, a line per fix 
 - `tests/scan.test.cjs` runs `bin/devflow-scan` on real temporary git repositories (hits, a clean branch, a bad ref, a missing config).
 - `tests/engine.test.cjs` runs `workflows/next-task-engine.js` with stub agents (each stage's agent is replaced by a scripted answer, so the real control flow runs): one issue through every stage, claim win/loss/taken, chains and a lane that continues, isolated runs, parallel QA and its commit order, merged questions, file ownership and QA/dev overlap, parents merged mid-run, test naming, the GitHub MCP stop, branch resume, manual checks reaching Review and Ship, the verify lock, the weakened-checks scanner (`parseDiff`, `scanWeakenedChecks`, `checkConfigGlobs`, called directly through the `args.exports` test hook) and its wiring into Review and Risk, and the out-of-scope rules.
 - CI: `.github/workflows/test.yml` (`pull_request` and pushes to `main`) runs `node --test tests/*.test.cjs` and the guard unittests on every PR.
-- Release process (in `CHANGELOG.md`): bump `version` in `plugin.json` and `marketplace.json`, move the items to a new version heading, open a PR; after it merges a human tags `vX.Y.Z` (Claude never merges or tags).
+- `tests/smoke.test.cjs`: `bin/devflow-smoke` against fixture GitHub data (an injected reader), its GET-only `gh` arguments, the `gh` missing and unauthenticated exits, the smoke fixtures and the release process text.
+
+## Release process
+
+The steps live at the bottom of `CHANGELOG.md`, which is the release task template; this is the design behind them.
+
+- Bump the version everywhere `tests/version.test.cjs` checks. With `changelog.fragmentsDir` set, the release PR runs `node bin/devflow-changelog assemble --version X.Y.Z --date YYYY-MM-DD` and commits the result; otherwise the items under `[Unreleased]` move to the new heading by hand.
+- The upgrade note of a release that changes a reusable workflow tells callers of the reusable workflow to move their pin to the new tag.
+- **Smoke run before the merge.** In the sandbox repository `nhanle-agilityio/devflow-sandbox` (fixtures only, never reset): load the plugin from the release branch with `--plugin-dir`, create two fresh issues from the fixtures `docs/smoke/low.md` (`risk:low`) and `docs/smoke/high.md` (`risk:high`), start them with `/devflow:dispatch` as two lanes (each runs `/devflow:next-task`), then run `bin/devflow-smoke --expect low` and `bin/devflow-smoke --expect high` on them. The release PR records the number of conflicts, "behind" updates and `/devflow:sync` calls the lanes needed. A human merges the release PR only when both checks pass; a docs or UI change also needs its manual rows checked by a human before the merge.
+- A human tags `vX.Y.Z` on `main` right after the release PR merges, so pinned callers and the doctor's tag check never see a declared version without its tag. Claude never merges or tags.
+- *Smoke checker* `bin/devflow-smoke --repo owner/name --issue <n> --expect low|high` (node, no dependencies; `run`, `check`, `ghArgs` and `makeGhReader` exported for tests). Every GitHub read goes through one reader function (API path → parsed JSON, `null` for a 404); the default runs `gh api -X GET <path>` and never passes a field or input flag, after `gh auth status` succeeds (`gh` missing or unauthenticated: message on stderr, exit 2). Closing PRs are the pull requests of the same repository in the issue's timeline (`cross-referenced`) whose body has a closing keyword for `#<n>` and that are open or merged. One line per check, `ok <check>: <detail>` or `fail <check>: <detail>`: `issue` (exists and is not a PR; `low` also needs it closed, `high` accepts open), `closing PR` (exactly one, labelled `devflow`), `run marker` (`<!-- devflow-run {...} -->` with `path` and `reviewRounds`), `review` (a `## Review` section), `risk line` (`Risk:` matches `--expect`), `merge` (`low`: merged with the gate's `<!-- devflow-gate-merged -->` comment or the `Merged-by: devflow merge gate` trailer on the merge commit, either counts; `high`: open, or merged with neither), and for `high` `risk label` (`risk:high`). A missing issue fails every check. Exit 0 only when all pass, 1 when one fails, 2 for a usage error, `gh` missing or unauthenticated, or a read error. The labels are the defaults (`devflow`, `risk:high`), as in the sandbox.
 
 ## Risk and the merge gate
 
