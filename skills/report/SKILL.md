@@ -32,7 +32,7 @@ Gather everything with the GitHub MCP server. Use `null` for what does not exist
 - **Questions**: the comment starting with `<!-- devflow-questions -->`: url, number of questions, whether human answers followed (a later human comment, or a `## Decisions` section in the issue body) and the answer link. The blocked label on an issue with unanswered questions means `blocked`.
 - **PR**: the merged PR that closes the issue, else the latest one that closes it: number, url, base branch, stacked or not (`labels.stacked` or base other than `baseBranch`), state, merged at, merged by and whether by the gate or a human, by the who-merged rule below.
 - **Review**: the `devflow/review` commit status on the PR head (success, failure, pending) with its description, the number of review rounds (count of distinct head SHAs that got a `devflow-verdict` marker in the bot summary comments, at least 1 when a verdict exists) and the url of the bot summary comment; with a `devflow/review` status the status is used; with no `devflow/review` status (a run without the review workflow), read the PR's `## Review` section and the `devflow-run` marker: `review.state` is `success` and `review.description` is "local review: pass, N round(s)", or `failure` and "local review: fail, N round(s)", N from the marker's `reviewRounds`, else the verdict-marker count; write the literal `round(s)`, never a singular or plural chosen by the count. Without a `## Review` section either, the state is `none`.
-- **Steps shown as skipped or missing**: on the short path, Plan and Verify show "skipped (short path)" in a neutral style, not grey, since the path never runs them. On the full path Plan, Review, Checks and Verify (Verify only when `verify` is configured) should exist and are grey when missing.
+- **Steps shown as skipped or missing**: on the short path, Plan and Verify show "skipped (short path)" in a neutral style, not grey, since the path never runs them. On the full path Plan, Review, Checks and Verify (Verify only when `verify` is configured) should exist and are grey when missing. The template draws this from `metrics.path`, `plan`, `review`, `checks`, `verify` and the top-level `verifyConfigured`: `checks` and `verify` are `{ "url": "" }` when the PR shows a checks or verify result (the PR body's Checks and Verify sections), else `null`; `verifyConfigured` is true when the project config has `verify`.
 - **Tests**: from the PR diff the test files changed and the number of test functions added or changed (by the project's test naming), and the Test matrix row ids covered (from the PR body, else the `T<n>.<k>` ids found in test names or comments).
 - **Commits** in order (sha, message) and whether the first commit of the PR is a `test(...)` commit (`testFirst`).
 - **Acceptance**: the comment starting with `<!-- devflow-accept -->` on the spec PR, with its pass, fail and not-checkable counts and, per issue, the result when the table names it.
@@ -56,6 +56,7 @@ Make one JSON object with exactly this shape (the template reads it, and a page 
   "spec": { "slug": "", "title": "", "path": "", "url": "", "epic": { "number": 0, "url": "" }, "pr": { "number": 0, "url": "", "mergedAt": "", "mergedBy": "", "byGate": false, "mergedByKnown": true } },
   "acceptance": { "url": "", "pass": 0, "fail": 0, "notCheckable": 0 },
   "release": { "tag": "", "url": "", "draft": false },
+  "verifyConfigured": false,
   "issues": [
     {
       "number": 0, "url": "", "title": "", "labels": [""], "risk": "low",
@@ -64,6 +65,8 @@ Make one JSON object with exactly this shape (the template reads it, and a page 
       "blocked": false,
       "pr": { "number": 0, "url": "", "base": "", "stacked": false, "state": "merged", "mergedAt": "", "mergedBy": "", "byGate": false, "mergedByKnown": true },
       "review": { "state": "success", "description": "", "rounds": 1, "url": "" },
+      "checks": { "url": "" },
+      "verify": { "url": "" },
       "tests": { "files": [""], "count": 0, "rows": [""], "testFirst": true },
       "commits": [ { "sha": "", "message": "" } ],
       "accepted": { "result": "pass", "url": "" },
