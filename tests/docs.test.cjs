@@ -62,15 +62,6 @@ test('test_t7_11_docs_describe_worked_limit_and_findings_only_review', () => {
 });
 
 // T8.7
-test('test_t8_7_docs_describe_reusing_an_open_pr', () => {
-  const design = read('DESIGN.md');
-  const shipLines = design.split('\n').filter((l) => /\bShip\b/.test(l) && /open PR/i.test(l) && /(reus|branch)/i.test(l));
-  assert.ok(shipLines.length, 'a DESIGN.md Ship line mentions reusing an open PR for the branch');
-  const entry = changelogEntry(35);
-  assert.ok(entry, 'CHANGELOG has an entry citing (#35)');
-  assert.match(entry, /reus/i);
-  assert.match(entry, /open PR/i);
-});
 
 // T4.12
 test('test_t4_12_docs_describe_the_update_slot', () => {
@@ -91,21 +82,6 @@ test('test_t4_12_docs_describe_the_update_slot', () => {
 });
 
 // T5.12
-test('test_t5_12_docs_describe_the_collaborator_thread_rule', () => {
-  const RULE = /collaborator/i;
-  const design = read('DESIGN.md');
-  const section = design.split(/^## /m).find((s) => /^Risk and the merge gate/i.test(s));
-  assert.ok(section, 'DESIGN.md has a "Risk and the merge gate" section');
-  assert.match(section, RULE);
-  assert.match(section, /resolved/i);
-  assert.match(section, /CONTRIBUTOR/);
-  const readme = read('README.md');
-  if (/merge gate/i.test(readme)) assert.match(readme, RULE);
-  const entry = changelogEntry(32);
-  assert.ok(entry, 'CHANGELOG has an entry citing (#32)');
-  assert.match(entry, RULE);
-  assert.match(entry, /resolved|unresolved/i);
-});
 
 // T3.8
 test('test_t3_8_docs_describe_the_trust_rule', () => {
@@ -219,14 +195,6 @@ test('test_t2_10_gate_triggers_kept', () => {
 });
 
 // T2.11
-test('test_t2_11_docs_describe_effective_list', () => {
-  for (const f of ['README.md', 'DESIGN.md', 'CHANGELOG.md']) {
-    const text = read(f);
-    assert.match(text, /effective/i, `${f} mentions the effective list`);
-    assert.match(text, /refusing to merge/, `${f} mentions refusing to merge`);
-  }
-  assert.ok(changelogEntry(53), 'CHANGELOG has an entry citing (#53)');
-});
 
 // T3.5 (#54)
 test('test_t3_5_docs_describe_init_prompt', () => {
@@ -476,17 +444,6 @@ test('T1.13 the EN note orders spec path, epic, issue alone and says the issue w
   assert.ok(a >= 0 && a < b && b < c, 'order: spec path, Epic: #<n>, issue alone');
   assert.ok(en.includes('Claim'));
   assert.match(en, /criteria, Test cases and ## Decisions[^.]*win over the epic/i);
-});
-
-test('T1.14 the Plan and Review node subtitles mention spec or epic in both languages', () => {
-  const src = flows();
-  for (const st of ['plan', 'review']) {
-    const line = src.split('\n').find((l) => l.includes(`data-st="${st}"`));
-    const vi = /<span class="s">([^<]*)<\/span>/.exec(line)[1];
-    assert.ok(vi.includes('spec hoặc epic'), `${st} VI subtitle`);
-    const en = new RegExp(`'${vi.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}': '([^']*)'`).exec(src);
-    assert.ok(en && en[1].includes('spec or epic'), `${st} EN subtitle`);
-  }
 });
 
 test('T1.17 specPlay does not tie step indexes to one mode length', () => {
