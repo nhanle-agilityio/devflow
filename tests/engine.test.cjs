@@ -2232,3 +2232,102 @@ test('T7.10 the Branch, Integrate and Implement prompts say a commit-structure q
     assert.match(p, /suggestion/, l);
   }
 });
+
+// ---- #113: next step per issue (T23) ----
+const NEXTS = ['answer', 'merge', 'sync', 'nothing', 'check by hand'];
+const decideOnce = () => {
+  let n = 0;
+  return { planOut: () => (n++ === 0 ? { status: 'blocked', questions: [Q105] } : {}) };
+};
+
+test('T23.1 a block with questions has next answer', async () => {
+  const { rep } = await run({ ...BASE, issues: [1] }, { planBlocked: true });
+  assert.equal(rep[0].status, 'blocked');
+  assert.equal(rep[0].next, 'answer');
+});
+
+test('T23.2 a shipped risk:high PR has next merge', async () => {
+  const { rep } = await run({ ...BASE, issues: [1] }, { labels: ['risk:high'] });
+  assert.equal(rep[0].status, 'pr');
+  assert.equal(rep[0].next, 'merge');
+});
+
+test('T23.3 a risk:low PR with decisions:review and trustDecisions false has next merge', async () => {
+  const { rep } = await run({ ...BASE, issues: [1] }, { labels: ['risk:low'], ...decideOnce() });
+  assert.equal(rep[0].risk, 'low');
+  assert.equal(rep[0].next, 'merge');
+});
+
+test('T23.4 a shipped risk:low PR without the label has next nothing', async () => {
+  const { rep } = await run({ ...BASE, issues: [1] }, { labels: ['risk:low'] });
+  assert.equal(rep[0].next, 'nothing');
+});
+
+test('T23.5 decisions:review with trustDecisions true has next nothing', async () => {
+  const cfg = { ...CFG, nextTask: { trustDecisions: true } };
+  const { rep } = await run({ ...BASE, config: cfg, issues: [1] }, { labels: ['risk:low'], ...decideOnce() });
+  assert.equal(rep[0].next, 'nothing');
+});
+
+test('T23.6 a risk:low PR in conflict or behind has next sync', async () => {
+  for (const mergeState of ['conflict', 'behind']) {
+    const { rep } = await run({ ...BASE, issues: [1] }, { labels: ['risk:low'], ship: { mergeState } });
+    assert.equal(rep[0].next, 'sync', mergeState);
+  }
+});
+
+test('T23.7 a risk:high PR in conflict has next sync, not merge', async () => {
+  const { rep } = await run({ ...BASE, issues: [1] }, { labels: ['risk:high'], ship: { mergeState: 'conflict' } });
+  assert.equal(rep[0].next, 'sync');
+});
+
+test('T23.8 a failed run has next check by hand', async () => {
+  const { rep } = await run({ ...BASE, issues: [1] }, { fixOut: null, checkFail: () => [{ check: 'test', output: 'x' }] });
+  assert.notEqual(rep[0].status, 'pr');
+  assert.equal(rep[0].next, 'check by hand');
+});
+
+test('T23.9 a skipped issue has next check by hand', async () => {
+  const { rep } = await run({ ...BASE, issues: [1] }, { taken: true });
+  assert.equal(rep[0].status, 'skipped');
+  assert.equal(rep[0].next, 'check by hand');
+});
+
+test('T23.10 a block with an empty questions list has next check by hand, not answer', async () => {
+  const { rep } = await run({ ...BASE, issues: [1] }, { planOut: () => ({ status: 'blocked', questions: [] }) });
+  assert.equal(rep[0].status, 'blocked');
+  assert.equal(rep[0].next, 'check by hand');
+});
+
+test('T23.11 a PR with failing checks has next check by hand', async () => {
+  const { rep } = await run({ ...BASE, issues: [1] }, { labels: ['risk:low'], ship: { checksFailing: true } });
+  assert.equal(rep[0].next, 'check by hand');
+});
+
+test('T23.12 failing checks come before conflict', async () => {
+  const { rep } = await run({ ...BASE, issues: [1] }, { labels: ['risk:low'], ship: { checksFailing: true, mergeState: 'conflict' } });
+  assert.equal(rep[0].next, 'check by hand');
+});
+
+test('T23.13 every entry has next, one of the five allowed strings', async () => {
+  const { rep } = await run({ ...BASE, issues: [1, 2, 3, 4] }, { planBlocked: (n) => n === 2, taken: (n) => n === 3, labels: ['risk:low'] });
+  assert.equal(rep.length, 4);
+  for (const r of rep) assert.ok(NEXTS.includes(r.next), `#${r.issue}: ${r.next}`);
+  assert.deepEqual(rep.map((r) => r.next), ['nothing', 'answer', 'check by hand', 'nothing']);
+});
+
+test('T23.14 the next-task skill prints a Next column with the exact command per entry', () => {
+  const s = fs.readFileSync(path.join(__dirname, '..', 'skills', 'next-task', 'SKILL.md'), 'utf8');
+  assert.match(s, /\bNext\b column/);
+  assert.match(s, /\/devflow:answer #<n>/);
+  assert.match(s, /\/devflow:sync #<pr>/);
+  for (const v of NEXTS) assert.ok(s.includes('`' + v + '`'), v);
+});
+
+test('T23.15 precedence: failing checks, then conflict or behind, then merge', async () => {
+  const h = await helpers();
+  const pr = { status: 'pr', risk: 'high' };
+  assert.equal(h.nextStep({ ...pr, checksFailing: true, mergeState: 'clean' }, {}), 'check by hand');
+  assert.equal(h.nextStep({ ...pr, mergeState: 'behind' }, {}), 'sync');
+  assert.equal(h.nextStep({ ...pr, mergeState: 'clean' }, {}), 'merge');
+});
