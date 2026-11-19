@@ -17,7 +17,7 @@ The BA step after merge: does what shipped match what the spec promised? Rules: 
 
 Fail fast with a clear message if any check fails.
 
-1. `.claude/devflow.json` exists and parses as JSON. If not, tell the user to run `/devflow:init`. `verify.devServer` and a non-empty `verify.modes` are needed; without them say acceptance cannot run and stop.
+1. `.claude/devflow.json` exists and parses as JSON. If not, tell the user to run `/devflow:init`. `verify.devServer` and a non-empty `verify.modes` are not required: without `verify.devServer`, or with empty `verify.modes`, acceptance does not stop at preflight but runs in evidence-only mode (see step 4). Say so in one line.
 2. The GitHub MCP server is reachable: load its tools with ToolSearch and get the authenticated user.
 3. The working tree is clean (`git status --porcelain` is empty). Note the current branch (or detached HEAD) to restore at the end.
 4. `git fetch <remote> <baseBranch>` succeeds (`remote` is `github.remote`, default `origin`).
@@ -34,6 +34,8 @@ Fail fast with a clear message if any check fails.
 
 ## 2. Fresh worktree of the base
 
+Evidence-only mode skips steps 2 and 3: nothing is started, so no worktree and no lock are needed.
+
 Run on what actually shipped, not on the user's checkout.
 
 1. `git worktree add --detach <worktree.dir>/accept-<slug> <remote>/<baseBranch>` (`worktree.dir` default `.claude/worktrees`). If that path exists, remove the stale worktree first (`git worktree remove --force`) only when `git status --porcelain` inside it is empty; otherwise stop and report it.
@@ -49,7 +51,9 @@ Run on what actually shipped, not on the user's checkout.
 
 ## 4. Walk the criteria
 
-Inside the worktree:
+**Evidence-only mode** (without `verify.devServer`, or with empty `verify.modes`): start no server and use no `http` or `browser` mode. Criteria that need a running app are `not checkable`. The other criteria take their result from evidence of the merged PRs (the closing PR of each merged issue): the merged PRs' checks (check runs and statuses on the head or merge commit), test-matrix rows, and manual rows recorded as pass in the PR body. `pass` when that evidence covers the criterion and is green, `fail` when it shows the criterion failing (a failed check or a row recorded as fail), and a criterion with no such evidence is `not checkable`. Never guess a result without evidence. Put the evidence (PR number, check name, row id) in the table. Step 5 and step 6 run as usual: it still posts the `<!-- devflow-accept -->` result on the epic or spec PR.
+
+Otherwise, inside the worktree:
 
 1. Start `verify.devServer.run` in the background and poll `verify.devServer.url` until it answers (give up after `readyTimeoutSec`, default 60).
 2. Walk EVERY acceptance criterion of every merged task, plus every Test matrix row with level `http` or `e2e`. Use only the allowed `verify.modes`: `http` with curl (compare status and body to the criterion), `browser` with `verify.browserTool` (`playwright`: load the Playwright MCP tools with ToolSearch; `chrome`: Claude in Chrome tools) acting as the user and reading the page. Do not edit or commit any file.
