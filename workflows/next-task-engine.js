@@ -19,7 +19,7 @@ export const meta = {
 
 // Test hook: the pure helpers below are function declarations (hoisted), so tests get them without a run.
 // They take every input as a parameter and never touch the run state.
-if (args && args.exports === true) return { parseDiff, scanWeakenedChecks, checkConfigGlobs, globToRegExp, priorityRank, orderIssues, isFixIssue, pathFor, hasHttpOrE2eRow, epicFor, classifyQuestion, questionsSchema, decisionLine, addDecisions, questionLine, warningQuestion }
+if (args && args.exports === true) return { parseDiff, scanWeakenedChecks, checkConfigGlobs, globToRegExp, priorityRank, orderIssues, isFixIssue, pathFor, hasHttpOrE2eRow, epicFor, classifyQuestion, questionsSchema, decisionLine, addDecisions, questionLine, warningQuestion, pickClaimWinner }
 
 // Run through /devflow:next-task only: it does the preflight and builds args. Calling this workflow
 // directly (e.g. /devflow:next-task-engine) arrives without args, so stop with a clear message.
@@ -147,6 +147,7 @@ const CLAIM_SCHEMA = {
     labels: { type: 'array', items: { type: 'string' }, description: 'Label names of the issue as read in step 1, before any change' },
     specPath: { type: 'string', description: 'The spec path the issue body links, or "" when it links none' },
     introducedBy: { type: 'boolean', description: 'True when the issue body has an "Introduced by" heading' },
+    lastBlockedAt: { type: ['string', 'null'], description: 'created_at of the latest devflow-blocked comment, or null' },
     claims: {
       type: 'array',
       description: 'Every devflow-claim comment on the issue after ours was posted',
@@ -157,7 +158,7 @@ const CLAIM_SCHEMA = {
       },
     },
   },
-  required: ['taken', 'assignedByRun', 'claims', 'labels', 'specPath', 'introducedBy'],
+  required: ['taken', 'assignedByRun', 'claims', 'labels', 'specPath', 'introducedBy', 'lastBlockedAt'],
 }
 
 const BRANCH_SCHEMA = {
@@ -181,6 +182,12 @@ const RELEASE_SCHEMA = {
   type: 'object',
   properties: { ok: { type: 'boolean' }, note: { type: 'string' } },
   required: ['ok'],
+}
+
+const CLAIM_RELEASE_CHECK_SCHEMA = {
+  type: 'object',
+  properties: { claimPresent: { type: 'boolean' } },
+  required: ['claimPresent'],
 }
 
 const PLAN_SCHEMA = {
@@ -480,9 +487,10 @@ function specPathFor(issue) {
 }
 
 // The claim that wins the race: the earliest createdAt (ISO strings sort), ties by the smallest comment id. null when empty.
-function pickClaimWinner(claims) {
+function pickClaimWinner(claims, lastBlockedAt) {
   let winner = null
   for (const c of Array.isArray(claims) ? claims : []) {
+    if (lastBlockedAt && c.createdAt < lastBlockedAt) continue
     if (!winner || c.createdAt < winner.createdAt || (c.createdAt === winner.createdAt && c.commentId < winner.commentId)) winner = c
   }
   return winner
@@ -1099,12 +1107,12 @@ devflow config:
 ${cfgJson}
 
 Steps, in order:
-1. Read issue #${issue.number}. Note the issue's label names exactly as you read them now (labels), the spec path its body links (the first \`${String(cfg.specDir || 'docs/specs').replace(/\/+$/, '')}/<name>.md\` path, "" when none; specPath) and whether its body has an "Introduced by" heading (introducedBy), and return them in every case, before you change anything. The issue is taken only when it has an assignee other than the authenticated user, or the label "${labels.inProgress}", "${labels.blocked}" or "${labels.review}". An issue assigned only to the authenticated user with none of these labels is not taken: claim it. An issue assigned to the authenticated user and another user is taken. If it is taken, return taken=true, takenBy = the other assignee login or the label name, claims = []. Change and post nothing.
+1. Read issue #${issue.number}. Note the issue's label names exactly as you read them now (labels), the spec path its body links (the first \`${String(cfg.specDir || 'docs/specs').replace(/\/+$/, '')}/<name>.md\` path, "" when none; specPath) and whether its body has an "Introduced by" heading (introducedBy), and return them in every case, before you change anything. The issue is taken only when it has an assignee other than the authenticated user, or the label "${labels.inProgress}", "${labels.blocked}" or "${labels.review}". An issue assigned only to the authenticated user with none of these labels is not taken: claim it. An issue assigned to the authenticated user and another user is taken. If it is taken, return taken=true, takenBy = the other assignee login or the label name, claims = []. Read all issue comments and return lastBlockedAt as described in step 4. Change and post nothing.
 2. Otherwise add the authenticated user as assignee only when not already assigned, and return assignedByRun=true when you added them, assignedByRun=false when they were already assigned. Add the label "${labels.inProgress}" and remove "${labels.ready}" (keep all other labels).
 3. Post a comment on the issue whose body is exactly these two lines:
 <!-- devflow-claim id=${claimId} -->
 Claimed by devflow (${claimId}).
-4. Read ALL comments of the issue again. Return in "claims" every comment whose body contains "<!-- devflow-claim id=": its comment id, the claim id parsed from that marker, its created_at timestamp and its author login. Return taken=false.`
+4. Read ALL comments of the issue again. Return in "claims" every comment whose body contains "<!-- devflow-claim id=": its comment id, the claim id parsed from that marker, its created_at timestamp and its author login. Return lastBlockedAt as the created_at of the latest comment whose body contains "<!-- devflow-blocked -->", or null when there is none. Return taken=false.`
 }
 
 function releasePrompt(issue, removeAssignee) {
@@ -1912,6 +1920,22 @@ async function runIssue(issue) {
   // A stage that could not reach GitHub reports it in `problem`; the run stops as at Claim.
   const down = (r) => !!(r && r.problem && mcpDown(r.problem))
 
+  async function verifyClaimRelease(stage) {
+    const target = `GitHub issue #${issue.number} in ${gh.owner}/${gh.repo}`
+    const marker = `<!-- devflow-claim id=${claimId} -->`
+    const options = { phase: stage, model: 'haiku' }
+    const check = () => agent(`Re-read all comments on ${target}. ${MCP_NOTE}
+Return claimPresent=true if a comment body contains "${marker}", or false if none does. Make no changes.`, {
+      ...options, label: `release check #${issue.number}`, schema: CLAIM_RELEASE_CHECK_SCHEMA,
+    })
+    if ((await check())?.claimPresent !== true) return
+    await agent(`Delete only comments on ${target} whose bodies contain "${marker}". ${MCP_NOTE}
+Make no other changes. Return ok=true when those comments are gone.`, {
+      ...options, label: `release retry #${issue.number}`, schema: RELEASE_SCHEMA,
+    })
+    if ((await check())?.claimPresent === true) notes.push('claim not released')
+  }
+
   async function block(stage, reason, questions) {
     // GitHub cannot be reached: no cleanup comment or label is possible; the run stops (see Main).
     if (mcpDown(reason)) {
@@ -1929,6 +1953,7 @@ async function runIssue(issue) {
       schema: BLOCKED_SCHEMA,
       model: 'haiku',
     })
+    await verifyClaimRelease(stage)
     issue.inCleanup = false
     return done({ issue: issue.number, status: 'blocked', reason: `${stage}: ${reason.split('\n')[0]}` })
   }
@@ -1954,7 +1979,8 @@ async function runIssue(issue) {
   if (!claims.some((c) => c.claimId === claimId)) {
     return block('Claim', `Our claim comment (${claimId}) was not found on the issue after posting it.`)
   }
-  const winner = pickClaimWinner(claims)
+  const winner = pickClaimWinner(claims, claim.lastBlockedAt)
+  if (!winner) return block('Claim', 'No claim survived the latest block.')
   if (winner.claimId !== claimId) {
     const ours = claims.find((c) => c.claimId === claimId)
     const removeAssignee = assignedByRun && !!ours.author && !!winner.author && winner.author !== ours.author
@@ -1964,6 +1990,7 @@ async function runIssue(issue) {
       schema: RELEASE_SCHEMA,
       model: 'haiku',
     })
+    await verifyClaimRelease('Implement')
     log(`Skipped #${issue.number}: claimed by ${winner.claimId}.`)
     issue.claimSkip = true
     return done({ issue: issue.number, status: 'skipped', reason: `claimed by ${winner.claimId}` })

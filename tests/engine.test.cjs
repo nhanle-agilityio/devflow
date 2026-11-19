@@ -29,6 +29,8 @@ async function run(args, opts = {}) {
     if (opts.reviewerMissing && o.agentType) throw new Error('Unknown agent type ' + o.agentType);
     const n = Number((/#(\d+)/.exec(l) || [])[1]);
     if (opts.onCall) await opts.onCall(l, n);
+    const result = await opts.agentResult?.(prompt, o);
+    if (result !== undefined) return result;
     if (l === 'select issues') {
       return {
         issues: (args.issues || []).map((i) => ({ number: i, title: 't' + i, labels: opts.selectLabels ? opts.selectLabels(i) : opts.labels || [], body: opts.body !== undefined ? pick(opts.body, i) : 'spec docs/specs/a.md', dependsOn: [], parents: opts.parents ? pick(opts.parents, i) : [], ...(opts.resumeBranch ? { resumeBranch: pick(opts.resumeBranch, i) } : {}) })),
@@ -2230,5 +2232,75 @@ test('T7.10 the Branch, Integrate and Implement prompts say a commit-structure q
     assert.match(p, /commit-structure question/, l);
     assert.match(p, /never ask/i, l);
     assert.match(p, /suggestion/, l);
+  }
+});
+
+const CLAIM_A = { commentId: 1, claimId: 'A', createdAt: '2026-01-01T09:04:00Z' };
+const CLAIM_B = { commentId: 2, claimId: 'B', createdAt: '2026-01-01T09:41:00Z' };
+const CLAIM_C = { commentId: 3, claimId: 'C', createdAt: '2026-01-01T09:45:00Z' };
+const LAST_BLOCKED_AT = '2026-01-01T09:11:00Z';
+
+async function expectClaimWinner(claims, lastBlockedAt, winner, message) {
+  // Run as a later claimant so the skipped result names the actual winner.
+  const ours = { commentId: 4, claimId: BASE.claimId, createdAt: '2026-01-01T09:50:00Z' };
+  const { rep } = await run({ ...BASE, issues: [1] }, {
+    claimOut: { claims: [...claims, ours], ...(lastBlockedAt && { lastBlockedAt }) },
+  });
+  assert.equal(rep[0].reason, `claimed by ${winner.claimId}`, message);
+  const { pickClaimWinner } = await helpers();
+  assert.equal(typeof pickClaimWinner, 'function', 'pickClaimWinner must be exposed via args.exports');
+  assert.deepEqual(pickClaimWinner(claims, lastBlockedAt), winner, message);
+}
+
+test('T20.13 a claim before the latest block is ignored', async () => {
+  await expectClaimWinner([CLAIM_A, CLAIM_B], LAST_BLOCKED_AT, CLAIM_B,
+    'claim B at 09:41 must beat claim A at 09:04 after a block at 09:11');
+  await expectClaimWinner([CLAIM_B, CLAIM_A], undefined, CLAIM_A,
+    'without a block timestamp, the earliest claim must still win');
+});
+
+test('T20.14 the earliest claim after the block wins', async () => {
+  await expectClaimWinner([CLAIM_C, CLAIM_A, CLAIM_B], LAST_BLOCKED_AT, CLAIM_B,
+    'the earliest post-block claim must win even when it is listed last');
+  await expectClaimWinner([CLAIM_C, CLAIM_B], LAST_BLOCKED_AT, CLAIM_B,
+    'with only post-block claims, the earlier of B and C must win');
+});
+
+test('T20.15 claim release is checked, retried once if needed, and noted if still unreleased', async () => {
+  for (const lose of [false, true]) {
+    for (const [removeOnAttempt, events] of [
+      [1, ['delete', 'check']],
+      [2, ['delete', 'check', 'delete', 'check']],
+      [Infinity, ['delete', 'check', 'delete', 'check']],
+    ]) {
+      const seen = [];
+      let attempts = 0;
+      const cleanup = lose ? 'release' : 'blocked';
+      const scenario = `${lose ? 'lost claim' : 'blocked run'}, deletion on attempt ${removeOnAttempt}`;
+      const { rep } = await run({ ...BASE, issues: [1] }, {
+        lose,
+        planBlocked: !lose,
+        agentResult(prompt, { label }) {
+          if (!seen.length && !label.startsWith(cleanup)) return;
+          if (!/devflow-claim|claim comment/i.test(prompt)) return;
+          if (/\bdelete\b[^\n.]*\bcomment|\bdelete_issue_comment\b/i.test(prompt)) {
+            seen.push('delete');
+            attempts++;
+            return { ok: true, pushed: false };
+          }
+          if (/\b(?:re-read|read|list|check|verify|fetch)\b[^\n.]*\bcomments?\b|\blist_issue_comments\b/i.test(prompt)) {
+            seen.push('check');
+            const claimPresent = attempts < removeOnAttempt;
+            return { ok: true, claimPresent, claims: claimPresent
+              ? [{ commentId: 11, claimId: BASE.claimId, createdAt: '2026-01-01T00:00:05Z' }]
+              : [] };
+          }
+        },
+      });
+      assert.equal(rep[0].status, lose ? 'skipped' : 'blocked', scenario);
+      assert.equal(rep[0].notes.some((note) => /claim not released/i.test(note)), removeOnAttempt === Infinity,
+        `${scenario}: only a claim still present after retry must produce a "claim not released" note`);
+      assert.deepEqual(seen, events, `${scenario}: the engine must re-read comments after each delete attempt`);
+    }
   }
 });
