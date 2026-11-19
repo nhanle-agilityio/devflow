@@ -911,7 +911,7 @@ test('T18.1 doctor lists open triage follow-ups as may be fixed when git log -L 
   const l = doctorCheck12();
   assert.match(l, /open issues labelled `labels\.triage`/i);
   assert.match(l, /"may be fixed, check and close"/);
-  assert.match(l, /`git log -L`[^.]*(base|<remote>\/<baseBranch>)[^.]*`file:line`[^.]*after the issue was created/);
+  assert.match(l, /`git log -L` on the base[^.]*`file:line`[^.]*after the issue was created/);
 });
 
 test('T18.2 doctor counts a deleted file as changed', () => {
@@ -919,7 +919,7 @@ test('T18.2 doctor counts a deleted file as changed', () => {
 });
 
 test('T18.3 doctor falls back to a merged PR mentioning the issue when there is no file:line', () => {
-  assert.match(doctorCheck12(), /without a `file:line` record[^.]*merged PR[^.]*mentions? `#<n>`/);
+  assert.match(doctorCheck12(), /without a `file:line` record[^.]*merged PRs?[^.]*mentions? `#<n>`/i);
 });
 
 test('T18.4 doctor never closes a follow-up issue', () => {
@@ -928,6 +928,6 @@ test('T18.4 doctor never closes a follow-up issue', () => {
 
 test('T18.5 accept lists the open follow-ups filed from the epic PRs', () => {
   const t = read('skills/accept/SKILL.md');
-  assert.match(t, /open follow-ups[^.]*(filed|found)[^.]*`Found in: #<pr>`[^.]*epic's PRs/i);
+  assert.match(t, /open follow-ups filed from the epic's PRs[\s\S]*?`Found in: #<pr>`/i);
   assert.match(t, /result[^.]*lists? (the )?open follow-ups|lists? (the )?open follow-ups[^.]*result/i);
 });
