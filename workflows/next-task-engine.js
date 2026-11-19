@@ -168,6 +168,9 @@ const BRANCH_SCHEMA = {
     parentMerged: { type: 'boolean', description: 'true when the parent PR was already merged and the branch starts from the base' },
     resumed: { type: 'boolean', description: 'true when the branch already had commits of this issue and the run continues on it' },
     commits: { type: 'array', items: { type: 'string' }, description: 'When resumed: the commits already on the branch, "<sha> <message>"' },
+    matchedByName: { type: 'boolean', description: 'true when an existing branch whose name starts with <type>/<issue>- was found and used instead of creating a new one' },
+    baseConflict: { type: 'boolean', description: 'true when merging the base into the resumed branch conflicted (the merge was aborted; Integrate resolves it)' },
+    conflictFiles: { type: 'array', items: { type: 'string' }, description: 'When baseConflict: the conflicting files' },
     questions: questionsSchema('Questions that stop the branch from being created; tag Dev'),
     problem: { type: 'string' },
   },
@@ -544,6 +547,10 @@ const MANUAL_RULE =
 // Answers from /devflow:answer live in the issue's "## Decisions" section and win over the spec.
 const DECISIONS_NOTE =
   'If the issue body has a "## Decisions" section, those decisions were made by a human after the spec was written: where they differ from the spec, the decisions win.'
+
+// A question about how commits are split, ordered or worded is never asked: it is a suggestion (rule from #93).
+const COMMIT_STRUCTURE_NOTE =
+  'Commit structure: never ask a commit-structure question (how to split, order or word commits); decide it from CLAUDE.md and the plan, and mention it as a suggestion in your result instead.'
 
 // Every prompt of an agent that can return questions carries this: the object shape and the definition of changesCriterion.
 const QUESTION_NOTE =
@@ -1109,14 +1116,16 @@ devflow config:
 ${cfgJson}
 
 Steps, in order:
-1. ${issue.resumeBranch ? `Resume exactly the branch "${issue.resumeBranch}" (the head branch of this issue's open PR); do not derive a new branch name. When it exists only on ${remote}, fetch it first (\`git fetch ${remote} ${issue.resumeBranch}\`) and continue on it as in step 3.` : `Work out the branch name from branchPattern "${branchPattern}": {issue} = ${issue.number}; {type} = the value of the issue's "type:<type>" label if present, otherwise infer one of feat|fix|chore|docs|refactor|test from the title; {slug} = at most 5 words of the title, kebab-case, ASCII only, without the "[<slug>] T<n>:" prefix.`}
+1. ${issue.resumeBranch ? `Resume exactly the branch "${issue.resumeBranch}" (the head branch of this issue's open PR); do not derive a new branch name. When it exists only on ${remote}, fetch it first (\`git fetch ${remote} ${issue.resumeBranch}\`) and continue on it as in step 3.` : `Work out the branch name from branchPattern "${branchPattern}": {issue} = ${issue.number}; {type} = the value of the issue's "type:<type>" label if present, otherwise infer one of feat|fix|chore|docs|refactor|test from the title; {slug} = at most 5 words of the title, kebab-case, ASCII only, without the "[<slug>] T<n>:" prefix.
+   Before using that name, look for an existing branch to resume (a fixed rule: resume it without asking a question). A branch matches when its name starts with \`<type>/${issue.number}-\` (the {type} above, then "/${issue.number}-"; the hyphen right after the number is part of the prefix). Look at local branches (\`git branch --list '<type>/${issue.number}-*'\`) and at ${remote} (\`git ls-remote --heads ${remote} '<type>/${issue.number}-*'\`). So for issue 12 of type feat, \`feat/12-foo\` matches, but \`feat/123-foo\` and \`feat/12foo\` do not (no hyphen right after the number), and \`fix/12-foo\` does not match either: a branch with another type prefix does not match. With no match, create the branch with the derived name as in step 3. With one match, use that branch name instead of the derived one and return matchedByName=true. With several matches take the one with an open devflow PR (search open PRs whose head branch is the candidate and which carry the "${labels.devflow}" label), otherwise the ${remote} branch whose newest commit is the most recent (\`git log -1 --format=%ct ${remote}/<branch>\`); a branch that exists only locally ranks after every ${remote} one. Never ask which one to take.`}
 2. Run \`git status --porcelain\`; it must be empty. If not, return ok=false with the problem.
 3. Run \`git fetch ${remote} ${fetchBranch}\` then \`git switch -c <branch> ${parentRef}\` (this also works from a detached HEAD). Before creating it, check whether the branch already exists locally (\`git rev-parse --verify -q <branch>\`) or on ${remote} (\`git ls-remote --heads ${remote} <branch>\`).
    - Exists with no commits of its own (\`git log ${parentRef}..<branch> --oneline\` empty) and not on ${remote}: an empty leftover from a run blocked at Plan; recreate it with \`git switch -C <branch> ${parentRef}\`.
-   - Exists with commits of its own whose messages use scope "${scopeFor(issue)}": an earlier run of this issue that was blocked after Plan. Continue on it: \`git switch <branch>\` (when it is only on ${remote}: \`git fetch ${remote} <branch>\` and \`git switch -c <branch> --track ${remote}/<branch>\`; when both exist and differ, use the ${remote} one only if the local one has no commits of its own beyond it, otherwise return ok=false), then \`git merge --no-edit ${parentRef}\`. If that merge conflicts, run \`git merge --abort\` and return ok=false with the conflicting files. Return resumed=true and commits = the lines of \`git log --oneline ${parentRef}..HEAD\` (merge commits excluded).
+   - Exists with commits of its own whose messages use scope "${scopeFor(issue)}": an earlier run of this issue that was blocked after Plan. Continue on it: \`git switch <branch>\` (when it is only on ${remote}: \`git fetch ${remote} <branch>\` and \`git switch -c <branch> --track ${remote}/<branch>\`; when both exist and differ, use the ${remote} one only if the local one has no commits of its own beyond it, otherwise return ok=false), then \`git merge --no-edit ${parentRef}\`. If that merge conflicts, run \`git merge --abort\` (nothing half-done), do not ask and do not return ok=false: return baseConflict=true and conflictFiles = the conflicting files; the Integrate stage resolves the conflict next. Return resumed=true and commits = the lines of \`git log --oneline ${parentRef}..HEAD\` (merge commits excluded). A branch found by its name prefix in step 1 that has no commits of its own is simply continued (resumed=false); matchedByName stays true. A branch found by its name prefix in step 1 whose own commits do not use scope "${scopeFor(issue)}" (no scope, or another scope, for example a human's \`feat: x\` commits) is continued the same way: the name already ties it to this issue, so do not return ok=false for it; return resumed=true, commits as above, and matchedByName=true.
    - Anything else (commits from another issue, or a dirty state): return ok=false with the problem; do not reuse or delete it.${parents.length === 1 ? `
    If the fetch fails because ${parents[0].branch} no longer exists on ${remote}, read PR #${parents[0].prNumber} with pull_request_read. Merged (\`merged_at\` is not null in that result): its changes are in ${base}, so run \`git fetch ${remote} ${base}\` and \`git switch -c <branch> ${baseRef}\` instead and return parentMerged=true. Closed without merging: return ok=false with the problem.` : ''}
-Return the branch name you created. Do not change anything on GitHub. If you cannot continue without an answer, return ok=false with the question in "questions".
+Return the branch name you created or resumed. Do not change anything on GitHub. If you cannot continue without an answer, return ok=false with the question in "questions".
+${COMMIT_STRUCTURE_NOTE}
 ${QUESTION_NOTE}
 
 Issue title: ${issue.title}
@@ -1150,10 +1159,13 @@ Instructions:
 Return status, the plan text exactly as posted, questions, qaFiles, devFiles, commitRules, separateCommits, ${readReturn(src)}, httpOrE2eRows (true when the issue's Test cases table, as you read it on GitHub, has a row whose Level is http or e2e) and acceptanceCriteria (the number of top-level \`- [ ]\` / \`- [x]\` items under the first heading or bold line containing "Acceptance criteria" in the issue on GitHub, up to the next heading or bold line; 0 when there is none).`
 }
 
-function integratePrompt(issue, branch) {
+function integratePrompt(issue, branch, baseConflict) {
   const parents = parentsOf(issue)
   const list = parents.map((p, i) => `${i + 1}. ${remote}/${p.branch} (PR #${p.prNumber}, issue #${p.issue})`).join('\n')
   const checks = cfg.checks.map((c, i) => `${i + 1}. [${c.name}] ${c.run}`).join('\n')
+  // The ref Branch merged into the resumed branch: the parent PR's branch when stacked on exactly one, else the base.
+  const mergeRef = parentRefFor(issue)
+  const hasBase = baseConflict && baseConflict.length
   return `Integrate the branches of the open dependencies of issue #${issue.number} into branch ${branch} (already checked out, created from ${baseRef}). ${MCP_NOTE}
 
 devflow config:
@@ -1161,17 +1173,15 @@ ${cfgJson}
 
 ${issueBlock(issue)}
 
-Parent branches, in order:
-${list}
-
-Steps:
-1. \`git fetch ${remote}\` (at least each parent branch above).
-2. For each parent in the order above run \`git merge --no-edit ${remote}/<branch>\`. If a parent branch no longer exists on ${remote}, read its PR with pull_request_read: merged means its changes are already in ${base}, so skip it (leave it out of merged); closed without merging means return ok=false with the problem. Keep the default merge commit message. Never rebase, never force, never rewrite commits.
+${parents.length ? `Parent branches, in order:\n${list}\n\n` : ''}${baseConflict && baseConflict.length ? `Base merge: this branch was resumed from an earlier run, and merging ${mergeRef} into it conflicts in: ${JSON.stringify(baseConflict)}. Run \`git merge --no-edit ${mergeRef}\` first and resolve the conflict here, like a parent conflict: use the issue, its acceptance criteria and Decisions so that the behaviour of the branch and of the base both survive, stage files by name and complete the merge with the default message. A conflict in a file matching risk.highPaths (${JSON.stringify((cfg.risk && cfg.risk.highPaths) || [])}) is still resolved here (a high-risk file does not stop the run; the PR is escalated to risk:high afterwards). Block only when the conflict is in behaviour the issue does not cover: then run \`git merge --abort\` and return ok=false with the conflicting files and the question in problem and in "questions". That question is a product decision: set productDecision=true (and changesCriterion=true when it changes an acceptance criterion), so the run blocks whatever nextTask.onQuestion is.\n\n` : ''}Steps:
+1. \`git fetch ${remote}\`${parents.length ? ' (at least each parent branch above)' : ''}.
+2. For each parent in the order above (none: skip this step${hasBase && parents.length === 1 ? '; the only parent was merged in the base merge above, so skip this step' : ''}) run \`git merge --no-edit ${remote}/<branch>\`. If a parent branch no longer exists on ${remote}, read its PR with pull_request_read: merged means its changes are already in ${base}, so skip it (leave it out of merged); closed without merging means return ok=false with the problem. Keep the default merge commit message. Never rebase, never force, never rewrite commits.
 3. If a merge conflicts, resolve it using the linked issues and the spec so that the behaviour of BOTH parents survives; stage files by name and complete the merge with the default message. Do not change anything that is not needed to resolve the conflict.
 4. After all merges, run every configured check; fix only what the integration itself broke:
 ${checks}
-5. Return integrationSha = the output of \`git rev-parse HEAD\` after all merges, and merged = the ${remote}/<branch> names merged, in order.
-If you cannot resolve a conflict or the checks cannot be made to pass without a decision, run \`git merge --abort\` if a merge is in progress, leave nothing half-done, and return ok=false with the conflicting files and the question in problem (and in "questions"). Do not push and do not touch GitHub labels.${qEnd(issue)}`
+5. Return integrationSha = the output of \`git rev-parse HEAD\` after all merges, and merged = the ${remote}/<branch> names merged, in order (an empty list when only the base was merged).
+If you cannot resolve a conflict or the checks cannot be made to pass without a decision, run \`git merge --abort\` if a merge is in progress, leave nothing half-done, and return ok=false with the conflicting files and the question in problem (and in "questions"). Do not push and do not touch GitHub labels.
+${COMMIT_STRUCTURE_NOTE}${qEnd(issue)}`
 }
 
 // The path an issue takes: 'short' for risk:low without risk:high, needs-e2e or an http/e2e Test cases row.
@@ -1222,7 +1232,8 @@ Instructions:
 5. Stay inside the issue's scope. Anything else you notice goes into "outOfScope", unchanged in the code.
 6. If a requirement is ambiguous in a way that changes behaviour or a contract and the spec does not answer it, do NOT guess: return status "blocked" with the question in "questions" (blockedReason repeats it). For minor ambiguity, decide, and record the decision in "assumptions".
 7. Do not push, open a PR, or touch GitHub labels.
-Return: status, a short summary, the commits you made ("<sha> <message>"), files changed, assumptions, outOfScope, touchesUi (true when the diff against ${parentRef} changes user-facing UI), ${readReturn(src)}, and manualChecks ([] when there are no such rows).`}${qEnd(issue)}`
+Return: status, a short summary, the commits you made ("<sha> <message>"), files changed, assumptions, outOfScope, touchesUi (true when the diff against ${parentRef} changes user-facing UI), ${readReturn(src)}, and manualChecks ([] when there are no such rows).`}
+${COMMIT_STRUCTURE_NOTE}${qEnd(issue)}`
 }
 
 // Changelog fragments (changelog.fragmentsDir): the entry goes into <fragmentsDir>/<issue>.md, never into the changelog file.
@@ -1990,6 +2001,11 @@ async function runIssue(issue) {
       notes.push(`parent PR #${parentsOf(issue)[0].prNumber} was already merged before this issue started; branched from ${base}, not stacked`)
       issue.parents = []
     }
+    if (made.matchedByName) {
+      const matched = `${branch.split('/')[0]}/${issue.number}-`
+      state.assumptions.push(`Resumed the existing branch ${branch}: its name starts with ${matched}, so the run took it without asking`)
+      notes.push(`resumed existing branch ${branch} (its name starts with ${matched})`)
+    }
     if (made.resumed) {
       resumed[issue.number] = Array.isArray(made.commits) ? made.commits : []
       log(`#${issue.number}: resuming ${branch} with ${resumed[issue.number].length} earlier commit(s).`)
@@ -1997,11 +2013,13 @@ async function runIssue(issue) {
     }
 
     // Integrate: several open parents are merged into the branch before any work starts.
-    if (parentsOf(issue).length > 1) {
+    // A base conflict on a resumed branch is resolved here too (the Branch agent aborted that merge).
+    const baseConflict = made.baseConflict === true ? (Array.isArray(made.conflictFiles) && made.conflictFiles.length ? made.conflictFiles : ['(see git status)']) : null
+    if (parentsOf(issue).length > 1 || baseConflict) {
       const integAsked = await withQuestions(
         issue,
         branch,
-        () => agent(integratePrompt(issue, branch), { label: `integrate #${issue.number}`, phase: 'Implement', schema: INTEGRATE_SCHEMA, model: 'sonnet' }),
+        () => agent(integratePrompt(issue, branch, baseConflict), { label: `integrate #${issue.number}`, phase: 'Implement', schema: INTEGRATE_SCHEMA, model: 'sonnet' }),
         (r) => (!r.ok && Array.isArray(r.questions) ? r.questions : []),
       )
       const integ = integAsked.result
@@ -2010,8 +2028,8 @@ async function runIssue(issue) {
       if (!integ || !integ.ok || !integ.integrationSha) {
         return block('Integrate', (integ && integ.problem) || 'The integrate agent failed or did not report an integration commit.')
       }
-      integration[issue.number] = integ.integrationSha
-      log(`#${issue.number}: merged ${integ.merged.join(', ')} at ${integ.integrationSha.slice(0, 7)}.`)
+      if (parentsOf(issue).length > 1) integration[issue.number] = integ.integrationSha
+      log(`#${issue.number}: merged ${(integ.merged || []).join(', ') || baseRef} at ${integ.integrationSha.slice(0, 7)}.`)
     }
 
     // Plan: posted on the issue; nobody approves it. Open questions block the issue before any code is written.
