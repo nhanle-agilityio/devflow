@@ -991,3 +991,97 @@ test('test_t2_9_flag_on_matches_290', async () => {
   await run(none, CONFIG());
   assert.notEqual(none.decisions()[0].action, 'merged');
 });
+
+// ---- #110 T5: decisions:review PRs wait for a human unless nextTask.trustDecisions is true ----
+const DECISIONS_REASON = 'decisions:review: waits for a human';
+const heldPr = (n, label = 'decisions:review') =>
+  makePr(n, { labels: [{ name: 'devflow' }, { name: 'risk:low' }, { name: label }] });
+const T5_CFG = (extra = {}) => ({ ...CONFIG(), ...extra });
+
+for (const [title, nextTask] of [
+  ['trustDecisions false', { trustDecisions: false }],
+  ['trustDecisions unset', {}],
+  ['no nextTask block', undefined],
+]) {
+  test(`T5.1 decisions:review PR is skipped (${title})`, async () => {
+    const env = makeEnv({ prs: [heldPr(1)], ...green(1) });
+    await run(env, T5_CFG(nextTask === undefined ? {} : { nextTask }));
+    assert.equal(env.decisions()[0].action, 'skipped');
+    assert.equal(env.decisions()[0].reason, DECISIONS_REASON);
+    assert.equal(env.names('pulls.merge').length, 0);
+  });
+}
+
+test('T5.2 decisions:review PR with trustDecisions true is merged', async () => {
+  const env = makeEnv({ prs: [heldPr(1)], ...green(1) });
+  await run(env, T5_CFG({ nextTask: { trustDecisions: true } }));
+  assert.equal(env.decisions()[0].action, 'merged');
+  assert.equal(env.names('pulls.merge').length, 1);
+});
+
+test('T5.3 trustDecisions true but checks not green: usual check reason', async () => {
+  const env = makeEnv({
+    prs: [heldPr(1)],
+    runs: { sha1: [{ name: 'devflow/review', status: 'in_progress', conclusion: null, id: 1, started_at: '2026-01-01' }] },
+  });
+  await run(env, T5_CFG({ nextTask: { trustDecisions: true } }));
+  assert.notEqual(env.decisions()[0].action, 'merged');
+  assert.equal(env.names('pulls.merge').length, 0);
+  assert.match(env.decisions()[0].reason, /waiting for/);
+  assert.doesNotMatch(env.decisions()[0].reason, /decisions:review/);
+});
+
+test('T5.4 custom labels.decisionsReview name', async () => {
+  const cfg = T5_CFG({ labels: { decisionsReview: 'needs-human' } });
+  const env = makeEnv({ prs: [heldPr(1, 'needs-human')], ...green(1) });
+  await run(env, cfg);
+  assert.equal(env.decisions()[0].action, 'skipped');
+  assert.match(env.decisions()[0].reason, /waits for a human/);
+  assert.equal(env.names('pulls.merge').length, 0);
+
+  const env2 = makeEnv({ prs: [heldPr(2)], ...green(2) });
+  await run(env2, cfg);
+  assert.equal(env2.decisions()[0].action, 'merged');
+});
+
+test('T5.5 PR without the label is evaluated as in 3.0.0', async () => {
+  for (const extra of [{}, { nextTask: { trustDecisions: false } }, { nextTask: { trustDecisions: true } }]) {
+    const env = makeEnv({ prs: [makePr(1)], ...green(1) });
+    await run(env, T5_CFG(extra));
+    assert.equal(env.decisions()[0].action, 'merged');
+    assert.equal(env.names('pulls.merge').length, 1);
+  }
+});
+
+// Line-based read of the workflow_call block: { inputs: {name: {key: value}}, secrets: {...} }.
+function readWorkflowCall(text) {
+  const lines = text.split('\n');
+  const start = lines.findIndex((l) => /^ {2}workflow_call:\s*$/.test(l));
+  assert.ok(start >= 0, 'workflow_call block present');
+  const out = { inputs: {}, secrets: {} };
+  let section = null;
+  let item = null;
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() === '' || line.trim().startsWith('#')) continue;
+    if (/^\S/.test(line) || /^ {2}\S/.test(line)) break; // next top-level key or event
+    let m = line.match(/^ {4}(inputs|secrets):\s*$/);
+    if (m) { section = m[1]; item = null; continue; }
+    if (!section) continue;
+    m = line.match(/^ {6}([\w-]+):\s*$/);
+    if (m) { item = m[1]; out[section][item] = {}; continue; }
+    m = line.match(/^ {8}([\w-]+):\s*(.*)$/);
+    if (m && item && m[1] !== 'description') out[section][item][m[1]] = m[2].replace(/^["']|["']$/g, '');
+  }
+  return out;
+}
+
+test('T5.6 reusable workflow inputs and secrets are unchanged from 3.0.0', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const file = path.join(__dirname, '..', '.github', 'workflows', 'devflow-merge-gate.yml');
+  const got = readWorkflowCall(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(got, {
+    inputs: { 'devflow-ref': { required: 'true', type: 'string' } },
+    secrets: { DEVFLOW_GATE_TOKEN: { required: 'true' }, DEVFLOW_READ_TOKEN: { required: 'false' } },
+  });
+});
