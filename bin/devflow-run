@@ -2,11 +2,14 @@
 'use strict';
 // devflow-run: deterministic steps for the next-task engine. Node, no dependencies.
 // Usage: devflow-run check [--config .claude/devflow.json]
+//        devflow-run branch --issue <n> --name <branch> --from <ref> [--parents <ref,...>] [--remote origin]
+//        devflow-run restore --to <branch>
 // Prints one JSON object. Exit 1 means the operation could not run.
 
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const { performance } = require('node:perf_hooks');
+const { parseArgs } = require('node:util');
 
 const CONFIG_PATH = '.claude/devflow.json';
 const DEFAULT_TIMEOUT = 600;
@@ -61,7 +64,176 @@ function runCheck({ name, run: command, timeoutSeconds = DEFAULT_TIMEOUT }) {
   });
 }
 
+function gitResult(...args) {
+  const result = spawnSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  if (result.error) throw result.error;
+  return result;
+}
+
+function git(...args) {
+  const result = gitResult(...args);
+  if (result.status !== 0) throw new Error(result.stderr.trim() || `git ${args[0]} failed`);
+  return result.stdout;
+}
+
+function optionsFor(args, strings, booleans = []) {
+  const options = Object.fromEntries([
+    ...strings.map((name) => [name, { type: 'string' }]),
+    ...booleans.map((name) => [name, { type: 'boolean' }]),
+  ]);
+  return parseArgs({ args, options }).values;
+}
+
+function checkRefName(name, namespace = 'heads') {
+  if (!name || name.startsWith('-') || gitResult('check-ref-format', `refs/${namespace}/${name}`).status !== 0) {
+    throw new Error(`Invalid Git name: ${name ?? '(missing)'}`);
+  }
+  return name;
+}
+
+function protectedMatcher(config) {
+  const { baseBranch, protectedBranches } = config;
+  if (typeof baseBranch !== 'string' || !baseBranch.trim() ||
+      (protectedBranches !== undefined && (!Array.isArray(protectedBranches) ||
+        protectedBranches.some((pattern) => typeof pattern !== 'string' || !pattern.trim())))) {
+    throw new Error('Invalid config: expected baseBranch and optional protectedBranches');
+  }
+  checkRefName(baseBranch);
+  // As in guard.py, * and ? match across slashes, and bracket classes match a single character.
+  const escape = (literal) => literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const patterns = (protectedBranches ?? ['main', 'master', 'develop']).map((pattern) => {
+    const tokens = pattern.match(/\[!?\]?(?:[^\]]+)\]|[\s\S]/g);
+    const source = tokens.map((token) => {
+      if (token === '*') return '.*';
+      if (token === '?') return '.';
+      if (token.length > 1) {
+        const chars = token.slice(1, -1);
+        const negated = chars.startsWith('!');
+        const body = (negated ? chars.slice(1) : chars).replace(/[\\\[\]\^]/g, '\\$&');
+        return `[${negated ? '^' : ''}${body}]`;
+      }
+      return escape(token);
+    }).join('');
+    return new RegExp(`^${source}$`);
+  });
+  return (name) => name === baseBranch || patterns.some((pattern) => pattern.test(name));
+}
+
+function dirtyFiles() {
+  const entries = git('status', '--porcelain=v1', '-z', '--untracked-files=all').split('\0');
+  const files = new Set();
+  for (let i = 0; entries[i]; i++) {
+    const entry = entries[i];
+    files.add(entry.slice(3));
+    if (/[RC]/.test(entry.slice(0, 2))) files.add(entries[++i]);
+  }
+  return [...files];
+}
+
+function commitFor(ref) {
+  const result = gitResult('rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`);
+  return result.status === 0 ? result.stdout.trim() : null;
+}
+
+function runBranch(args) {
+  const options = optionsFor(args, ['issue', 'name', 'from', 'parents', 'remote', 'prefix'], ['require-existing']);
+  const protectedName = protectedMatcher(readConfig(CONFIG_PATH));
+  const issue = options.issue;
+  if (!/^[1-9]\d*$/.test(issue ?? '')) throw new Error('Expected a positive issue number');
+  let branch = checkRefName(options.name);
+  function assertUnprotected(name) {
+    if (protectedName(name)) throw new Error(`Refusing protected branch ${name}`);
+  }
+  assertUnprotected(branch);
+
+  const remote = options.remote ?? 'origin';
+  checkRefName(`${remote}/probe`, 'remotes');
+  if (!options.from || options.from.startsWith('-')) throw new Error('Expected a starting ref');
+  const parents = options.parents === undefined ? [] : options.parents.split(',').map((parent) => checkRefName(parent));
+  const prefix = options.prefix ?? (/^[^/]+\//.test(branch) ? `${branch.split('/')[0]}/${issue}-` : '');
+  if (prefix) checkRefName(`${prefix}probe`);
+  if (dirtyFiles().length) throw new Error('The working tree has uncommitted changes');
+
+  // Use an explicit fetch destination so a custom fetch refspec cannot write a local branch.
+  git('remote', 'get-url', remote);
+  git('fetch', '--prune', '--no-tags', '--refmap=', '--', remote, `refs/heads/*:refs/remotes/${remote}/*`);
+  const remoteRef = (name) => `refs/remotes/${remote}/${name}`;
+  const localRef = (name) => `refs/heads/${name}`;
+  const from = options.from.startsWith(`${remote}/`) ? `refs/remotes/${options.from}` : options.from;
+  const start = commitFor(from);
+  if (!start) return { ok: false, error: `Starting ref does not exist: ${options.from}`, missingRef: options.from };
+  const parentCommits = parents.map((parent) => {
+    const sha = commitFor(remoteRef(parent));
+    if (!sha) throw new Error(`Parent ref does not exist: ${remote}/${parent}`);
+    return sha;
+  });
+  function ownCommits(sha) {
+    return git('log', '--no-merges', '--format=%h %s', sha, '--not', start, ...parentCommits, '--').trim().split('\n').filter(Boolean);
+  }
+
+  let local = commitFor(localRef(branch));
+  let tracking = commitFor(remoteRef(branch));
+  if (!local && !tracking && options['require-existing']) throw new Error(`Branch does not exist: ${branch}`);
+  if (!local && !tracking && prefix) {
+    const scoped = new RegExp(`^[a-f0-9]+ [a-z][a-z0-9-]*\\(#${issue}\\)!?:`, 'i');
+    const candidates = new Set();
+    const refs = git('for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads', `refs/remotes/${remote}`);
+    for (const line of refs.trim().split('\n')) {
+      const [ref, sha] = line.split(' ');
+      const name = ref.replace(ref.startsWith('refs/heads/') ? 'refs/heads/' : `refs/remotes/${remote}/`, '');
+      if (name.startsWith(prefix) && !protectedName(name) && ownCommits(sha).some((commit) => scoped.test(commit))) {
+        candidates.add(name);
+      }
+    }
+    if (candidates.size > 1) return { ok: false, error: 'Multiple matching branches', candidates: [...candidates].sort() };
+    if (candidates.size === 1) {
+      [branch] = candidates;
+      assertUnprotected(branch);
+      local = commitFor(localRef(branch));
+      tracking = commitFor(remoteRef(branch));
+    }
+  }
+
+  const action = local || tracking ? 'resumed' : 'created';
+  let remoteAhead = false;
+  if (local && tracking && local !== tracking) {
+    remoteAhead = gitResult('merge-base', '--is-ancestor', local, tracking).status === 0;
+    if (!remoteAhead && gitResult('merge-base', '--is-ancestor', tracking, local).status !== 0) {
+      throw new Error(`Local and remote history diverged for ${branch}`);
+    }
+  }
+
+  if (local) git('switch', '--no-guess', '--', branch);
+  else if (tracking) git('switch', '-c', branch, '--track', remoteRef(branch));
+  else git('switch', '--no-track', '-c', branch, start);
+  if (remoteAhead) git('-c', 'merge.autostash=false', 'merge', '--ff-only', tracking);
+  const commits = action === 'resumed' ? ownCommits(git('rev-parse', 'HEAD').trim()) : [];
+  const conflicts = [];
+  for (const [index, parent] of parents.entries()) {
+    const merge = gitResult('-c', 'merge.autostash=false', '-c', 'rerere.enabled=false', 'merge', '--no-edit', parentCommits[index]);
+    if (merge.status === 0) continue;
+    const files = git('diff', '--name-only', '--diff-filter=U', '-z').split('\0').filter(Boolean);
+    if (commitFor('MERGE_HEAD')) git('merge', '--abort');
+    if (!files.length) throw new Error(merge.stderr.trim() || `Could not merge ${remote}/${parent}`);
+    conflicts.push({ parent, files });
+  }
+  return { ok: true, branch, action, head: git('rev-parse', 'HEAD').trim(), commits, conflicts };
+}
+
+function runRestore(args) {
+  const { to } = optionsFor(args, ['to']);
+  protectedMatcher(readConfig(CONFIG_PATH));
+  const branch = checkRefName(to);
+  const files = dirtyFiles();
+  if (files.length) return { ok: true, restored: false, reason: 'uncommitted changes', files };
+  // Switching to a protected branch changes the checkout only and never writes that branch ref.
+  git('switch', '--no-guess', '--', branch);
+  return { ok: true, restored: true };
+}
+
 async function main([subcommand, ...options]) {
+  if (subcommand === 'branch') return runBranch(options);
+  if (subcommand === 'restore') return runRestore(options);
   if (subcommand !== 'check' || (options.length && (options.length !== 2 || options[0] !== '--config' || !options[1]))) {
     throw new Error('Usage: devflow-run check [--config .claude/devflow.json]');
   }
@@ -81,4 +253,7 @@ async function main([subcommand, ...options]) {
 main(process.argv.slice(2)).catch((error) => {
   process.exitCode = 1;
   return { ok: false, error: error.message };
-}).then((result) => process.stdout.write(JSON.stringify(result) + '\n'));
+}).then((result) => {
+  if (!result.ok) process.exitCode = 1;
+  process.stdout.write(JSON.stringify(result) + '\n');
+});
