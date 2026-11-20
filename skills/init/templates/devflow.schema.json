@@ -36,6 +36,7 @@
       "additionalProperties": false,
       "properties": {
         "ready": { "type": "string", "default": "agent:ready" },
+        "epicApproved": { "type": "string", "minLength": 1, "default": "epic:approved", "description": "Human approval label for epic sub-issue auto-readying." },
         "inProgress": { "type": "string", "default": "agent:in-progress" },
         "review": { "type": "string", "default": "agent:review" },
         "blocked": { "type": "string", "default": "agent:blocked" },
@@ -173,6 +174,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "autoReady": { "type": "string", "enum": ["off", "low", "all"], "default": "off", "description": "Ready eligible sub-issues of an approved epic: off preserves manual readiness, low requires the low-risk label, and all accepts any risk." },
         "testMatrix": {
           "type": "boolean",
           "default": true,
