@@ -6,6 +6,8 @@
 //   leftovers < {"settings", "config", "files"} -> project files and rules the plugin now owns (report only)
 // Pure functions allowRules, minimalConfig and ownedLeftovers are exported for tests.
 
+const path = require('node:path');
+
 const USAGE = `Usage:
   devflow-setup allow [--github-mcp 'mcp__github__*'] < .claude/devflow.json
   devflow-setup minimal <path to devflow.schema.json> < config.json
@@ -119,6 +121,7 @@ function allowPlan(config, opts = {}) {
   const remote = (c.github && c.github.remote) || 'origin';
   const rules = new Set(GIT_RULES.map((g) => `Bash(${g}:*)`));
   const manual = [];
+  rules.add(`Bash(node "${path.join(__dirname, 'devflow-run')}":*)`);
   rules.add(`Bash(git push -u ${remote}:*)`);
   rules.add(`Bash(git push ${remote}:*)`);
   // The read-only reviewer reads the issue with this and nothing else from gh.

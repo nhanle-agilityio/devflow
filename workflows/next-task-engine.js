@@ -311,21 +311,27 @@ const INTEGRATE_SCHEMA = {
 const CHECK_SCHEMA = {
   type: 'object',
   properties: {
+    ok: { type: 'boolean' },
+    error: { type: 'string' },
     passed: { type: 'boolean' },
-    failures: {
+    checks: {
       type: 'array',
       items: {
         type: 'object',
         properties: {
-          check: { type: 'string' },
-          output: { type: 'string' },
-          files: { type: 'array', items: { type: 'string' }, description: 'The repository files this failure is attributed to (the failing test files or the files the errors point at); [] when unknown' },
+          name: { type: 'string' },
+          command: { type: 'string' },
+          exitCode: { type: ['integer', 'null'] },
+          timedOut: { type: 'boolean' },
+          durationMs: { type: 'number' },
+          outputTail: { type: 'string' },
+          files: { type: 'array', items: { type: 'string' }, description: 'Optional repository files attributed to the failure' },
         },
-        required: ['check', 'output'],
+        required: ['name', 'command', 'exitCode', 'timedOut', 'durationMs', 'outputTail'],
       },
     },
   },
-  required: ['passed', 'failures'],
+  required: ['ok'],
 }
 
 const VERIFY_SCHEMA = {
@@ -1410,12 +1416,8 @@ Return the same structure as the implement stage; "commits" lists only the commi
 }
 
 function checkPrompt() {
-  const list = cfg.checks.map((c, i) => `${i + 1}. [${c.name}] ${c.run}`).join('\n')
-  return `Run the project's checks in the repository root, in this order. Run every one even if an earlier one fails.
-
-${list}
-
-Report passed=true only if all of them exit 0. For each failing check return its name, the relevant trimmed output (the failing assertions / errors, at most about 60 lines; no passing noise) and files: the repository files the failure is attributed to (the failing test files, or the files the errors point at; [] when you cannot tell). Do not edit any file and do not commit.`
+  return `From the repository root, run exactly: \`node "${pluginRoot}/bin/devflow-run" check\`
+Return its JSON and do nothing else. You may annotate a failed result with files inferred from its outputTail.`
 }
 
 function fixPrompt(issue, branch, why, details, qaFiles, guide, disputed) {
@@ -1787,14 +1789,24 @@ async function checkLoop(issue, branch, state) {
       model: 'haiku',
     })
     if (!check) return { ok: false, reason: 'The check agent died before reporting.' }
+    if (check.ok === false) return { ok: false, reason: check.error || 'The check command could not run.' }
     if (check.passed) return { ok: true }
-    const details = check.failures.map((f) => `[${f.check}]\n${f.output}`).join('\n\n')
+    // Older workflow callers can still return already-mapped failures.
+    const failures = Array.isArray(check.checks)
+      ? check.checks.filter((entry) => entry.timedOut || entry.exitCode !== 0).map((entry) => ({
+        check: entry.name,
+        output: entry.outputTail,
+        files: entry.files || state.qaFiles.filter((file) => entry.outputTail.includes(file)),
+      }))
+      : check.failures
+    if (!failures?.length) return { ok: false, reason: 'The check command returned no failure details.' }
+    const details = failures.map((f) => `[${f.check}]\n${f.output}`).join('\n\n')
     if (round === nt.maxFixRounds) {
       return { ok: false, reason: `Checks still failing after ${nt.maxFixRounds} fix round(s):\n${details}` }
     }
     // A failure attributed to a QA file goes to the QA fix agent; one that also names other files goes to the dev fix agent too.
     const items = []
-    check.failures.forEach((f, i) => {
+    failures.forEach((f, i) => {
       const id = `F${i + 1}`
       const files = Array.isArray(f.files) ? f.files : []
       const text = `- (${id}) [${f.check}]\n${f.output}`
