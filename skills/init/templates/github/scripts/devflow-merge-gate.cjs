@@ -4,7 +4,7 @@
 // Candidates are tried in priority order (the linked issue's labels.priority label, then PR number);
 // priority only changes the order, never the rules.
 // A PR labelled labels.decisionsReview (the run took decisions) waits for a human unless nextTask.trustDecisions is true.
-// Config: .claude/devflow.json (baseBranch, github, labels, review, mergeGate, nextTask). Claude itself never merges.
+// Config: .claude/devflow.json (baseBranch, github, labels, review, mergeGate, nextTask, spec). Claude itself never merges.
 // While review.github is off the devflow/review check is ignored; with no other required check left the gate
 // refuses to merge anything (see effectiveRequiredChecks).
 
@@ -12,6 +12,7 @@ const fs = require('fs');
 
 const CONFIG_PATH = '.claude/devflow.json';
 const CONFLICT_MARKER = '<!-- devflow-gate:conflict -->';
+const AUTO_READY_MARKER = '<!-- devflow-auto-ready -->';
 const GATE_MERGED_MARKER = '<!-- devflow-gate-merged -->';
 const ALWAYS_PROTECTED = ['main', 'master', 'develop', 'trunk', 'production'];
 // Paths that are always high risk, whatever the label says: CI and the agent's own configuration.
@@ -23,7 +24,8 @@ const DEFAULTS = {
   baseBranch: 'main',
   labels: {
     devflow: 'devflow', riskLow: 'risk:low', riskHigh: 'risk:high', blocked: 'agent:blocked', stacked: 'stacked', decisionsReview: 'decisions:review',
-    inProgress: 'agent:in-progress', review: 'agent:review',
+    inProgress: 'agent:in-progress', review: 'agent:review', ready: 'agent:ready', triage: 'needs-triage',
+    epicApproved: 'epic:approved',
     priority: ['priority:critical', 'priority:high', 'priority:normal', 'priority:low'],
   },
   mergeGate: { enabled: false, dryRun: true, requiredChecks: ['devflow/review'], method: 'merge' },
@@ -285,7 +287,7 @@ async function blockOnConflict({ github, context }, config, pr, dryRun) {
 async function cleanStateLabels({ github, context, core }, { labels }, number, issue, dryRun) {
   const { owner, repo } = context.repo;
   if (issue.pull_request) return;
-  const present = new Set((issue.labels || []).map((label) => typeof label === 'string' ? label : label.name));
+  const present = issueLabels(issue);
   for (const name of new Set([labels.inProgress, labels.review, labels.blocked])) {
     if (!present.has(name)) continue;
     if (dryRun) {
@@ -319,10 +321,131 @@ async function sweepClosedIssues(ctx, config, dryRun) {
   }
 }
 
+function epicNumber(body) {
+  return Number(/^Epic: #(\d+)[ \t]*\r?$/m.exec(body || '')?.[1]) || null;
+}
+
+function issueLabels(issue) {
+  return new Set((issue.labels || []).map((label) => typeof label === 'string' ? label : label.name));
+}
+
+function hasOpenQuestions(body) {
+  const lines = body.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^##[ \t]+Open questions[ \t]*#*[ \t]*$/i.test(line));
+  if (start === -1) return false;
+  const end = lines.findIndex((line, index) => index > start && /^#{1,2}\s+/.test(line));
+  const questions = lines.slice(start + 1, end === -1 ? undefined : end).join('\n').trim();
+  return questions !== '' && !/^None$/i.test(questions);
+}
+
+async function autoReadyAfterMerge(ctx, config, pr, dryRun) {
+  const mode = config.spec?.autoReady;
+  if (mode !== 'low' && mode !== 'all') return;
+  const { github, context, core } = ctx;
+  const repo = context.repo;
+  const repositoryPath = `/repos/${repo.owner}/${repo.repo}`.toLowerCase();
+  const { labels } = config;
+  const excluded = [labels.ready, labels.inProgress, labels.review, labels.blocked, labels.triage];
+  const closing = new Set(linkedIssues(pr.body));
+  // The candidate check cached issue states before the merge. Read fresh states here.
+  const state = {};
+  const read = (number) => readIssueCached(ctx, state, number);
+  const epics = new Set();
+  for (const number of closing) {
+    try {
+      const issue = await read(number);
+      const epic = !issue.pull_request && epicNumber(issue.body);
+      if (epic) epics.add(epic);
+    } catch (error) {
+      core.warning(`#${number}: could not find its epic for auto-ready: ${error.message}`);
+    }
+  }
+  let openIssues;
+  for (const epic of epics) {
+    try {
+      const approval = await read(epic);
+      if (approval.pull_request || !issueLabels(approval).has(labels.epicApproved)) continue;
+    } catch (error) {
+      core.warning(`Epic #${epic}: could not read approval: ${error.message}`);
+      continue;
+    }
+
+    const children = new Set();
+    function include(issue) {
+      if (issue.repository_url?.toLowerCase().endsWith(repositoryPath) && !issue.pull_request &&
+          issue.state === 'open' && issue.number !== epic && !(dryRun && closing.has(issue.number))) {
+        children.add(issue.number);
+      }
+    }
+    try {
+      const native = await github.paginate('GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues', {
+        ...repo, issue_number: epic, per_page: 100,
+      });
+      native.forEach(include);
+    } catch (error) {
+      core.warning(`Epic #${epic}: could not list native sub-issues: ${error.message}`);
+    }
+    if (!openIssues) {
+      try {
+        openIssues = await github.paginate(github.rest.issues.listForRepo, { ...repo, state: 'open', per_page: 100 });
+      } catch (error) {
+        core.warning(`Epic #${epic}: could not list body-linked sub-issues: ${error.message}`);
+        openIssues = [];
+      }
+    }
+    for (const issue of openIssues) if (epicNumber(issue.body) === epic) include(issue);
+
+    for (const number of [...children].sort((a, b) => a - b)) {
+      try {
+        // Re-read the child immediately before evaluating it; a workflow label may have changed since listing.
+        const args = { ...repo, issue_number: number };
+        const { data: issue } = await github.rest.issues.get(args);
+        const names = issueLabels(issue);
+        if (issue.state !== 'open' || issue.pull_request || excluded.some((label) => names.has(label))) continue;
+        if (mode === 'low' && !names.has(labels.riskLow)) continue;
+        const body = (issue.body || '').replace(/<!--[\s\S]*?-->/g, '');
+        if (/^Ready:[ \t]*manual[ \t]*\r?$/im.test(body) || hasOpenQuestions(body)) continue;
+        const dependencies = [...new Set([...body.matchAll(/\bDepends on #(\d+)\b/gi)].map((m) => Number(m[1])))];
+        let waiting = false;
+        for (const dep of dependencies) {
+          // In a dry run, project the closure of issues this PR would close.
+          if (dryRun && closing.has(dep)) continue;
+          const dependency = await read(dep);
+          if (dependency.pull_request || dependency.state !== 'closed') {
+            waiting = true;
+            break;
+          }
+        }
+        if (waiting) continue;
+        if (dryRun) {
+          core.info(`#${number}: would add ${labels.ready} and post the auto-ready comment for epic #${epic}`);
+          continue;
+        }
+        // Approval can be removed while the sweep is in progress.
+        const { data: approval } = await github.rest.issues.get({ ...repo, issue_number: epic });
+        if (!issueLabels(approval).has(labels.epicApproved)) break;
+        await github.rest.issues.addLabels({ ...args, labels: [labels.ready] });
+        const comments = await github.paginate(github.rest.issues.listComments, { ...args, per_page: 100 });
+        if (!comments.some((comment) => (comment.body || '').includes(AUTO_READY_MARKER))) {
+          await github.rest.issues.createComment({
+            ...args, body: `${AUTO_READY_MARKER}\nReady: epic #${epic} approved, all dependencies merged`,
+          });
+        }
+        core.info(`#${number}: added ${labels.ready} for epic #${epic}`);
+      } catch (error) {
+        core.warning(`#${number}: could not complete auto-ready for epic #${epic}: ${error.message}`);
+      }
+    }
+  }
+}
+
 async function mergeAndRetarget({ github, context, core }, config, pr, dryRun) {
   const { owner, repo } = context.repo;
   const { baseBranch, mergeGate } = config;
-  if (dryRun) return 'would merge';
+  if (dryRun) {
+    await autoReadyAfterMerge({ github, context, core }, config, pr, dryRun);
+    return 'would merge';
+  }
   const method = mergeGate.method || 'merge';
   const mergeArgs = { owner, repo, pull_number: pr.number, merge_method: method, sha: pr.head.sha };
   if (method === 'merge' || method === 'squash') {
@@ -330,7 +453,8 @@ async function mergeAndRetarget({ github, context, core }, config, pr, dryRun) {
     mergeArgs.commit_title = `Merge pull request #${pr.number} from ${pr.head.ref} (devflow merge gate)`;
     mergeArgs.commit_message = `${pr.title || ''}\n\nMerged-by: devflow merge gate`;
   }
-  await github.rest.pulls.merge(mergeArgs);
+  const { data: result } = await github.rest.pulls.merge(mergeArgs);
+  if (result?.merged === false) throw new Error(result.message || 'GitHub did not merge the pull request');
   // Best effort, and before cleanup: the merge already happened, so neither a failed comment nor a
   // failed retarget or branch delete may cost the marker.
   try {
@@ -341,6 +465,7 @@ async function mergeAndRetarget({ github, context, core }, config, pr, dryRun) {
   } catch (e) {
     core.warning(`Could not post the merge marker on #${pr.number}: ${e.message}`);
   }
+  await autoReadyAfterMerge({ github, context, core }, config, pr, dryRun);
   // Children stacked on this branch must move to the base before the branch disappears.
   const children = await github.paginate(github.rest.pulls.list, {
     owner, repo, state: 'open', base: pr.head.ref, per_page: 100,

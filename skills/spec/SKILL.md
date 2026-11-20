@@ -54,6 +54,8 @@ Run the spec review defined in "Review of the draft (both modes)" below on the d
 
 ### E4. Build and size check
 
+ For any task that needs a human step before it can be worked on, include a standalone `Ready: manual` line in its body and explain the step in Context. Include it when measuring body size.
+
  Build every body in memory first, from the draft: the epic and one sub-issue per task from `${CLAUDE_SKILL_DIR}/templates/issue.md` (the Context line `Epic: #<epic>`, which must start at column 0 with no other text on the line, acceptance criteria as a checklist, scope, the task's Test cases rows copied as they are, the Risk line with reason, Hotspots, one `Depends on #<n>` line per dependency, and the `## Open questions` section: the deferred questions that affect the task, else `None`). Issue numbers are not known yet: fill each with a number at its widest expected width (for example `#99999`). Measure each body with the JavaScript string `length` (not bytes). If any body is longer than 65,000 characters, create nothing, tell the user which body is too long, and tell them to run `/devflow:spec --file` instead; stop.
 
 ### E5. Create
@@ -61,7 +63,7 @@ Run the spec review defined in "Review of the draft (both modes)" below on the d
  Only after E4 passed. Create with the GitHub MCP `issue_write` tool (method `create`).
 1. For each title, search existing issues (open and closed) for an exact match of the trimmed, case-sensitive title: epic `[<slug>] <title>`, sub-issues `[<slug>] T<n>: <task title>`. Reuse a match as it is: do not edit its body, labels or state (the one exception is a reused epic's Tasks table, which E7 fills with the issue numbers). Create only what is missing, so a re-run after a partial failure makes no duplicates.
 2. Create the epic with label `type:epic` only: no ready label and no risk label.
-3. Create the sub-issues in dependency order so `Depends on` lines use real numbers and `Epic: #<epic>` the real epic number. Labels per sub-issue: `labels.riskLow` or `labels.riskHigh` per the task's risk, `labels.e2e` when the task needs e2e, and `type:<type>`. Never the ready label: the human sets it. Adding a missing label creates it.
+3. Create the sub-issues in dependency order so `Depends on` lines use real numbers and `Epic: #<epic>` the real epic number. Labels per sub-issue: `labels.riskLow` or `labels.riskHigh` per the task's risk, `labels.e2e` when the task needs e2e, and `type:<type>`. Never add the ready label during creation. A human can set it directly, or approve the epic for configured auto-readying with `/devflow:approve`. Adding a missing label creates it.
 
 ### E6. Link
 
@@ -126,7 +128,8 @@ Run only after the PR is verified merged.
 2. Create issues in dependency order, so `Depends on` lines can use real numbers. For each task fill `${CLAUDE_SKILL_DIR}/templates/issue.md`:
    - Title: `[<slug>] T<n>: <task title>`.
    - Body: link to the spec file on `baseBranch`, acceptance criteria as a checklist, scope, test cases (the task's rows of the Test matrix, copied as they are; if the spec has no Test matrix, the task's test plan as a list), and one `Depends on #<n>` line per dependency (resolve task ids to issue numbers).
-   - Labels: `labels.ready` (this mode only), plus `labels.riskLow` or `labels.riskHigh` per the task's risk, plus `labels.e2e` when the task needs e2e, plus `type:<type>`. Adding a missing label creates it.
+   - Labels: `labels.ready` (this mode only, after any required human step), plus `labels.riskLow` or `labels.riskHigh` per the task's risk, plus `labels.e2e` when the task needs e2e, plus `type:<type>`. Adding a missing label creates it.
+   - If a human must act before work starts, write a standalone `Ready: manual` line, explain the step in Context and leave the ready label for the human to add afterwards.
    - Fill the template's Risk line (level and reason), Hotspots and `## Open questions` (the deferred questions that affect the task, from the spec's Risks and unknowns, else `None`).
 3. Comment on the spec PR with the list of created issues.
 4. Then the final message below.
@@ -148,5 +151,5 @@ The spec review runs in both modes, after the QA step and before any issue is cr
 
 A table of task id, issue number and title, plus the epic number in epic mode and any link that failed.
 
-- Epic mode: say the human approves each sub-issue by setting the `labels.ready` label on it (the epic itself gets no such label), and that `/devflow:next-task` picks up only issues that carry it.
-- `--file` mode: the issues already carry `labels.ready`, set after the merged spec PR.
+- Epic mode: explain that the human can set the ready label on each sub-issue or use `/devflow:approve #<epic>` when `spec.autoReady` is enabled. Next-task picks up issues with the ready label.
+- `--file` mode: report which issues already carry `labels.ready` and which need the human step first.

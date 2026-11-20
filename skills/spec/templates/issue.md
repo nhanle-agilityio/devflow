@@ -1,6 +1,6 @@
 <!--
 Body of one GitHub issue per spec task. Title: [<slug>] T<n>: <task title>.
-Labels: the ready label only with --file (in epic mode the human sets it later), plus the risk label (low or high), plus the e2e label when the task needs it, plus type:<type>.
+Labels: the ready label only with --file once any required human step is done, plus the risk label (low or high), plus the e2e label when the task needs it, plus type:<type>.
 Never write the at-sign handle of the review bot into the body.
 -->
 
@@ -11,6 +11,8 @@ Never write the at-sign handle of the review bot into the body.
 Epic: #<epic>
 
 Part of the spec [<spec title>](<link to the spec file on the base branch>) (task T<n>). Spec PR: #<pr>.
+
+<!-- If a human step must happen first, add a standalone line exactly "Ready: manual" and explain the step in Context. Omit the line for other tasks. -->
 
 <!-- Two or three sentences: what this task delivers and why, in the spec's words. -->
 

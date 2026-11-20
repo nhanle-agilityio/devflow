@@ -65,7 +65,7 @@ Then, for each (a separate yes each; write only if the target is absent, otherwi
 Tell the user the required setup for what was added:
 
 - Repository secret `CLAUDE_CODE_OAUTH_TOKEN` (review and mention workflows).
-- Merge gate: repository secret `DEVFLOW_GATE_TOKEN`, a fine-grained personal access token limited to this repository with Contents read/write and Pull requests read/write. The Actions `GITHUB_TOKEN` cannot be used: pushes and merges made with it do not trigger CI.
+- Merge gate: repository secret `DEVFLOW_GATE_TOKEN`, a fine-grained personal access token limited to this repository with Contents read/write and Pull requests read/write. For epic auto-readying, also grant Issues read/write. The Actions `GITHUB_TOKEN` cannot be used: pushes and merges made with it do not trigger CI.
 - Repository settings: enable "Allow merge commits" (stacked PRs need merge commits).
 - The gate workflow must be on the repository's default branch: `workflow_run` and status triggers run from there. Merge the PR that adds it before expecting it to act.
 - The gate stays inert until `mergeGate.enabled` is true and logs only while `mergeGate.dryRun` is true.

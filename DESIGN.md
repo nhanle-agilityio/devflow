@@ -1,8 +1,8 @@
 # devflow — design
 
-A Claude Code plugin (3.0.0; `version` in `plugin.json` and `marketplace.json`, history in `CHANGELOG.md`) with nine project-agnostic commands, plus `/devflow:init` (and `init --upgrade`) for setup:
+A Claude Code plugin (3.0.0; `version` in `plugin.json` and `marketplace.json`, history in `CHANGELOG.md`) with ten project-agnostic commands, plus `/devflow:init` (and `init --upgrade`) for setup:
 
-1. **`/devflow:spec`** — idea → analyse → grill-me → QA matrix → epic issue + one sub-issue per task (risk per task; the human sets the ready label). With `--file`: spec PR (risk per task) → Gate 1 (human merges; this approves the risk levels) → GitHub issues labelled ready and `risk:low|high`.
+1. **`/devflow:spec`** — idea → analyse → grill-me → QA matrix → epic issue + one sub-issue per task (risk per task; the human sets readiness or approves the epic). With `--file`: spec PR (risk per task) → Gate 1 (human merges; this approves the risk levels) → GitHub issues labelled ready and `risk:low|high`.
 2. **`/devflow:next-task`** — pick up to N ready issues → claim → branch → plan on the issue → implement (QA and dev agents in parallel when the plan allows it, else test first) → checks → verify → review → open PR labelled with its risk, stacked on a parent PR when needed. Runs in the user's checkout, or in its own worktree with `--isolated`; `--chain` runs a lane.
 3. **`/devflow:dispatch`** — split the ready issues into non-colliding lanes and start one background session per lane.
 4. **`/devflow:sync`** — keep those PRs mergeable: retarget, update behind branches, resolve conflicts, address review threads.
@@ -11,6 +11,7 @@ A Claude Code plugin (3.0.0; `version` in `plugin.json` and `marketplace.json`, 
 7. **`/devflow:release`** — merged devflow PRs → semver version → grouped notes with a risk section → GitHub release (draft by default).
 8. **`/devflow:report`** — demo-ready trace page of one spec, from GitHub data.
 9. **`/devflow:doctor`** — health check of the setup; `--fix` repairs what the user confirms.
+10. **`/devflow:approve`** — approve an epic and ready its eligible sub-issues.
 
 Merging is done by a human, or for `risk:low` PRs by the merge gate GitHub Action (`devflow-merge-gate.yml`). Claude never merges.
 
@@ -20,7 +21,7 @@ Nothing in the plugin knows about a specific stack. Project mechanics live in `.
 
 - **Deterministic where it matters.** The loop and the order of stages in `next-task` are a Workflow script (`workflows/next-task-engine.js`), not prose. Safety rules are hooks, not instructions.
 - **Claude never merges.** The plugin opens PRs and pushes its own feature branches, never merges, never pushes to the base branch, never force-pushes (except `--force-with-lease` on its own branch). Who merges is decided by risk: a human for `risk:high` and unlabelled PRs; the merge gate Action (outside Claude, own token) for `risk:low` PRs once its checks are green.
-- **Risk is judged early and enforced late.** The spec judges each task against `risk.highWhen` / `risk.highPaths` (unsure → high) and the human approves the levels by setting the ready label on each sub-issue (epic mode) or at Gate 1 (`--file`). The engine only ever escalates to high, deterministically, when changed files match `risk.highPaths`. A missing label counts as high.
+- **Risk is judged early and enforced late.** The spec judges each task against `risk.highWhen` / `risk.highPaths` (unsure → high) and the human approves the levels by setting the ready label on a sub-issue, approving an epic with auto-ready enabled, or at Gate 1 (`--file`). The engine only ever escalates to high, deterministically, when changed files match `risk.highPaths`. A missing label counts as high.
 - **No reliance on GitHub paid features.** Target repos may be private on GitHub Free: no branch protection, no required checks, no native auto-merge. The merge gate is a plain Action that does the checking itself.
 - **Model tiers.** Opus handles planning and defaults to reviewing issues with high or unknown risk. Sonnet defaults to reviewing low-risk issues and writes the per-issue plan, implements and ships. Haiku runs mechanical steps such as selecting, claiming, branching, running checks and cleaning up blocked issues.
 - **GitHub via the GitHub MCP server** (issues, labels, PRs, comments). `gh` is optional, never required. Adding a missing label to an issue creates it.
@@ -99,6 +100,7 @@ Skills reference bundled files with `${CLAUDE_SKILL_DIR}/templates/...` or `${CL
   "commitScope": "#{issue}",                    // Conventional Commits scope, e.g. feat(#12): ...
   "specDir": "docs/specs",
   "labels": {
+    "epicApproved": "epic:approved",              // human approval of epic sub-issues for auto-ready
     "ready": "agent:ready", "inProgress": "agent:in-progress", "review": "agent:review",
     "blocked": "agent:blocked", "e2e": "needs-e2e",
     "devflow": "devflow",                       // on every PR devflow opens
@@ -127,7 +129,7 @@ Skills reference bundled files with `${CLAUDE_SKILL_DIR}/templates/...` or `${CL
     "browserTool": "playwright",                 // playwright | chrome
     "lock": true                                 // one session per machine runs Verify at a time
   },
-  "spec": { "testMatrix": true, "qaModel": "opus" }, // QA step of /devflow:spec; qaModel = opus | sonnet
+  "spec": { "testMatrix": true, "qaModel": "opus", "autoReady": "off" }, // QA step of /devflow:spec; qaModel = opus | sonnet
   "nextTask": { "defaultLimit": 3, "maxFixRounds": 2, "maxReviewRounds": 2, "parallelQa": true, "onQuestion": "decide", "trustDecisions": false },  // onQuestion: decide|block, see Decide or block; trustDecisions: the merge gate may merge decisions:review PRs; parallelQa: QA agent writes the acceptance tests in parallel with the dev agent
   "worktree": { "dir": ".claude/worktrees", "setup": [] },  // isolated runs: dir holds the worktrees (keep it in .gitignore); setup commands run once in a fresh worktree
   "dispatch": { "maxLanes": 3, "ignoreHotspots": ["README.md", "CHANGELOG.md"] },  // /devflow:dispatch; optional pluginDir is passed as --plugin-dir to background sessions; ignoreHotspots (paths or * / ** globs) do not join lanes; the fragment directory never needs a lane, so list `<fragmentsDir>/**` there when `changelog.fragmentsDir` is set
@@ -164,9 +166,9 @@ The config is written with `devflowVersion` = the installed plugin version. The 
 
 `disable-model-invocation: true`. Designed to run in a cloud session (claude.ai/code) on the repo, works locally too. Steps 1 and 2 are shared; then one of two modes.
 
-**Epic mode (default).** No spec file and no PR. After analyse, grill and the QA matrix: build the bodies of the epic (`templates/epic.md`: Goal, Design, `## Decisions`, Tasks table with risk and depends-on) and of one sub-issue per task (`templates/issue.md`, Context line `Epic: #<epic>`), with issue numbers filled at their widest expected width, and measure each by JavaScript string `length`; if one exceeds 65,000 characters nothing is created and the user is told to use `--file`. Then search by exact title (trimmed, case-sensitive, open or closed) and reuse matches without editing them (except a reused epic's Tasks table, filled with the issue numbers); create the epic `[<slug>] <title>` labelled `type:epic` only, then the sub-issues `[<slug>] T<n>: <title>` in dependency order, labelled risk (`labels.riskLow` or `labels.riskHigh`), `labels.e2e` when needed and `type:<type>`, never the ready label. Link each sub-issue with `sub_issue_write` (method `add`, existing links skipped; a failed link is reported and does not stop the run) and write the issue numbers into the epic's Tasks table. The final message says the human approves each sub-issue by setting `labels.ready`.
+**Epic mode (default).** No spec file and no PR. After analyse, grill and the QA matrix: build the bodies of the epic (`templates/epic.md`: Goal, Design, `## Decisions`, Tasks table with risk and depends-on) and of one sub-issue per task (`templates/issue.md`, Context line `Epic: #<epic>`), with issue numbers filled at their widest expected width, and measure each by JavaScript string `length`; if one exceeds 65,000 characters nothing is created and the user is told to use `--file`. Then search by exact title (trimmed, case-sensitive, open or closed) and reuse matches without editing them (except a reused epic's Tasks table, filled with the issue numbers); create the epic `[<slug>] <title>` labelled `type:epic` only, then the sub-issues `[<slug>] T<n>: <title>` in dependency order, labelled risk (`labels.riskLow` or `labels.riskHigh`), `labels.e2e` when needed and `type:<type>`, never the ready label. Link each sub-issue with `sub_issue_write` (method `add`, existing links skipped; a failed link is reported and does not stop the run) and write the issue numbers into the epic's Tasks table. The human can set `labels.ready` on each approved sub-issue or approve the epic for auto-readying. A task requiring a human step first gets a `Ready: manual` line and the instruction in Context.
 
-**`--file` mode.** The steps of 2.9.0, each announced with its number (the spec link replaces the `Epic:` line in the issues, which carry `labels.ready`):
+**`--file` mode.** The steps of 2.9.0, each announced with its number (the spec link replaces the `Epic:` line in the issues, which carry `labels.ready` except when a human step must happen first):
 
 1. **Analyse.** Read `.claude/devflow.json`, `CLAUDE.md`, and the code the idea touches. Produce a short analysis: current behaviour, affected areas (backend/frontend/infra/data), risks, unknowns. Do not write files yet.
 2. **Grill.** Invoke the `grill-me` skill on the idea plus the analysis. Keep going until every unknown is decided or explicitly deferred. If `grill-me` is not available, run the same interview inline: one question at a time, each with a recommended answer.
@@ -276,6 +278,15 @@ Per PR:
 5. **Round limit.** A round is a run of step 3 or 4 that changed or answered something. Rounds are counted by the hidden marker `<!-- devflow-sync -->` in earlier comments; at `nextTask.maxReviewRounds` the PR is left for the user. After a round, one marker comment with a one-line summary is posted. Steps 1 and 2 are not rounds.
 6. Switch back; summary table PR → retargeted / updated / conflicts / threads fixed, answered, won't fix, `ignored: not a collaborator` / rounds left.
 
+
+## `/devflow:approve #<epic>`
+
+An explicit human command. It uses GitHub MCP to add `labels.epicApproved` (default `epic:approved`) and applies the eligibility sweep once. The owner can also add this label directly. The optional `spec.autoReady` setting defaults to `off`. With `low`, the sweep requires `labels.riskLow`. With `all`, it accepts any risk. The risk labels and rules for merging PRs still apply.
+
+The sweep considers open native sub-issues and issues with an exact `Epic: #<epic>` body line in the configured repository. It skips issues already ready, in progress, in review, blocked or in triage. Every `Depends on #n` issue must be closed. The child must have no `Ready: manual` line, and its `## Open questions` section must be absent, empty or `None`. Approval is checked before writes. Removing it stops future sweeps and leaves existing ready labels in place.
+
+The command reports each sub-issue and its action (`ready`, `waits for #n`, `manual`, `high risk` or `open questions`). Dispatch applies the same sweep before collecting ready issues. `--plan` previews eligibility and lanes without posting a label or comment.
+
 ## `/devflow:answer #issue [1: answer; 2: answer ...]`
 
 `disable-model-invocation: true`. Unblocks an issue that the engine blocked with questions. Needs a clean working tree. GitHub via the MCP server. Never merges, never pushes to `baseBranch`.
@@ -359,9 +370,12 @@ The steps live at the bottom of `CHANGELOG.md`, which is the release task templa
 
 Risk flows: spec task (`risk` + reason, approved by the ready label on the sub-issue, or at Gate 1 with `--file`) → issue label and `Risk:` line → engine (escalate to high on `risk.highPaths`; unlabelled = high) → PR label and body line → gate (acts only on `risk:low`).
 
-**Merge gate** = `.github/workflows/devflow-merge-gate.yml` + `.github/scripts/devflow-merge-gate.cjs`, installed by `/devflow:init`. It exists because target repos may be private on GitHub Free. Runs on `workflow_run` completion (CI workflows and "Claude Code Review"), `status`, and manual `workflow_dispatch` (optional PR number). The workflow lives on the default branch (those triggers only run from there) and uses `DEVFLOW_GATE_TOKEN`, a fine-grained PAT (Contents + Pull requests read/write, this repo only), because pushes and merges made with `GITHUB_TOKEN` do not trigger CI. Config is read from `.claude/devflow.json` at `baseBranch`. It does nothing unless `mergeGate.enabled`; with `dryRun` (default) it only reports. A PR labelled `labels.decisionsReview` (default `decisions:review`: the run took decisions) is skipped with `decisions:review: waits for a human`, checked right after the `risk:high`, no-risk-label and blocked checks and before any API call, unless `nextTask.trustDecisions` is `true` (default `false`); with trust on the PR is evaluated like any `risk:low` PR, so a high-path file, a conflict, a behind branch, a failing check or a blocking thread still hold it. The workflow's inputs and secrets are unchanged.
+**Merge gate** = `.github/workflows/devflow-merge-gate.yml` + `.github/scripts/devflow-merge-gate.cjs`, installed by `/devflow:init`. It exists because target repos may be private on GitHub Free. Runs on `workflow_run` completion (CI workflows and "Claude Code Review"), `status`, and manual `workflow_dispatch` (optional PR number). The workflow lives on the default branch (those triggers only run from there) and uses `DEVFLOW_GATE_TOKEN`, a fine-grained PAT scoped to this repository with Contents and Pull requests read/write, plus Issues read/write for auto-readying, because pushes and merges made with `GITHUB_TOKEN` do not trigger CI. Config is read from `.claude/devflow.json` at `baseBranch`. It does nothing unless `mergeGate.enabled`; with `dryRun` (default) it only reports. A PR labelled `labels.decisionsReview` (default `decisions:review`: the run took decisions) is skipped with `decisions:review: waits for a human`, checked right after the `risk:high`, no-risk-label and blocked checks and before any API call, unless `nextTask.trustDecisions` is `true` (default `false`); with trust on the PR is evaluated like any `risk:low` PR, so a high-path file, a conflict, a behind branch, a failing check or a blocking thread still hold it. The workflow's inputs and secrets are unchanged.
 
 Every enabled run sweeps one page of up to 100 recently updated closed issues in its repository, even when no PR is eligible or there are no effective required checks. The gate also cleans linked issues after merging a PR. Cleanup removes only the configured in-progress, review and blocked labels that are present. Dry runs log sweep removals, and removal failures warn without stopping cleanup.
+
+
+After its own merge, the gate reads the epic body reference on each issue the PR closes. It sweeps each affected approved epic once, using fresh dependency states. It adds the ready label to each eligible child and posts `Ready: epic #<epic> approved, all dependencies merged` with the `<!-- devflow-auto-ready -->` marker once per issue. Failures warn and the gate continues. In dry-run mode it projects the PR's issue closures and logs the ready actions without making changes.
 
 Per run it walks open PRs labelled `labels.devflow` in priority order (`priorityRank` of the linked issues' labels, the best one when several; the PR's own labels when it links none; then PR number) and **merges at most one**. Priority changes only the order: every rule below still applies. Rules in order; the first failure decides:
 

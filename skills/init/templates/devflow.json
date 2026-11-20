@@ -15,6 +15,7 @@
   "commitScope": "#{issue}",
   "specDir": "docs/specs",
   "labels": {
+    "epicApproved": "epic:approved", // explicit human approval for epic auto-readying
     "ready": "agent:ready",
     "inProgress": "agent:in-progress",
     "review": "agent:review",
@@ -74,7 +75,8 @@
     "lock": true
   },
   // QA step of /devflow:spec: draft a test matrix from the acceptance criteria. qaModel is "opus" or "sonnet".
-  "spec": { "testMatrix": true, "qaModel": "opus" },
+  // autoReady: "off" keeps manual readiness, "low" requires risk:low, "all" allows any risk after epic approval.
+  "spec": { "testMatrix": true, "qaModel": "opus", "autoReady": "off" },
   // reviewerAgent: the subagent type Review runs as ("" = the default agent).
   // parallelQa: a QA agent writes the acceptance tests from the spec while the dev agent implements (default true).
   // onQuestion: decide (default) = the run answers a question whose recommended option is reversible and safe (not a criterion,

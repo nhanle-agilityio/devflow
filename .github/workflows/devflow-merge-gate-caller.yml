@@ -8,6 +8,7 @@ name: Devflow Merge Gate
 # MUST live on the repository DEFAULT branch: `workflow_run` and `status` triggers only run from there.
 # Secret DEVFLOW_GATE_TOKEN = fine-grained PAT, scoped to this repository only, with Contents: read/write and
 # Pull requests: read/write (pushes and merges made with GITHUB_TOKEN do not trigger CI).
+# Also grant Issues: read/write for epic auto-readying.
 # If devflow is a private repository: its owner must allow access from this repository (devflow Settings >
 # Actions > General > Access), and add a DEVFLOW_READ_TOKEN secret that can read the devflow repository.
 # /devflow:init fills the workflow_run list below.

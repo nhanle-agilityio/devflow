@@ -5,6 +5,7 @@ name: devflow merge gate (reusable)
 # calling repository (for .claude/devflow.json) and the gate script from this repository at `devflow-ref`,
 # so the script is not copied into the project.
 # The caller must live on its default branch and pass DEVFLOW_GATE_TOKEN (see the README checklist).
+# Grant the PAT Issues: read/write for epic auto-readying.
 # A private devflow repository must allow access from the calling repositories
 # (Settings > Actions > General > Access) and the caller must also pass DEVFLOW_READ_TOKEN, a token that can
 # read this repository, for the script checkout; a public one needs neither.
@@ -46,7 +47,7 @@ jobs:
           GATE_TOKEN: ${{ secrets.DEVFLOW_GATE_TOKEN }}
         run: |
           if [ -z "$GATE_TOKEN" ]; then
-            echo "::error::Secret DEVFLOW_GATE_TOKEN is not set. Create a fine-grained PAT (this repo only, Contents RW + Pull requests RW) and add it as a repository secret."
+            echo "::error::Secret DEVFLOW_GATE_TOKEN is not set. Create a fine-grained PAT (this repo only, Contents RW + Pull requests RW, plus Issues RW for epic auto-readying) and add it as a repository secret."
             exit 1
           fi
 
