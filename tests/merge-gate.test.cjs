@@ -1232,3 +1232,137 @@ test('T20.12 workflow inputs and secrets match the fixed interface', () => {
     secrets: { DEVFLOW_GATE_TOKEN: { required: 'true' }, DEVFLOW_READ_TOKEN: { required: 'false' } },
   }, 'merge-gate workflow_call inputs and secrets must keep their current interface');
 });
+
+const AUTO_READY_REPO = 'https://api.github.com/repos/o/r';
+
+function autoReadyEnv({ body = '', risk = 'risk:low', extraLabels = [], approved = true, rejectLabel = false } = {}) {
+  const makeIssue = (number, over = {}) => ({
+    number, state: 'open', labels: ['risk:low'], body: '', repository_url: AUTO_READY_REPO, ...over,
+  });
+  const issues = {
+    90: makeIssue(90, { labels: approved ? [{ name: 'epic:approved' }] : [] }),
+    101: makeIssue(101, { body: '## Context\n\nEpic: #90' }),
+    102: makeIssue(102, { body: '## Open questions\n\n<!-- guidance -->\nNone' }),
+    103: makeIssue(103, { body: `Epic: #90\n\n## Dependencies\nDepends on #101\n${body}`, labels: [risk, ...extraLabels] }),
+    104: makeIssue(104, { body: 'Epic: #90' }),
+    105: makeIssue(105, { body: 'Epic: #900' }),
+  };
+  const env = makeEnv({ prs: [makePr(1)], issues, listedIssues: Object.values(issues), ...green(1) });
+  const { github } = env;
+
+  const merge = github.rest.pulls.merge;
+  github.rest.pulls.merge = async (args) => {
+    const result = await merge(args);
+    issues[101].state = 'closed';
+    return result;
+  };
+  const addLabels = github.rest.issues.addLabels;
+  github.rest.issues.addLabels = async (args) => {
+    const result = await addLabels(args);
+    if (rejectLabel && args.issue_number === 103) throw Object.assign(new Error('Forbidden (403)'), { status: 403 });
+    issues[args.issue_number].labels.push(...args.labels);
+    return result;
+  };
+  const paginate = github.paginate;
+  github.paginate = async (endpoint, params) => {
+    if (endpoint === 'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues') {
+      assert.equal(params.issue_number, 90);
+      return [
+        issues[102],
+        issues[103],
+        makeIssue(105, { repository_url: 'https://api.github.com/repos/another/repo' }),
+      ];
+    }
+    if (endpoint === github.rest.issues.listComments) {
+      return env.names('createComment').filter(([, args]) => args.issue_number === params.issue_number).map(([, args]) => ({ body: args.body }));
+    }
+    return paginate(endpoint, params);
+  };
+  env.logs = [];
+  env.core.info = (message) => env.logs.push(message);
+  env.readied = () => env.names('addLabels').filter(([, args]) => args.labels.includes('agent:ready')).map(([, args]) => args.issue_number);
+  return env;
+}
+
+function autoReadyConfig(autoReady, dryRun = false) {
+  return { ...CONFIG({ dryRun }), ...(autoReady === undefined ? {} : { spec: { autoReady } }) };
+}
+
+test('R1.1 an approved epic readies native and body-linked children after their dependencies close', async () => {
+  const env = autoReadyEnv();
+  await run(env, autoReadyConfig('low'));
+  assert.equal(env.decisions()[0].action, 'merged');
+  assert.deepEqual(env.readied().sort(), [102, 103, 104]);
+  const comments = env.names('createComment').filter(([, args]) => args.issue_number === 103);
+  assert.equal(comments.length, 1);
+  assert.equal(comments[0][1].body, '<!-- devflow-auto-ready -->\nReady: epic #90 approved, all dependencies merged');
+  assert.ok(env.calls.findIndex(([name]) => name === 'pulls.merge') < env.calls.indexOf(comments[0]));
+});
+
+test('R1.2 off and missing autoReady preserve manual readiness', async () => {
+  for (const mode of ['off', undefined]) {
+    const env = autoReadyEnv();
+    await run(env, autoReadyConfig(mode));
+    assert.equal(env.decisions()[0].action, 'merged');
+    assert.deepEqual(env.readied(), []);
+    assert.deepEqual(env.messages.warnings, []);
+  }
+});
+
+test('R1.3 an open dependency holds the child', async () => {
+  const env = autoReadyEnv({ body: 'Depends on #77' });
+  await run(env, autoReadyConfig('low'));
+  assert.deepEqual(env.readied().sort(), [102, 104]);
+});
+
+test('R1.4 open questions and the manual-ready marker each hold the child', async () => {
+  for (const body of ['## Open questions\n\n- Which API?\n\n## Notes\nNone', 'Ready: manual']) {
+    const env = autoReadyEnv({ body });
+    await run(env, autoReadyConfig('low'));
+    assert.deepEqual(env.readied().sort(), [102, 104]);
+  }
+});
+
+test('R1.5 low skips high and unlabelled children while all allows both', async () => {
+  for (const risk of ['risk:high', 'unrelated']) {
+    for (const mode of ['low', 'all']) {
+      const env = autoReadyEnv({ risk });
+      await run(env, autoReadyConfig(mode));
+      assert.equal(env.readied().includes(103), mode === 'all');
+      assert.ok(env.readied().includes(102));
+    }
+  }
+});
+
+test('R1.6 missing approval prevents readying any children', async () => {
+  const env = autoReadyEnv({ approved: false });
+  await run(env, autoReadyConfig('all'));
+  assert.equal(env.decisions()[0].action, 'merged');
+  assert.deepEqual(env.readied(), []);
+});
+
+test('R1.7 children with workflow or triage labels stay untouched', async () => {
+  for (const label of ['agent:ready', 'agent:in-progress', 'agent:review', 'agent:blocked', 'needs-triage']) {
+    const env = autoReadyEnv({ extraLabels: [label] });
+    await run(env, autoReadyConfig('all'));
+    assert.deepEqual(env.readied().sort(), [102, 104]);
+    assert.ok(!env.names('createComment').some(([, args]) => args.issue_number === 103));
+  }
+});
+
+test('R1.8 a 403 warning leaves the successful merge and other children unaffected', async () => {
+  const env = autoReadyEnv({ rejectLabel: true });
+  await run(env, autoReadyConfig('low'));
+  assert.equal(env.decisions()[0].action, 'merged');
+  assert.ok(env.messages.warnings.some((m) => /#103.*403/.test(m)));
+  assert.ok(env.readied().includes(104));
+  assert.ok(!env.names('createComment').some(([, args]) => args.issue_number === 103));
+});
+
+test('R1.9 dry run logs the projected ready actions without writes', async () => {
+  const env = autoReadyEnv();
+  await run(env, autoReadyConfig('low', true));
+  assert.equal(env.decisions()[0].action, 'would merge');
+  assert.deepEqual(mutated(env), []);
+  assert.ok(env.logs.some((m) => /#103: would .*ready.*#90/.test(m)));
+});
