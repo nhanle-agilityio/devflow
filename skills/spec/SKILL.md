@@ -151,5 +151,5 @@ The spec review runs in both modes, after the QA step and before any issue is cr
 
 A table of task id, issue number and title, plus the epic number in epic mode and any link that failed.
 
-- Epic mode: say the human approves each sub-issue by setting the `labels.ready` label on it (the epic itself gets no such label), and that `/devflow:next-task` picks up only issues that carry it.
-- `--file` mode: the issues already carry `labels.ready`, set after the merged spec PR.
+- Epic mode: explain that the human can set the ready label on each sub-issue or use `/devflow:approve #<epic>` when `spec.autoReady` is enabled. Next-task picks up issues with the ready label.
+- `--file` mode: report which issues already carry `labels.ready` and which need the human step first.
