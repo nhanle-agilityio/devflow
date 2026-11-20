@@ -191,6 +191,17 @@
         "defaultLimit": { "type": "integer", "minimum": 1, "default": 3 },
         "maxFixRounds": { "type": "integer", "minimum": 0, "default": 2 },
         "maxReviewRounds": { "type": "integer", "minimum": 0, "default": 2 },
+        "reviewModel": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Model for each Review round. Issues with unknown risk use the high model.",
+          "default": { "low": "sonnet", "high": "opus" },
+          "properties": {
+            "low": { "type": "string", "minLength": 1, "default": "sonnet" },
+            "high": { "type": "string", "minLength": 1, "default": "opus" }
+          }
+        },
+        "maxAgentCalls": { "type": "integer", "minimum": 0, "default": 0, "description": "Block an issue when its agent calls reach this count. Cleanup calls are exempt. Zero disables the limit." },
         "parallelQa": { "type": "boolean", "default": true, "description": "Implement runs a QA agent (acceptance tests from the spec and issue only) in parallel with the dev agent when the plan names test files for the issue's Test cases rows. false: one agent writes the test first, then the implementation." },
         "onQuestion": { "enum": ["decide", "block"], "default": "decide", "description": "How questions are handled. decide: a question whose recommended option is reversible and touches no criterion, contract, stored format, risk, check, destructive git, outside-repo or high path is answered by the run (recorded in the issue's Decisions and the PR's Decisions taken, PR labelled labels.decisionsReview), and a review warning still open after maxReviewRounds ships; any other question blocks. block: every question and every leftover warning blocks (3.0.0 behaviour)." },
         "trustDecisions": { "type": "boolean", "default": false, "description": "The merge gate merges a risk:low PR labelled labels.decisionsReview. false: such a PR waits for a human merge." },

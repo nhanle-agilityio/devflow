@@ -59,7 +59,8 @@ const labels = Object.assign(
 const priorityList = Array.isArray(labels.priority) ? labels.priority : []
 const riskCfg = Object.assign({ highPaths: [] }, cfg.risk)
 const testingCfg = Object.assign({ e2eFramework: false }, cfg.testing)
-const nt = Object.assign({ defaultLimit: 3, maxFixRounds: 2, maxReviewRounds: 2, parallelQa: true, reviewerAgent: 'devflow:reviewer', onQuestion: 'decide', trustDecisions: false }, cfg.nextTask)
+const nt = Object.assign({ defaultLimit: 3, maxFixRounds: 2, maxReviewRounds: 2, maxAgentCalls: 0, parallelQa: true, reviewerAgent: 'devflow:reviewer', onQuestion: 'decide', trustDecisions: false }, cfg.nextTask)
+nt.reviewModel = { low: 'sonnet', high: 'opus', ...nt.reviewModel }
 const verifyCfg = Object.assign({ modes: [], browserTool: 'playwright', lock: true }, cfg.verify)
 const branchPattern = cfg.branchPattern || '{type}/{issue}-{slug}'
 const startBranch = args.startBranch
@@ -1711,7 +1712,7 @@ const plainText = (q) => String((q && q.text) || '').replace(/^\[(BA|QA|Dev)\] /
 async function changedFilesFor(issue, branch, qs) {
   if (!branch) return null
   const answers = (qs || []).map((q, i) => `${i + 1}. ${oneLine(plainText(q))} -> ${oneLine(q.recommended)}`).join('\n')
-  const r = await agent(
+  const r = await callAgent(
     `List the files changed on branch ${branch} for issue #${issue.number}. Read-only: change nothing.${answers ? `\n\nThe run is about to take these decisions (context only, do not act on them):\n${answers}` : ''}\n\nRun \`git diff --name-only ${parentRefFor(issue)}...HEAD\` and return ok=true with files = its lines (every file of the whole branch, not only the last commit). If the command fails, return ok=false with the problem.`,
     { label: `changed-files #${issue.number}`, phase: 'Implement', schema: CHANGED_SCHEMA, model: 'haiku' },
   )
@@ -1742,7 +1743,7 @@ async function recordDecisions(issue, qs) {
   decided[issue.number] = (decided[issue.number] || []).concat(items)
   if (!fresh.added.length) return { ok: true }
   issue.body = fresh.body
-  const r = await agent(
+  const r = await callAgent(
     `Record decisions on GitHub issue #${issue.number} in ${gh.owner}/${gh.repo}. ${MCP_NOTE}\n\nRead the issue with issue_read (method get). Append each line below to the "## Decisions" section of the issue body, one line per decision, in this order, exactly as written. Create the section at the end of the body when it is missing. Skip a line that is identical to a line already in the section. Change nothing else in the body, and keep the labels as they are. Write the body with issue_write.\n\nLines:\n${fresh.added.join('\n')}\n\nReturn ok=true and appended = the lines you really appended (not the skipped ones). On failure return ok=false with the problem.`,
     { label: `decisions #${issue.number}`, phase: 'Implement', schema: DECISIONS_SCHEMA, model: 'haiku' },
   )
@@ -1779,7 +1780,7 @@ function devQuestions(r, tag, none) {
 async function checkLoop(issue, branch, state) {
   for (let round = 0; round <= nt.maxFixRounds; round++) {
     phase('Check')
-    const check = await agent(checkPrompt(), {
+    const check = await callAgent(checkPrompt(), {
       label: `check #${issue.number}${round ? ` (after fix ${round})` : ''}`,
       phase: 'Check',
       schema: CHECK_SCHEMA,
@@ -1812,7 +1813,7 @@ async function runFix(issue, branch, state, why, details, disputed) {
   const asked = await withQuestions(
     issue,
     branch,
-    () => agent(fixPrompt(issue, branch, why, details, state.qaFiles, state.guide, disputed), { label: `fix #${issue.number}`, phase: 'Implement', schema: IMPLEMENT_SCHEMA, model: 'sonnet' }),
+    () => callAgent(fixPrompt(issue, branch, why, details, state.qaFiles, state.guide, disputed), { label: `fix #${issue.number}`, phase: 'Implement', schema: IMPLEMENT_SCHEMA, model: 'sonnet' }),
     (r) => devQuestions(r, 'Dev', `The fix agent reported blocked (${why}).`),
   )
   const fix = asked.result
@@ -1833,7 +1834,7 @@ async function runQaFix(issue, branch, state, why, details) {
   const asked = await withQuestions(
     issue,
     branch,
-    () => agent(qaFixPrompt(issue, branch, why, details, state.qaFiles), { label: `qa-fix #${issue.number}`, phase: 'Implement', schema: IMPLEMENT_SCHEMA, model: 'sonnet' }),
+    () => callAgent(qaFixPrompt(issue, branch, why, details, state.qaFiles), { label: `qa-fix #${issue.number}`, phase: 'Implement', schema: IMPLEMENT_SCHEMA, model: 'sonnet' }),
     (r) => devQuestions(r, 'QA', `The QA fix agent reported blocked (${why}).`),
   )
   const fix = asked.result
@@ -1900,7 +1901,31 @@ function failedSteps(v) {
   return v.steps.filter((s) => !s.pass)
 }
 
+class AgentBudgetExceeded extends Error {
+  constructor(calls) {
+    super(`agent budget exceeded (${calls} calls)`)
+  }
+}
+
+let agentCalls = 0
+const budgetReached = () => nt.maxAgentCalls > 0 && agentCalls >= nt.maxAgentCalls
+
+async function callAgent(prompt, options, receive, opts) {
+  // Reserve the call before awaiting so parallel QA and Dev share the same limit.
+  if (budgetReached()) throw new AgentBudgetExceeded(agentCalls)
+  agentCalls++
+  try {
+    const result = await agent(prompt, options)
+    if (receive) receive(result)
+    return result
+  } finally {
+    // Ship is the last call: once it has opened the PR, never turn the issue into a block.
+    if (!(opts && opts.last) && budgetReached()) throw new AgentBudgetExceeded(agentCalls)
+  }
+}
+
 async function runIssue(issue) {
+  agentCalls = 0
   const state = {
     summary: '',
     fixes: [],
@@ -1935,23 +1960,23 @@ async function runIssue(issue) {
   // A stage that could not reach GitHub reports it in `problem`; the run stops as at Claim.
   const down = (r) => !!(r && r.problem && mcpDown(r.problem))
 
-  async function verifyClaimRelease(stage) {
+  async function verifyClaimRelease(stage, budgetExceeded = false) {
     const target = `GitHub issue #${issue.number} in ${gh.owner}/${gh.repo}`
     const marker = `<!-- devflow-claim id=${claimId} -->`
     const options = { phase: stage, model: 'haiku' }
     const check = () => agent(`Re-read all comments on ${target}. ${MCP_NOTE}
 Return claimPresent=true if a comment body contains "${marker}", or false if none does. Make no changes.`, {
-      ...options, label: `release check #${issue.number}`, schema: CLAIM_RELEASE_CHECK_SCHEMA,
+      ...options, label: budgetExceeded ? `blocked #${issue.number} (release check)` : `release check #${issue.number}`, schema: CLAIM_RELEASE_CHECK_SCHEMA,
     })
     if ((await check())?.claimPresent !== true) return
     await agent(`Delete only comments on ${target} whose bodies contain "${marker}". ${MCP_NOTE}
 Make no other changes. Return ok=true when those comments are gone.`, {
-      ...options, label: `release retry #${issue.number}`, schema: RELEASE_SCHEMA,
+      ...options, label: budgetExceeded ? `blocked #${issue.number} (release retry)` : `release retry #${issue.number}`, schema: RELEASE_SCHEMA,
     })
     if ((await check())?.claimPresent === true) notes.push('claim not released')
   }
 
-  async function block(stage, reason, questions) {
+  async function block(stage, reason, questions, budgetExceeded = false) {
     // GitHub cannot be reached: no cleanup comment or label is possible; the run stops (see Main).
     if (mcpDown(reason)) {
       log(`#${issue.number} stopped at ${stage}: ${reason.split('\n')[0]}`)
@@ -1968,19 +1993,26 @@ Make no other changes. Return ok=true when those comments are gone.`, {
       schema: BLOCKED_SCHEMA,
       model: 'haiku',
     })
-    await verifyClaimRelease(stage)
+    await verifyClaimRelease(stage, budgetExceeded)
     issue.inCleanup = false
-    return done({ issue: issue.number, status: 'blocked', reason: `${stage}: ${reason.split('\n')[0]}`, questionCount: Array.isArray(questions) ? questions.length : 0 })
+    return done({ issue: issue.number, status: 'blocked', reason: budgetExceeded ? reason : `${stage}: ${reason.split('\n')[0]}`, questionCount: Array.isArray(questions) ? questions.length : 0 })
   }
 
   // Claim: a lock on the issue, decided here from the claim comments the agent read back.
   phase('Implement')
-  const claim = await agent(claimPrompt(issue), {
-    label: `claim #${issue.number}`,
-    phase: 'Implement',
-    schema: CLAIM_SCHEMA,
-    model: 'haiku',
-  })
+  let claim
+  try {
+    claim = await callAgent(claimPrompt(issue), {
+      label: `claim #${issue.number}`,
+      phase: 'Implement',
+      schema: CLAIM_SCHEMA,
+      model: 'haiku',
+    }, (result) => { claim = result })
+  } catch (e) {
+    if (!(e instanceof AgentBudgetExceeded)) throw e
+    // Resolve claim ownership before cleanup, even when Claim spent the budget.
+    if (!claim) return block('Claim', e.message, undefined, true)
+  }
   if (!claim) return block('Claim', 'The claim agent failed.')
   if (claim.problem && mcpDown(claim.problem)) return block('Claim', claim.problem)
   if (claim.taken) {
@@ -2012,6 +2044,7 @@ Make no other changes. Return ok=true when those comments are gone.`, {
   }
 
   issue.claimWon = true
+  if (budgetReached()) return block('Claim', new AgentBudgetExceeded(agentCalls).message, undefined, true)
   claimedAt = winner && typeof winner.createdAt === 'string' && winner.createdAt ? winner.createdAt : null
   // Claim read the issue from GitHub: its labels, spec path and Introduced by heading win over the Select copy.
   {
@@ -2036,7 +2069,9 @@ Make no other changes. Return ok=true when those comments are gone.`, {
     const madeAsked = await withQuestions(
       issue,
       '',
-      () => agent(branchPrompt(issue), { label: `branch #${issue.number}`, phase: 'Implement', schema: BRANCH_SCHEMA, model: 'haiku' }),
+      () => callAgent(branchPrompt(issue), { label: `branch #${issue.number}`, phase: 'Implement', schema: BRANCH_SCHEMA, model: 'haiku' }, (result) => {
+        if (result && result.ok && result.branch) branch = result.branch
+      }),
       (r) => (!r.ok && Array.isArray(r.questions) ? r.questions : []),
     )
     const made = madeAsked.result
@@ -2069,7 +2104,7 @@ Make no other changes. Return ok=true when those comments are gone.`, {
       const integAsked = await withQuestions(
         issue,
         branch,
-        () => agent(integratePrompt(issue, branch, baseConflict), { label: `integrate #${issue.number}`, phase: 'Implement', schema: INTEGRATE_SCHEMA, model: 'sonnet' }),
+        () => callAgent(integratePrompt(issue, branch, baseConflict), { label: `integrate #${issue.number}`, phase: 'Implement', schema: INTEGRATE_SCHEMA, model: 'sonnet' }),
         (r) => (!r.ok && Array.isArray(r.questions) ? r.questions : []),
       )
       const integ = integAsked.result
@@ -2093,7 +2128,7 @@ Make no other changes. Return ok=true when those comments are gone.`, {
       const planAsked = await withQuestions(
         issue,
         branch,
-        () => agent(planPrompt(issue, branch), { label: `plan #${issue.number}`, phase: 'Implement', schema: PLAN_SCHEMA, model: 'sonnet' }),
+        () => callAgent(planPrompt(issue, branch), { label: `plan #${issue.number}`, phase: 'Implement', schema: PLAN_SCHEMA, model: 'sonnet' }),
         (r) => (r.status === 'blocked' && Array.isArray(r.questions) ? r.questions : []),
       )
       plan = planAsked.result
@@ -2142,8 +2177,8 @@ Make no other changes. Return ok=true when those comments are gone.`, {
         }
       }
       const [qa, dev] = await parallel([
-        settle(() => agent(qaPrompt(issue, branch, plan.plan, own), { label: `qa #${issue.number}`, phase: 'Implement', schema: QA_SCHEMA, model: 'sonnet' })),
-        settle(() => agent(implementPrompt(issue, branch, plan.plan, own), { label: `implement #${issue.number}`, phase: 'Implement', schema: IMPLEMENT_SCHEMA, model: 'sonnet' })),
+        settle(() => callAgent(qaPrompt(issue, branch, plan.plan, own), { label: `qa #${issue.number}`, phase: 'Implement', schema: QA_SCHEMA, model: 'sonnet' })),
+        settle(() => callAgent(implementPrompt(issue, branch, plan.plan, own), { label: `implement #${issue.number}`, phase: 'Implement', schema: IMPLEMENT_SCHEMA, model: 'sonnet' })),
       ])
       if (caught.length) throw caught[0]
       return { qa, dev }
@@ -2175,7 +2210,7 @@ Make no other changes. Return ok=true when those comments are gone.`, {
       if (specPathForPlan && !readSpec(qa, specPathForPlan)) return block('Implement', `The QA agent did not read the spec ${specPathForPlan}`)
       if (srcPlan.kind === 'epic' && !readSource(qa, srcPlan)) return block('Implement', `The QA agent did not read epic #${srcPlan.n}`)
 
-      const committed = await agent(commitPrompt(issue, branch, own, qa, dev, state.guide), {
+      const committed = await callAgent(commitPrompt(issue, branch, own, qa, dev, state.guide), {
         label: `commit #${issue.number}`,
         phase: 'Implement',
         schema: COMMIT_SCHEMA,
@@ -2198,7 +2233,7 @@ Make no other changes. Return ok=true when those comments are gone.`, {
       const implAsked = await withQuestions(
         issue,
         branch,
-        () => agent(implementPrompt(issue, branch, plan.plan), { label: `implement #${issue.number}`, phase: 'Implement', schema: IMPLEMENT_SCHEMA, model: 'sonnet' }),
+        () => callAgent(implementPrompt(issue, branch, plan.plan), { label: `implement #${issue.number}`, phase: 'Implement', schema: IMPLEMENT_SCHEMA, model: 'sonnet' }),
         (r) => devQuestions(r, 'Dev', 'The implement agent reported blocked without a reason.'),
       )
       impl = implAsked.result
@@ -2270,7 +2305,7 @@ Make no other changes. Return ok=true when those comments are gone.`, {
     if (needsVerify && pathKind !== 'short') {
       for (let round = 0; round <= 1; round++) {
         phase('Verify')
-        const v = await agent(verifyPrompt(issue, branch, state), {
+        const v = await callAgent(verifyPrompt(issue, branch, state), {
           label: `verify #${issue.number}${round ? ' (again)' : ''}`,
           phase: 'Verify',
           schema: VERIFY_SCHEMA,
@@ -2301,7 +2336,7 @@ Make no other changes. Return ok=true when those comments are gone.`, {
     for (let round = 0; round <= nt.maxReviewRounds; round++) {
       phase('Review')
       const scan = pluginRoot
-        ? await agent(scanPrompt(issue, branch), {
+        ? await callAgent(scanPrompt(issue, branch), {
             label: `scan #${issue.number}${round ? ` (round ${round + 1})` : ''}`,
             phase: 'Review',
             schema: SCAN_SCHEMA,
@@ -2320,14 +2355,15 @@ Make no other changes. Return ok=true when those comments are gone.`, {
       }
       if (hits.length) log(`#${issue.number}: weakened-checks scan: ${hits.map(hitLine).join('; ')}`)
       // The plugin's reviewer agent (agents/reviewer.md) when available; the default subagent otherwise.
-      const reviewOpts = { label: `review #${issue.number} (round ${round + 1})`, phase: 'Review', schema: REVIEW_SCHEMA, model: 'opus' }
+      const reviewOpts = { label: `review #${issue.number} (round ${round + 1})`, phase: 'Review', schema: REVIEW_SCHEMA, model: nt.reviewModel[issueRisk(issue) === 'low' ? 'low' : 'high'] }
       let review
       reviewRounds++
       // The reviewer agent reads the issue with gh; without gh, or once it could not read the issue, the default agent reads it with the MCP server.
       if (nt.reviewerAgent && ghCli && !reviewerMissing && !reviewerCannotRead) {
         try {
-          review = await agent(reviewPrompt(issue, branch, state, round, hits, true), Object.assign({ agentType: nt.reviewerAgent }, reviewOpts))
+          review = await callAgent(reviewPrompt(issue, branch, state, round, hits, true), Object.assign({ agentType: nt.reviewerAgent }, reviewOpts))
         } catch (e) {
+          if (e instanceof AgentBudgetExceeded) throw e
           reviewerMissing = `reviewer agent ${nt.reviewerAgent} unavailable (${e && e.message ? e.message : e}); reviewed with the default agent`
           log(`#${issue.number}: ${reviewerMissing}`)
           notes.push(reviewerMissing)
@@ -2341,7 +2377,7 @@ Make no other changes. Return ok=true when those comments are gone.`, {
       if (review === undefined) {
         const why = !ghCli ? 'gh is not installed' : reviewerCannotRead ? 'the reviewer could not read the issue' : ''
         if (why && notes.indexOf(`review ran on the default agent: ${why}`) === -1) notes.push(`review ran on the default agent: ${why}`)
-        review = await agent(reviewPrompt(issue, branch, state, round, hits, false), reviewOpts)
+        review = await callAgent(reviewPrompt(issue, branch, state, round, hits, false), reviewOpts)
         if (review && !down(review) && epicUnread(review, srcAll)) return block('Review', epicReason(srcAll))
         if (review && !down(review) && review.issueRead === false) return block('Review', 'the review could not read the issue')
       }
@@ -2438,12 +2474,12 @@ Make no other changes. Return ok=true when those comments are gone.`, {
 
     // Ship
     phase('Ship')
-    const ship = await agent(shipPrompt(issue, branch, state, risk, { path: pathKind || 'full', reviewRounds, claimedAt }), {
+    const ship = await callAgent(shipPrompt(issue, branch, state, risk, { path: pathKind || 'full', reviewRounds, claimedAt }), {
       label: `ship #${issue.number}`,
       phase: 'Ship',
       schema: SHIP_SCHEMA,
       model: 'sonnet', // writes the PR body reviewers read; worth more than haiku
-    })
+    }, undefined, { last: true })
     if (!ship || !ship.ok) return block('Ship', (ship && ship.problem) || 'The ship agent died.')
     if (ship.reused === true) notes.push(`reused open PR #${ship.prNumber}`)
     if (ship.unstacked) {
@@ -2469,6 +2505,7 @@ Make no other changes. Return ok=true when those comments are gone.`, {
   } catch (e) {
     // A throw inside the cleanup itself goes to the main loop; a normal block is never cleaned up twice.
     if (issue.inCleanup) throw e
+    if (e instanceof AgentBudgetExceeded) return block('Budget', e.message, undefined, true)
     return block('Error', String((e && e.message) || '').split('\n')[0].trim() || 'unknown')
   }
 }
