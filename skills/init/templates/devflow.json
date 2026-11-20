@@ -81,7 +81,9 @@
   // "Decisions" and labels the PR decisionsReview; a review warning left after maxReviewRounds ships the same way. Every
   // other question blocks. block = every question and leftover warning blocks (3.0.0). trustDecisions: false = the merge
   // gate leaves decisionsReview PRs to a human.
-  "nextTask": { "defaultLimit": 3, "maxFixRounds": 2, "maxReviewRounds": 2, "parallelQa": true, "reviewerAgent": "devflow:reviewer", "onQuestion": "decide", "trustDecisions": false },
+  // reviewModel: Sonnet for low risk and Opus for high or unknown risk. Override either model independently.
+  // maxAgentCalls: block an issue when it reaches this many agent calls, with cleanup exempt. Zero disables the limit.
+  "nextTask": { "defaultLimit": 3, "maxFixRounds": 2, "maxReviewRounds": 2, "reviewModel": { "low": "sonnet", "high": "opus" }, "maxAgentCalls": 0, "parallelQa": true, "reviewerAgent": "devflow:reviewer", "onQuestion": "decide", "trustDecisions": false },
   // Parallel sessions: each ticket runs in its own git worktree under dir. setup commands run once in a fresh worktree.
   "worktree": { "dir": ".claude/worktrees", "setup": ["npm ci"] },
   // /devflow:dispatch: at most maxLanes background sessions at once. pluginDir (optional) is passed as --plugin-dir
