@@ -1,0 +1,84 @@
+#!/usr/bin/env node
+'use strict';
+// devflow-run: deterministic steps for the next-task engine. Node, no dependencies.
+// Usage: devflow-run check [--config .claude/devflow.json]
+// Prints one JSON object. Exit 1 means the operation could not run.
+
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const { performance } = require('node:perf_hooks');
+
+const CONFIG_PATH = '.claude/devflow.json';
+const DEFAULT_TIMEOUT = 600;
+
+function readConfig(file) {
+  try {
+    const config = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!config || typeof config !== 'object' || Array.isArray(config)) {
+      throw new Error('expected an object');
+    }
+    return config;
+  } catch (error) {
+    throw new Error(`Invalid config ${file}: ${error.message}`);
+  }
+}
+
+function runCheck({ name, run: command, timeoutSeconds = DEFAULT_TIMEOUT }) {
+  return new Promise((resolve, reject) => {
+    const start = performance.now();
+    const child = spawn('/bin/sh', ['-c', 'exec /bin/sh -c "$1" 2>&1', 'devflow-run', command], {
+      detached: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    let timedOut = false;
+    let tail = [''];
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      const partial = tail.pop();
+      tail = tail.concat((partial + chunk).split(/\r?\n/)).slice(-61);
+    });
+    let timer;
+    const deadline = start + timeoutSeconds * 1000;
+    function scheduleTimeout() {
+      timer = setTimeout(() => {
+        if (performance.now() < deadline) return scheduleTimeout();
+        timedOut = true;
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch (error) {
+          if (error.code !== 'ESRCH') reject(error);
+        }
+        child.stdout.destroy();
+      }, Math.max(1, Math.min(deadline - performance.now(), 2 ** 31 - 1)));
+    }
+    scheduleTimeout();
+    child.once('error', reject);
+    child.once('close', (exitCode) => {
+      clearTimeout(timer);
+      if (tail.at(-1) === '') tail.pop();
+      resolve({ name, command, exitCode, timedOut, durationMs: Math.round(performance.now() - start), outputTail: tail.slice(-60).join('\n') });
+    });
+  });
+}
+
+async function main([subcommand, ...options]) {
+  if (subcommand !== 'check' || (options.length && (options.length !== 2 || options[0] !== '--config' || !options[1]))) {
+    throw new Error('Usage: devflow-run check [--config .claude/devflow.json]');
+  }
+  const { checks } = readConfig(options[1] ?? CONFIG_PATH);
+  if (!Array.isArray(checks) || !checks.length || checks.some((check) =>
+    !check || typeof check.name !== 'string' || !check.name.trim() || typeof check.run !== 'string' || !check.run.trim() ||
+    (check.timeoutSeconds !== undefined && (!Number.isInteger(check.timeoutSeconds) || check.timeoutSeconds < 1))
+  )) {
+    throw new Error('Invalid config: expected checks with a name, command and optional positive integer timeoutSeconds');
+  }
+
+  const results = [];
+  for (const check of checks) results.push(await runCheck(check));
+  return { ok: true, passed: results.every(({ exitCode, timedOut }) => exitCode === 0 && !timedOut), checks: results };
+}
+
+main(process.argv.slice(2)).catch((error) => {
+  process.exitCode = 1;
+  return { ok: false, error: error.message };
+}).then((result) => process.stdout.write(JSON.stringify(result) + '\n'));
