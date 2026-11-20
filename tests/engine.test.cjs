@@ -2154,17 +2154,14 @@ test('T7.3 a branch with another type prefix does not match and a new branch is 
   assert.match(p, /does not match/);
 });
 
-// The matching and ranking rules live only in the Branch prompt (a model applies them with git), so these tests
-// pin the rule text; they cannot be exercised without git.
-test('T7.4 several matches: the one with an open devflow PR wins and is named in Assumptions', async () => {
-  const { calls } = await run({ ...BASE, issues: [12] }, T7_LABELS);
-  const p = prompt(calls, 'branch');
-  assert.match(p, /With several matches take the one with an open devflow PR[^]*, otherwise the origin branch whose newest commit is the most recent/);
-});
-
-test('T7.5 several matches without a PR: the remote branch with the newest commit wins', async () => {
-  const { calls } = await run({ ...BASE, issues: [12] }, T7_LABELS);
-  assert.match(prompt(calls, 'branch'), /otherwise the origin branch whose newest commit is the most recent[^]*a branch that exists only locally ranks after every origin one/);
+test('T7.4 and T7.5 several scoped matches block and list the candidates', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [12] }, {
+    ...T7_LABELS,
+    branch: { ok: false, error: 'Multiple matching branches', candidates: ['feat/12-a', 'feat/12-b'] },
+  });
+  assert.equal(rep[0].status, 'blocked');
+  assert.equal(rep[0].questionCount, 1);
+  assert.match(prompt(calls, 'blocked'), /feat\/12-a.*feat\/12-b/);
 });
 
 test('T7.6 the prefix ends with the hyphen after the issue number', async () => {
@@ -2211,10 +2208,11 @@ test('T7.8 a base conflict in behaviour the issue does not cover blocks with a q
   assert.match(prompt(calls, 'integrate'), /product decision: set productDecision=true/);
 });
 
-test('T7.2b a branch matched by name whose commits use no issue scope is continued, not ok=false', async () => {
+test('T7.2b the Branch CLI requires the issue scope for a different-slug match', async () => {
   const { calls } = await run({ ...BASE, issues: [12] }, T7_LABELS);
   const p = prompt(calls, 'branch');
-  assert.match(p, /whose own commits do not use scope "#12"[^]*do not return ok=false for it[^]*matchedByName=true/);
+  assert.match(p, /devflow-run" branch --issue 12/);
+  assert.match(p, /scope `\(#12\)`/);
 });
 
 test('T7.9 a conflict in a high-risk file is still resolved in Integrate (the PR is escalated by the risk step)', async () => {

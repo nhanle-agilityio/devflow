@@ -19,7 +19,7 @@ export const meta = {
 
 // Test hook: the pure helpers below are function declarations (hoisted), so tests get them without a run.
 // They take every input as a parameter and never touch the run state.
-if (args && args.exports === true) return { parseDiff, scanWeakenedChecks, checkConfigGlobs, globToRegExp, priorityRank, orderIssues, isFixIssue, pathFor, hasHttpOrE2eRow, epicFor, classifyQuestion, questionsSchema, decisionLine, addDecisions, questionLine, warningQuestion, pickClaimWinner, nextStep }
+if (args && args.exports === true) return { branchNameFor, parseDiff, scanWeakenedChecks, checkConfigGlobs, globToRegExp, priorityRank, orderIssues, isFixIssue, pathFor, hasHttpOrE2eRow, epicFor, classifyQuestion, questionsSchema, decisionLine, addDecisions, questionLine, warningQuestion, pickClaimWinner, nextStep }
 
 // Run through /devflow:next-task only: it does the preflight and builds args. Calling this workflow
 // directly (e.g. /devflow:next-task-engine) arrives without args, so stop with a clear message.
@@ -167,6 +167,19 @@ const BRANCH_SCHEMA = {
   properties: {
     ok: { type: 'boolean' },
     branch: { type: 'string' },
+    action: { type: 'string', enum: ['created', 'resumed'] },
+    head: { type: 'string' },
+    error: { type: 'string' },
+    missingRef: { type: 'string' },
+    candidates: { type: 'array', items: { type: 'string' } },
+    conflicts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { parent: { type: 'string' }, files: { type: 'array', items: { type: 'string' } } },
+        required: ['parent', 'files'],
+      },
+    },
     parentMerged: { type: 'boolean', description: 'true when the parent PR was already merged and the branch starts from the base' },
     resumed: { type: 'boolean', description: 'true when the branch already had commits of this issue and the run continues on it' },
     commits: { type: 'array', items: { type: 'string' }, description: 'When resumed: the commits already on the branch, "<sha> <message>"' },
@@ -176,7 +189,7 @@ const BRANCH_SCHEMA = {
     questions: questionsSchema('Questions that stop the branch from being created; tag Dev'),
     problem: { type: 'string' },
   },
-  required: ['ok', 'branch'],
+  required: ['ok'],
 }
 
 const RELEASE_SCHEMA = {
@@ -445,7 +458,13 @@ const BLOCKED_SCHEMA = {
 
 const RESTORE_SCHEMA = {
   type: 'object',
-  properties: { ok: { type: 'boolean' }, note: { type: 'string' } },
+  properties: {
+    ok: { type: 'boolean' },
+    restored: { type: 'boolean' },
+    reason: { type: 'string' },
+    error: { type: 'string' },
+    files: { type: 'array', items: { type: 'string' } },
+  },
   required: ['ok'],
 }
 
@@ -1130,31 +1149,65 @@ function releasePrompt(issue, removeAssignee) {
 Another devflow run claimed the issue first. Delete only the comment(s) on the issue whose body contains "<!-- devflow-claim id=${claimId} -->". Do not touch any other comment or the labels: they belong to the winner. ${removeAssignee ? 'Also remove the authenticated user from the assignees of the issue (this run added them; the winner is a different user). Do not remove any other assignee.' : 'Do not touch the assignee: it belongs to the winner.'} Return ok=true when none of your claim comments remain.`
 }
 
-function branchPrompt(issue) {
-  // A multi-stack starts at the base branch; the Integrate stage merges the parents afterwards.
+function branchTitle(issue) {
+  return String(issue.title || '').replace(/^\s*\[[^\]]+\]\s+T\d+:\s*/i, '')
+}
+
+function branchTypeFor(issue) {
+  const label = (issue.labels || []).find((name) => /^type:(feat|fix|chore|docs|refactor|test)$/.test(name))
+  if (label) return label.slice(5)
+  const title = branchTitle(issue)
+  const type = /^(feat(?:ure)?|fix|bug(?:fix)?|chore|docs?|documentation|refactor|tests?)\b/i.exec(title)?.[1]?.toLowerCase()
+  if (type === 'bug' || type === 'bugfix' || (!type && isFixIssue(issue))) return 'fix'
+  if (type === 'doc' || type === 'documentation') return 'docs'
+  if (type === 'tests') return 'test'
+  return type === 'feature' || !type ? 'feat' : type
+}
+
+function branchNameFor(issue, pattern) {
+  const slug = (branchTitle(issue).match(/[A-Za-z0-9]+/g) || []).slice(0, 5).join('-').toLowerCase()
+  const values = { type: branchTypeFor(issue), issue: issue.number, slug }
+  return pattern.replace(/\{(type|issue|slug)\}/g, (_, key) => values[key])
+}
+
+function shellWord(value) {
+  const text = String(value)
+  return /^[A-Za-z0-9_./,:@%+-]+$/.test(text) ? text : "'" + text.replace(/'/g, "'\\''") + "'"
+}
+
+function runCommand(subcommand, options) {
+  const bin = `${pluginRoot}/bin/devflow-run`.replace(/["\\$`]/g, '\\$&')
+  return `node "${bin}" ${subcommand} ${options.map(shellWord).join(' ')}`
+}
+
+function branchPrompt(issue, computed) {
   const parents = parentsOf(issue)
-  const parentRef = parentRefFor(issue)
-  const fetchBranch = parents.length === 1 ? parents[0].branch : base
-  return `Create the branch for GitHub issue #${issue.number} in ${gh.owner}/${gh.repo}. ${MCP_NOTE}
+  const parent = parents.length === 1 ? parents[0] : null
+  const prefix = `${branchTypeFor(issue)}/${issue.number}-`
+  const options = ['--issue', issue.number, '--name', issue.resumeBranch || computed, '--remote', remote]
+  if (issue.resumeBranch) options.push('--require-existing')
+  else options.push('--prefix', prefix)
+  const command = (ref, branch) => runCommand('branch', options.concat(['--from', ref, '--parents', branch]))
+  return `Run exactly: \`${command(parentRefFor(issue), parent ? parent.branch : base)}\`
+Return its JSON and do nothing else.${issue.resumeBranch ? ' This resumes the existing PR branch.' : `
+The CLI searches local branches (the same refs as git branch --list) and remote-tracking branches. A unique alternate that starts with "${prefix}" and has a commit using scope \`(#${issue.number})\` resumes without asking a question. The engine maps the result to matchedByName. A branch with another type prefix (${prefix.startsWith('fix/') ? 'feat' : 'fix'}/${issue.number}-) does not match. The hyphen after the issue number excludes ${prefix.split('/')[0]}/${issue.number}3- and ${prefix.split('/')[0]}/${issue.number}foo.`}
+The engine maps an aborted conflict to baseConflict=true. For the rest of the workflow, a commit-structure question is a suggestion; never ask it here.${parent ? `
+If the JSON identifies ${remote}/${parent.branch} as missing (its branch no longer exists on ${remote}), read PR #${parent.prNumber} with pull_request_read. ${MCP_NOTE}
+Only if merged_at is non-null, run exactly: \`${command(baseRef, base)}\` and return its JSON with parentMerged=true. Otherwise return the original failure.` : ''}
+If the GitHub lookup requires a question, use these response fields.
+${QUESTION_NOTE}`
+}
 
-devflow config:
-${cfgJson}
-
-Steps, in order:
-1. ${issue.resumeBranch ? `Resume exactly the branch "${issue.resumeBranch}" (the head branch of this issue's open PR); do not derive a new branch name. When it exists only on ${remote}, fetch it first (\`git fetch ${remote} ${issue.resumeBranch}\`) and continue on it as in step 3.` : `Work out the branch name from branchPattern "${branchPattern}": {issue} = ${issue.number}; {type} = the value of the issue's "type:<type>" label if present, otherwise infer one of feat|fix|chore|docs|refactor|test from the title; {slug} = at most 5 words of the title, kebab-case, ASCII only, without the "[<slug>] T<n>:" prefix.
-   Before using that name, look for an existing branch to resume (a fixed rule: resume it without asking a question). A branch matches when its name starts with \`<type>/${issue.number}-\` (the {type} above, then "/${issue.number}-"; the hyphen right after the number is part of the prefix). Look at local branches (\`git branch --list '<type>/${issue.number}-*'\`) and at ${remote} (\`git ls-remote --heads ${remote} '<type>/${issue.number}-*'\`). So for issue 12 of type feat, \`feat/12-foo\` matches, but \`feat/123-foo\` and \`feat/12foo\` do not (no hyphen right after the number), and \`fix/12-foo\` does not match either: a branch with another type prefix does not match. With no match, create the branch with the derived name as in step 3. With one match, use that branch name instead of the derived one and return matchedByName=true. With several matches take the one with an open devflow PR (search open PRs whose head branch is the candidate and which carry the "${labels.devflow}" label), otherwise the ${remote} branch whose newest commit is the most recent (\`git log -1 --format=%ct ${remote}/<branch>\`); a branch that exists only locally ranks after every ${remote} one. Never ask which one to take.`}
-2. Run \`git status --porcelain\`; it must be empty. If not, return ok=false with the problem.
-3. Run \`git fetch ${remote} ${fetchBranch}\` then \`git switch -c <branch> ${parentRef}\` (this also works from a detached HEAD). Before creating it, check whether the branch already exists locally (\`git rev-parse --verify -q <branch>\`) or on ${remote} (\`git ls-remote --heads ${remote} <branch>\`).
-   - Exists with no commits of its own (\`git log ${parentRef}..<branch> --oneline\` empty) and not on ${remote}: an empty leftover from a run blocked at Plan; recreate it with \`git switch -C <branch> ${parentRef}\`.
-   - Exists with commits of its own whose messages use scope "${scopeFor(issue)}": an earlier run of this issue that was blocked after Plan. Continue on it: \`git switch <branch>\` (when it is only on ${remote}: \`git fetch ${remote} <branch>\` and \`git switch -c <branch> --track ${remote}/<branch>\`; when both exist and differ, use the ${remote} one only if the local one has no commits of its own beyond it, otherwise return ok=false), then \`git merge --no-edit ${parentRef}\`. If that merge conflicts, run \`git merge --abort\` (nothing half-done), do not ask and do not return ok=false: return baseConflict=true and conflictFiles = the conflicting files; the Integrate stage resolves the conflict next. Return resumed=true and commits = the lines of \`git log --oneline ${parentRef}..HEAD\` (merge commits excluded). A branch found by its name prefix in step 1 that has no commits of its own is simply continued (resumed=false); matchedByName stays true. A branch found by its name prefix in step 1 whose own commits do not use scope "${scopeFor(issue)}" (no scope, or another scope, for example a human's \`feat: x\` commits) is continued the same way: the name already ties it to this issue, so do not return ok=false for it; return resumed=true, commits as above, and matchedByName=true.
-   - Anything else (commits from another issue, or a dirty state): return ok=false with the problem; do not reuse or delete it.${parents.length === 1 ? `
-   If the fetch fails because ${parents[0].branch} no longer exists on ${remote}, read PR #${parents[0].prNumber} with pull_request_read. Merged (\`merged_at\` is not null in that result): its changes are in ${base}, so run \`git fetch ${remote} ${base}\` and \`git switch -c <branch> ${baseRef}\` instead and return parentMerged=true. Closed without merging: return ok=false with the problem.` : ''}
-Return the branch name you created or resumed. Do not change anything on GitHub. If you cannot continue without an answer, return ok=false with the question in "questions".
-${COMMIT_STRUCTURE_NOTE}
-${QUESTION_NOTE}
-
-Issue title: ${issue.title}
-Issue labels: ${issue.labels.join(', ')}`
+function mapBranchResult(result, computed) {
+  if (!result || !result.action) return result
+  const conflicts = result.conflicts || []
+  return {
+    ...result,
+    resumed: result.action === 'resumed' && result.commits?.length > 0,
+    matchedByName: result.action === 'resumed' && result.branch !== computed,
+    baseConflict: conflicts.length > 0,
+    conflictFiles: [...new Set(conflicts.flatMap((conflict) => conflict.files))],
+  }
 }
 
 function planPrompt(issue, branch) {
@@ -1613,7 +1666,7 @@ Steps:
 2b. Out of scope: for each out-of-scope item that describes a real problem in the product (not a note about style or a remark), search open issues in ${gh.owner}/${gh.repo} for one that already covers it; if there is none, create an issue titled "[follow-up #${issue.number}] <short summary>" with labels "${labels.triage}" only (never "${labels.ready}": a human triages it) and a body ${args.bugTemplatePath ? `from the bug template at ${args.bugTemplatePath} (keep its headings, "unknown" or "None" where you have nothing)` : 'with the sections Context, Expected, Actual, Repro, Introduced by, Risk, Acceptance criteria, Scope, Test cases and Dependencies'}; Context says it was found while working on #${issue.number}. The body also has a line "Found in: #<PR number>" (the number of the PR opened in step 2, or of the reused PR; when no PR exists yet, the line is "Found in: ${branch}", the branch name) and, when the location of the problem is known, the \`file:line\` of it (for example src/a.js:10); with no known location write only the "Found in:" line. Then comment on the new issue: suggest a priority (one of ${priorityList.join(', ')}) and a risk (${labels.riskLow} or ${labels.riskHigh}, judged against risk.highWhen and risk.highPaths; unsure means high), each with a one-line reason, and say that a human sets the labels and "${labels.ready}". Do not set those labels yourself. List every such issue in the PR body's "Out of scope" section as "- <item>: #<number>", and return them in followUps (existing=true for one that was already open). Items that are only remarks stay in the section as text.
 3. Label the new PR (a PR is an issue: use issue_write with the PR number; read its labels first, keep existing ones): ${prLabels.map((l) => '"' + l + '"').join(', ')}.${newPrOnlyLabel}
 4. On issue #${issue.number} add the label "${labels.review}" and remove "${labels.inProgress}" (keep other labels).${risk.escalation ? ` Also add "${labels.riskHigh}" to the issue and remove "${labels.riskLow}" (the change was escalated to high).` : ''}
-5. ${isolated ? 'Stay on the branch (this checkout is a dedicated worktree; do not switch branches).' : `\`git switch ${startBranch}\`.`}
+5. Stay on the branch. ${isolated ? 'This checkout is a dedicated worktree.' : 'The engine handles checkout restoration.'}
 5b. Read the PR once more with pull_request_read (get, then get_status or get_check_runs): return mergeState = "conflict" when it has merge conflicts (mergeable false or mergeable_state dirty), "behind" when mergeable_state is behind, "clean" otherwise and "unknown" when GitHub has not computed it yet; return checksFailing = true only when a check run or status of the head has already failed (pending or missing is not failing). Read-only; do not wait.
 Return the PR number and URL. If any step fails, return ok=false with the problem.`
 }
@@ -1644,12 +1697,13 @@ Steps, in order:
 2. ${branch ? `If \`git log ${parentRefFor(issue)}..${branch} --oneline\` shows commits, push the branch so work is not lost: \`git push -u ${remote} ${branch}\` (never force, never push to ${base}).` : 'No branch to push.'}
 ${questionsStep}
 4. On the issue add the label "${labels.blocked}" and remove "${labels.inProgress}" (keep other labels). Delete the comment(s) whose body contains "<!-- devflow-claim id=${claimId} -->" (this run's claim; a later run claims again).${assignedByRun === true ? ' Also remove the authenticated user from the assignees of the issue (this run added them); do not remove any other assignee.' : ''}
-5. ${isolated ? 'Stay on the branch; this checkout is a dedicated worktree, so do not switch branches or stash.' : `\`git switch ${startBranch}\` (if the working tree is dirty, use \`git stash push -u -m devflow-blocked-${issue.number}\` first and say so in note).`}
+5. Leave the checkout as it is. The engine handles checkout restoration.
 Return whether the branch was pushed.`
 }
 
 function restorePrompt() {
-  return `Make sure the checkout is back on branch ${startBranch}: run \`git branch --show-current\`; if it differs, run \`git switch ${startBranch}\` (if that fails because of local changes, run \`git stash push -u -m devflow-restore\` first and mention it in note). Report ok=true when the current branch is ${startBranch}. Change nothing else.`
+  return `Run exactly: \`${runCommand('restore', ['--to', startBranch])}\`
+Return its JSON and do nothing else.`
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2078,18 +2132,23 @@ Make no other changes. Return ok=true when those comments are gone.`, {
   pathKind = pathFor(issue, cfg)
   try {
     // Branch
+    const computed = branchNameFor(issue, branchPattern)
     const madeAsked = await withQuestions(
       issue,
       '',
-      () => callAgent(branchPrompt(issue), { label: `branch #${issue.number}`, phase: 'Implement', schema: BRANCH_SCHEMA, model: 'haiku' }, (result) => {
+      () => callAgent(branchPrompt(issue, computed), { label: `branch #${issue.number}`, phase: 'Implement', schema: BRANCH_SCHEMA, model: 'haiku' }, (result) => {
         if (result && result.ok && result.branch) branch = result.branch
       }),
       (r) => (!r.ok && Array.isArray(r.questions) ? r.questions : []),
     )
-    const made = madeAsked.result
+    const made = mapBranchResult(madeAsked.result, computed)
+    if (made?.candidates?.length > 1) {
+      const question = `[Dev] Which existing branch should issue #${issue.number} continue on? ${made.candidates.join(', ')}`
+      return block('Branch', question, [question])
+    }
     if (madeAsked.blocked) return block('Branch', madeAsked.blocked.reason, madeAsked.blocked.questions)
     if (!made || !made.ok || !made.branch) {
-      return block('Branch', (made && made.problem) || 'The branch agent failed or could not create the branch.')
+      return block('Branch', (made && (made.error || made.problem)) || 'The branch agent failed or could not create the branch.')
     }
     branch = made.branch
     // The parent PR merged (and its branch was deleted) before this issue started: its changes are in the base.
@@ -2098,7 +2157,11 @@ Make no other changes. Return ok=true when those comments are gone.`, {
       notes.push(`parent PR #${parentsOf(issue)[0].prNumber} was already merged before this issue started; branched from ${base}, not stacked`)
       issue.parents = []
     }
-    if (made.matchedByName) {
+    if (made.action && made.matchedByName) {
+      const note = `resumed existing branch ${branch} (name differs from ${computed})`
+      notes.push(note)
+      state.assumptions.push(note)
+    } else if (made.matchedByName) {
       const matched = `${branch.split('/')[0]}/${issue.number}-`
       state.assumptions.push(`Resumed the existing branch ${branch}: its name starts with ${matched}, so the run took it without asking`)
       notes.push(`resumed existing branch ${branch} (its name starts with ${matched})`)
@@ -2559,7 +2622,7 @@ let worked = 0
 let previous = null // chain: the last issue worked on, {number, status}
 let lastShipped = null // chain: the last issue of the lane that shipped; the next one stacks on it
 
-let stopped = '' // set when GitHub cannot be reached: every remaining issue is skipped
+let stopped = '' // GitHub or checkout failure: every remaining issue is skipped
 for (const issue of queue) {
   if (stopped) {
     report.push({ issue: issue.number, status: 'skipped', reason: stopped, notes: [] })
@@ -2627,7 +2690,15 @@ for (const issue of queue) {
   }
   report.push(result)
   // Every issue starts from a clean checkout of the original branch (an isolated run has no start branch).
-  if (!isolated) await agent(restorePrompt(), { label: `restore ${startBranch}`, phase: 'Report', schema: RESTORE_SCHEMA, model: 'haiku' })
+  if (!isolated) {
+    const restored = await agent(restorePrompt(), { label: `restore ${startBranch}`, phase: 'Report', schema: RESTORE_SCHEMA, model: 'haiku' })
+    if (!restored?.ok || restored.restored === false) {
+      const files = restored?.files?.length ? ` (${restored.files.join(', ')})` : ''
+      const reason = `could not restore ${startBranch}: ${restored?.reason || restored?.error || 'no result'}${files}`
+      result.notes.push(reason)
+      stopped = stopped || reason
+    }
+  }
 }
 
 phase('Report')
