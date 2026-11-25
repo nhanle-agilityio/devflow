@@ -179,8 +179,9 @@ test('T4.3 an all-clear question decides', async () => {
 });
 
 // T4.4
-test('T4.4 each of the 9 other flags alone blocks', async () => {
-  for (const b of OTHER_BOOLS) assert.equal(await classify(clear({ [b]: true })), 'block', b);
+test('T4.4 each flag alone requires human review or blocks', async () => {
+  const stops = ['skipsCheck', 'dropsMustRow', 'needsDestructiveGit', 'outsideRepo'];
+  for (const b of OTHER_BOOLS) assert.equal(await classify(clear({ [b]: true })), stops.includes(b) ? 'block' : 'decide-high', b);
 });
 
 // T4.5
@@ -189,15 +190,15 @@ test('T4.5 reversible false blocks', async () => {
 });
 
 // T4.6
-test('T4.6 a changed file matching risk.highPaths blocks', async () => {
-  assert.equal(await classify(clear(), { changedFiles: ['.github/workflows/x.yml'] }), 'block');
+test('T4.6 a changed file matching risk.highPaths requires human review', async () => {
+  assert.equal(await classify(clear(), { changedFiles: ['.github/workflows/x.yml'] }), 'decide-high');
 });
 
 // T4.7
-test('T4.7 one high-path match among 50 changed files blocks', async () => {
+test('T4.7 one high-path match among 50 changed files requires human review', async () => {
   const files = Array.from({ length: 50 }, (_, i) => `src/f${i}.js`);
   files[37] = '.github/workflows/x.yml';
-  assert.equal(await classify(clear(), { changedFiles: files }), 'block');
+  assert.equal(await classify(clear(), { changedFiles: files }), 'decide-high');
   assert.equal(await classify(clear(), { changedFiles: files.map((f, i) => (i === 37 ? 'src/f37.js' : f)) }), 'decide');
 });
 
@@ -240,13 +241,13 @@ test('T4.24 onQuestion block blocks an all-clear question', async () => {
 
 // ---- T4.13: changedFiles is the full branch diff ----------------------------------------------------
 // T4.13
-test('T4.13 changedFiles holds an earlier commit\'s high-path file, so the question blocks', async () => {
+test('T4.13 changedFiles holds an earlier commit\'s high-path file, so the decision requires human review', async () => {
   const q = clear({ text: 'Which colour?', recommended: 'OPT-RED' });
   const full = ['.github/workflows/ci.yml', 'src/x.js'];
   const { rep, calls } = await run(withNt({ onQuestion: 'decide' }), { plans: [planWith([q])], changed: full });
-  assert.equal(rep[0].status, 'blocked');
-  assert.match(prompt(calls, 'blocked'), /<!-- devflow-questions -->/);
-  assert.ok(!calls.some((c) => /decided by run/.test(c.prompt)));
+  assert.equal(rep[0].status, 'pr');
+  assert.match(prompt(calls, 'ship'), /"risk:high"/);
+  assert.match(prompt(calls, 'decisions'), /decided by run: .*needs human review/);
   const ctl = await run(withNt({ onQuestion: 'decide' }), { plans: [planWith([q])], changed: ['src/x.js'] });
   assert.equal(ctl.rep[0].status, 'pr');
 });
@@ -328,10 +329,10 @@ test('T4.18 a leftover warning with decide ships, listed in Decisions taken, wit
 });
 
 // T4.19
-test('T4.19 a leftover warning with a changed high-path file blocks', async () => {
+test('T4.19 a leftover warning with a changed high-path file ships for human review', async () => {
   const { rep, calls } = await run(withNt({ onQuestion: 'decide', maxReviewRounds: 1 }), { review: always(finding('warning')), changed: ['.github/workflows/x.yml', 'src/x.js'] });
-  assert.equal(rep[0].status, 'blocked');
-  assert.ok(!calls.some((c) => labelOf(c) === 'ship'));
+  assert.equal(rep[0].status, 'pr');
+  assert.match(prompt(calls, 'ship'), /needs human review/);
 });
 
 // T4.20

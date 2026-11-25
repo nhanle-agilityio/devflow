@@ -92,6 +92,8 @@ The Next column tells you what to do after each issue. The `devflow-claim` marke
 
 See the full [config schema](skills/init/templates/devflow.schema.json) and [starter config](skills/init/templates/devflow.json).
 
+With the default question policy, `decide` records a recommendation under `## Decisions`, and `decide-high` also flags it for human review, sets `risk:high` and `decisions:review`, and requires a human merge even with `trustDecisions` enabled. The `block` outcome covers hard stops such as irreversible actions and weakened checks. Missing secrets or credentials and permission problems also stop work. If checks stay red after the final fix or a required environment variable or secret is missing, the run files or reuses a triage bug and links it from the blocked issue.
+
 ## Merge gate
 
 - This optional GitHub Action merges at most one eligible `risk:low` PR per run. Start with `mergeGate.enabled` and `mergeGate.dryRun` both true, then review the summary before turning dry run off.

@@ -30,7 +30,8 @@ def rules(config):
         "- Behaviour changes and bug fixes: commit a failing test first, confirm it fails for the right reason, then the implementation.",
         "- Stage files by name; never git add -A, --all or '.'.",
         "- Never edit an issue's acceptance criteria or weaken a test or check (skip, noqa, ignore, deleted assertion) to make something pass.",
-        "- If a requirement is ambiguous in a way that changes behaviour or a contract, ask instead of guessing.",
+        "- If a requirement is ambiguous, decide how to proceed, record the decision under ## Decisions, and flag it for human review.",
+        "- Only stop for irreversible actions, weakened checks, missing secrets or credentials, or permission problems.",
         "- Never merge a pull request and never push to a protected branch (%s); push your own feature branch and open a PR." % ", ".join(protected),
         "- Bugs: file them from the devflow bug template labelled %s only; a human sets %s, priority and risk." % (triage, ready),
     ]
