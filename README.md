@@ -1,217 +1,120 @@
 # devflow
 
-A Claude Code plugin (version 3.0.0, see [CHANGELOG.md](CHANGELOG.md); the version is also in `.claude-plugin/plugin.json`) with ten project-agnostic commands, plus `/devflow:init` (and `init --upgrade`) for setup:
+A Claude Code plugin (version 3.0.0, see [CHANGELOG.md](CHANGELOG.md)) that takes GitHub work from idea to release.
 
-1. `/devflow:spec <idea>`: idea, analysis, grill-me interview, QA test matrix, then an epic issue (`type:epic`: goal, design, decisions, tasks table) and one sub-issue per task with `risk:low|high` and its test cases; you can set the ready label on each sub-issue or approve the epic for auto-readying. With `--file` it keeps the spec PR flow: spec file, spec PR, Gate 1 (a human merges, which also approves the risk levels), then one GitHub issue per task labelled ready and `risk:low|high`.
-2. `/devflow:next-task [limit | #issue ...] [--isolated] [--chain]`: pick up to N ready issues, claim each, post a plan on it, implement (a QA agent writes the acceptance tests in parallel with the dev agent), run checks, verify against the running app, review, and open a PR labelled with its risk (a required verification that could not run raises the PR to `risk:high`, so the merge gate never auto-merges it). An issue whose open dependencies all have open PRs is stacked on them. `--isolated` runs in its own git worktree.
-3. `/devflow:dispatch [max lanes] [--plan]`: split the ready issues into non-colliding lanes and start one background session per lane.
-4. `/devflow:sync [#pr ...]`: keep those PRs mergeable: retarget stacked PRs, update behind branches, resolve conflicts, address review threads.
-5. `/devflow:answer #issue [answers | accept]`: answer the questions that blocked an issue; appends them to the issue's `## Decisions`, its epic's and, with a spec path, the spec's (PR), and sets it ready again.
-6. `/devflow:accept <spec | #epic>`: after merge, check the shipped behaviour against the acceptance criteria of a spec, or of an epic with `/devflow:accept #<n>` (its sub-issues: native sub-issues plus issues whose body has `Epic: #<n>`; a number is always an issue number; `#<n> is not an epic` stops with nothing posted), on a fresh checkout of the base branch; every gap becomes an issue. For an epic the result comment goes on the epic and the skill never closes it.
-7. `/devflow:release <spec | since <tag> | all>`: collect the merged devflow PRs, propose a semver version, write client-facing notes plus a changelog with a risk section and create the GitHub release (draft by default).
-8. `/devflow:report <spec>` or `/devflow:report #<epic>`: a demo-ready trace page of one spec or epic (ticket, plan, PR, review, tests, merge, acceptance, release), published as an artifact.
-9. `/devflow:doctor [--fix]`: check that devflow works in this project and report what to do.
-10. `/devflow:approve #<epic>`: approve an epic for automatic sub-issue readiness when configured.
+## What it does
 
-Claude never merges. `risk:low` PRs are merged by an optional GitHub Action (the merge gate) once its checks are green; `risk:high` PRs wait for a human.
+- Turn an idea into a spec and testable GitHub issues.
+- Take ready issues through tests and review to pull requests.
+- Check what shipped, trace the work, and draft release notes.
 
-Nothing in the plugin knows about a specific stack. Project mechanics live in `.claude/devflow.json`; project rules (architecture, conventions, a "Never" list) live in the project's `CLAUDE.md`. See [DESIGN.md](DESIGN.md) for the full design.
+## Daily flow
+
+```mermaid
+flowchart TD
+    Spec["spec · QA and spec review"]
+    Spec -->|Epic| Ready["Approve epic or mark issues ready"]
+    Spec -->|--file| File["Human merges spec PR"]
+    File --> Queue["Ready issues"]
+    Ready --> Queue
+    Queue --> One["next-task · one session"]
+    Queue --> Many["dispatch · parallel sessions"]
+    One --> PR["Open PR"]
+    Many --> PR
+    PR --> Gate{"Merge gate"}
+    Gate -->|Eligible low risk| Merge["Merged"]
+    Gate -->|High risk or gate off| Human["Human review and merge"]
+    Human --> Merge
+    Merge --> Accept["accept · verify what shipped"]
+    Accept -.-> Report["report · share the trace"]
+    Report -.-> Release["release · draft a GitHub release"]
+```
+
+After a merge, run accept, report, or release as needed.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `/devflow:init` | Set up a project and optionally install GitHub workflows. |
+| `/devflow:spec` | Create an epic and tasks, or use `--file` for a spec PR. |
+| `/devflow:approve` | Approve an epic so eligible tasks can become ready. |
+| `/devflow:next-task` | Test, implement, review, and open PRs for ready issues. |
+| `/devflow:dispatch` | Run independent lanes in separate worktrees. Use `/devflow:dispatch --plan` to preview. |
+| `/devflow:sync` | Update PR branches, retarget stacked PRs, and address review threads. |
+| `/devflow:answer` | Record answers under `## Decisions` and set a blocked issue ready again. |
+| `/devflow:accept` | Check merged work against its criteria. Use `/devflow:accept #<n>` for an epic. |
+| `/devflow:report` | Publish a trace with metrics. Use `/devflow:report #<n>` for an epic. |
+| `/devflow:doctor` | Check setup, stale claims, and merged branches. Use `--fix` for confirmed repairs. |
+| `/devflow:release` | Draft a GitHub release from a spec, everything since a tag, or all merged work. |
+
+Eligible `risk:low` issues take a short path with a failing test first, then checks and review. The issue supplies its own criteria and decisions. For shared context, devflow reads the spec path first, then the epic named by `Epic: #<n>` if there is no path.
 
 ## Install
 
-```
-/plugin marketplace add nhanle-agilityio/devflow
-/plugin install devflow@nhanle-devflow
-```
+1. Connect GitHub MCP. Have Python 3.9+ and Node 18+ available. For browser verification, use Playwright MCP or Claude in Chrome.
+2. Run these commands in Claude Code.
 
-Requirements: Python 3.9+ (hooks), Node 18+ (`bin/` helpers), the GitHub MCP server connected, and for verification either Playwright MCP or Claude in Chrome.
+   ```
+   /plugin marketplace add nhanle-agilityio/devflow
+   /plugin install devflow@nhanle-devflow
+   ```
 
-## Per-project setup
+## Set up a project
 
-In the project, run `/devflow:init`. It detects remotes, branches and scripts, writes `.claude/devflow.json` with only the keys that differ from the defaults (plus its schema), asks about risk rules, the merge gate, `testing.e2eFramework` and `format`, checks that `CLAUDE.md` covers what the workflows rely on, and offers to install three GitHub Actions (each a separate yes): `claude-code-review.yml` (review check), `devflow-merge-gate.yml` and `claude.yml` (mention handler).
+1. Run `/devflow:init` to create `.claude/devflow.json` and choose the optional review, merge gate, and mention workflows.
+2. Put project conventions in `CLAUDE.md`. Init probes GitHub MCP and generates an allow list using the responding server's prefix. Background sessions need permissions in advance.
+3. Run `/devflow:doctor` and check **Waiting on you** for the next action. Doctor also reports the **Automatically delete head branches** setting.
+4. After a plugin update, run `/devflow:init --upgrade` to review template and config changes.
 
-The review check and the merge gate install in one of two modes, chosen once in init:
+## How a run stays unblocked
 
-- **Reusable** (recommended): thin callers that run `nhanle-agilityio/devflow/.github/workflows/devflow-review.yml` and `devflow-merge-gate.yml` (`on: workflow_call`) pinned to the tag `v<plugin version>`. No gate script is copied, and an upgrade only moves the tag. If the devflow repository is private, its owner must allow Actions access from your repositories (devflow Settings > Actions > General > Access > "Accessible from repositories owned by the user"), and the gate needs a `DEVFLOW_READ_TOKEN` secret that can read devflow. The tag must exist.
-- **Copy** (fallback): full copies of the workflows and `.github/scripts/devflow-merge-gate.cjs`, as before.
+| The run handles | You handle |
+| --- | --- |
+| Safe, reversible recommendations go into `## Decisions` on the issue and the PR gets `decisions:review`. | Type an answer for criteria changes or questions without recommendations. Use `/devflow:answer #<n> accept` to take all eligible recommendations. |
+| It resumes matching branches (prefix `<type>/<issue>-`) and handles base conflicts in Integrate when the issue covers the behavior. | Resolve conflicts involving behavior outside the issue and approve changes to contracts or risk. |
+| It pushes its feature branch and opens the PR. | Review and merge `risk:high` PRs and handle protected-branch changes. |
 
-The plugin itself owns the rest of the setup: the guard hook, a formatter hook, a session-start hook with the workflow rules, and the reviewer agent (see Safety). `/devflow:init` writes no deny rules and generates the allow list from your config (see Permissions). Add the `CLAUDE_CODE_OAUTH_TOKEN` repository secret for the review and mention workflows; the merge gate needs more, see the checklist below.
+The Next column tells you what to do after each issue. The `devflow-claim` marker lets one run claim an issue at a time. The run can claim an unassigned issue or one assigned only to the authenticated user. See [run helpers](DESIGN.md#run-helpers) for `bin/devflow-run branch`, `bin/devflow-run check`, `bin/devflow-run restore`, and `bin/devflow-gh`.
 
-`/devflow:init` asks whether to turn on `review.github` (recommended `false`, with the trade-off: no independent party confirms the local review, and a hand-opened PR gets no review) and proposes `devflow/review` for `mergeGate.requiredChecks` only when it is on. When `mergeGate.enabled` is true and the effective required list is empty (whatever `review.github` is), init and `/devflow:doctor` (check 1) warn that the gate will refuse to merge and list the `name:` of each workflow in `.github/workflows/` as CI check candidates. `/devflow:init --upgrade` offers `review.github: true` as one plan item when `.github/workflows/claude-code-review.yml` is installed, and writes it only after a yes.
+## Configuration
 
-After updating the plugin, run `/devflow:init --upgrade` in the project: it compares the installed workflows, the merge gate script and the schema with the plugin's templates (for reusable callers: moves the pinned tag), lists drifted files and missing config keys, shows a diff and asks per file, then opens a PR (`chore/devflow-upgrade-<version>`, labelled `devflow` and `risk:high`) that also sets `devflowVersion`. `/devflow:doctor` warns when `devflowVersion` is older than the installed plugin.
+| Key | What it controls |
+| --- | --- |
+| `github`, `baseBranch`, `checks` | Required settings for the repository, target branch, and local checks. |
+| `spec.autoReady`, `labels.epicApproved` | Ready eligible tasks on approved epics (`epic:approved`). Choose `off` (default), `low`, or `all`. |
+| `review.github`, `mergeGate.requiredChecks` | Enable GitHub review and name the checks that must pass. Include `devflow/review` when GitHub review is on. |
+| `nextTask.onQuestion`, `nextTask.trustDecisions` | Choose whether runs take safe recommendations and whether the gate can merge those PRs. |
+| `nextTask.reviewModel`, `nextTask.maxAgentCalls` | Choose review models (Sonnet for low risk, Opus for high or unknown risk by default) and cap calls per issue. |
+| `branchPattern` | Name new work branches. |
+| `verify.devServer` | Start the app for verification. Acceptance uses PR evidence when no dev server is configured. |
+| `release.tagPrefix`, `changelog.fragmentsDir` | Set the tag prefix (default `v`) and optionally store one changelog fragment per issue. |
 
-Required config keys: `github`, `baseBranch`, `checks`. Everything else has defaults; see `skills/init/templates/devflow.json` and `devflow.schema.json`. v2 wave 1 adds `labels.devflow|riskLow|riskHigh|stacked`, `risk` (`highWhen`, `highPaths`), `mergeGate` (`enabled` false, `dryRun` true, `requiredChecks`, `method`) and `testing.e2eFramework` (false). v2 wave 2 adds `worktree` (`dir` default `.claude/worktrees`, `setup` commands run once in a fresh worktree, e.g. `make setup`) and `dispatch` (`maxLanes` default 3, optional `pluginDir` passed as `--plugin-dir` to background sessions). v2 wave 3 adds `nextTask.parallelQa` (default true). 2.4.0 adds `devflowVersion` (the plugin version the templates came from), `verify.lock` (default true), `dispatch.ignoreHotspots` (default `["README.md", "CHANGELOG.md"]`), `notify` (`push`, `onDone`, `onBlocked`, `onHighRisk`, all default true), `release` (`tagPrefix` `v`, `draft` true, `deploy` empty, `notesFrom` `prs`) and `accept` (`model` `sonnet`, `labels` `["type:gap"]`). 2.7.0 adds `labels.priority` (ordered list, default `["priority:critical", "priority:high", "priority:normal", "priority:low"]`) and `labels.triage` (`needs-triage`). `/devflow:init` also proposes `worktree.setup`, a `.gitignore` entry for the worktree dir and the allow rules background sessions need. Wave 3 adds `changelog` (`fragmentsDir`, no default; `file`, default `CHANGELOG.md`) for `bin/devflow-changelog`: one `<issue number>.md` fragment per issue in `fragmentsDir` (this repo uses `changelog.d/`) (`### Added` style headings, `- ` bullets); `bin/devflow-changelog has <n>` checks one, `preview --version X.Y.Z --date YYYY-MM-DD` prints the release section, `assemble` with the same arguments writes it below `## [Unreleased]` and deletes the fragments (exit 1 on invalid input with nothing written, exit 2 on a usage or configuration error such as an unset `fragmentsDir`). With `changelog.fragmentsDir` set the next-task prompts tell the agent to add the fragment `<fragmentsDir>/<issue>.md` instead of editing the changelog, the reviewer checks the fragment, and `/devflow:release` shows the `preview` output in its notes without writing it. 2.7.0 also adds `format` (glob to formatter command) and `nextTask.reviewerAgent` (`devflow:reviewer`).
+See the full [config schema](skills/init/templates/devflow.schema.json) and [starter config](skills/init/templates/devflow.json).
 
-## Setup checklist for the merge gate
+## Merge gate
 
-Skip this if humans merge everything. The gate exists for private repos on GitHub Free: no branch protection, no required checks, no native auto-merge.
-
-1. Install `devflow-merge-gate.yml` (reusable mode) or `devflow-merge-gate.yml` with `.github/scripts/devflow-merge-gate.cjs` (copy mode) via `/devflow:init`, and merge the PR that adds them. The workflow must be on the repository default branch: `workflow_run` and `status` triggers only run from there.
-2. Add the repository secret `DEVFLOW_GATE_TOKEN`: a fine-grained personal access token limited to this repository with Contents and Pull requests read/write. For epic auto-readying, also grant Issues read/write. `GITHUB_TOKEN` does not work: pushes and merges made with it do not trigger CI.
-3. Add the repository secret `CLAUDE_CODE_OAUTH_TOKEN` for the review workflow.
-4. Enable "Allow merge commits" in the repository settings (the gate merges with merge commits, which stacked PRs need).
-5. In the gate workflow, list under `workflow_run.workflows` the `name:` of every workflow that produces a required check: your CI workflow(s) and `"Claude Code Review"`. The `devflow/review` status is made with `GITHUB_TOKEN` and does not fire `status` events; the review workflow finishing is what wakes the gate.
-6. Set `mergeGate.requiredChecks` to the check run names or status contexts that must be green. Default `["devflow/review"]`; add your CI job names.
-7. Set `mergeGate.enabled` to true but keep `dryRun` true at first. The run summary lists what each PR would get (merge, update, block, skip). Set `dryRun` to false when it looks right.
-
-The gate merges at most one PR per run. A PR is merged only when: it has the `devflow` and `risk:low` labels and is not a draft or labelled blocked; its base is `baseBranch`; none of its files (renames: old and new name) matches `risk.highPaths` or the built-in `.github/**` and `.claude/**` (such a PR is relabelled `risk:high` and waits for a human); no `Depends on` issue of its linked issue is still open; it is mergeable; it is not behind its base (otherwise the branch is updated and CI runs again; a run updates one branch only, the first behind PR in priority order, and later behind PRs show `deferred: waits for its turn`; a PR whose required checks are still running also holds the update slot); every effective required check is green on the head SHA (the effective list is `requiredChecks` without `devflow/review` while `review.github` is off, the list as is when it is on; a `devflow/review` commit status only counts from `github-actions[bot]`); and no review thread blocks (an unresolved, not outdated thread started by an owner, member or collaborator blocks until it is resolved, even after the author replied; a thread started by the PR author or the review bot is answered by the author's last comment; other contributors' and other bots' threads never block; a reviewer whose organisation membership is private shows as a contributor and does not block). Then it merges with a merge commit that ends with `Merged-by: devflow merge gate`, posts a `<!-- devflow-gate-merged -->` comment on the PR (so release and report can tell the gate from a human), retargets PRs stacked on it to `baseBranch` and deletes the head branch. When the effective list is empty (`requiredChecks` is only `devflow/review` with the flag off, or `[]`) the gate skips PR processing and reports every candidate as `skipped` with `no required checks (devflow/review is ignored while review.github is off); refusing to merge`: add a CI check name to `requiredChecks`. A conflicting PR and its issue get the blocked label and a comment pointing at `/devflow:sync`. Everywhere else (engine, sync, doctor, accept, report, release) a PR counts as merged only when a single `pull_request_read` returns a non-null `merged_at` or git shows its head in the base: the MCP list tools report `merged: false` for merged PRs.
-
-The gate holds a low-risk PR with `decisions:review` for a human unless `nextTask.trustDecisions` is true. With trust enabled, the usual gate rules still apply. The gate clears `labels.inProgress`, `labels.review` and `labels.blocked` from issues linked to its merges. Each enabled run also sweeps recently updated closed issues for those labels. Dry runs report the removals.
-
-## Usage
-
-- `/devflow:spec add CSV export to the reports page`: runs in a cloud session or locally. Each task gets `risk: low|high` with a one-line reason, judged against `risk.highWhen` and `risk.highPaths` (unsure means high), plus the files other tasks are likely to touch (hotspots, recorded only). Before any issue is created (or, with `--file`, before the spec PR), a QA agent that sees only the written draft or spec drafts a test matrix and asks about criteria it cannot test (`spec.testMatrix`, default on; `spec.qaModel`, default `opus`). By default (epic mode) it writes no spec file and opens no PR: it creates one epic (`[<slug>] <title>`, `type:epic`) and one sub-issue per task (`[<slug>] T<n>: <title>`, with `Epic: #<n>`, risk label, test-case rows and `Depends on` lines), links them with `sub_issue_write`, and refuses with a pointer to `--file` when a body would exceed 65,000 characters; a re-run reuses issues with the same title. Epic sub-issues start without the ready label. Set it yourself or approve the epic for automatic readiness. With `/devflow:spec --file <idea>` it keeps the spec file and spec PR, stops at Gate 1 (merging the spec PR approves the tasks and their risk levels) and then creates the issues labelled ready, except tasks that require a human step first. The grill continues until no question is open: nothing is created while one is, unless you defer it, and a deferred question lands in an `## Open questions` section of each affected sub-issue (with `--file` also in the spec's Risks and unknowns). After QA, one local spec review runs in both modes: a fresh agent (`spec.qaModel`) gets only your brief and the draft and reports missing requirements, contradictions and tasks that are not independent, each critical, warning or suggestion. It does not judge testability, which is the QA step's job. Only critical findings start another round (at most 2 reviewer calls; after the second you choose to proceed or stop). Either way `next-task` requires a test for every `must` row.
-- `/devflow:approve #<epic>`: approve the epic once. Set `spec.autoReady` to `low` for sub-issues labelled `risk:low`, or `all` for any risk. The default `off` keeps readiness manual. You can also add `labels.epicApproved` (default `epic:approved`) yourself. Approval readies open sub-issues whose dependencies are closed and which have no open questions, workflow state labels, triage label or `Ready: manual` line. The gate checks again after its own merges, and dispatch checks before collecting work. Remove the approval label to stop future automatic readiness. Already-ready issues keep their labels.
-- `/devflow:next-task`: up to `nextTask.defaultLimit` ready issues, sequentially. `/devflow:next-task 2` or `/devflow:next-task #12 #15` for a specific number or issues. A `risk:low` issue (without `risk:high`, `needs-e2e` or an `http`/`e2e` Test cases row) takes the short path: no Plan, no QA agent and no Verify (one agent writes the failing test first, then the change); Check, Review, Risk and Ship run as usual. Every other issue takes the full path. Per issue the stages on the full path are Claim → Branch → [Integrate] → Plan → Implement (→ Commit with parallel QA) → Check → Verify → Review → Ship. Your working tree must be clean. Without `--isolated` it works in your checkout and your branch is restored after each issue; see Parallel work for `--isolated` and `--chain`. The command also lists `/devflow:next-task-engine`: that is the workflow script it runs internally (Claude Code registers every plugin workflow as a command). Do not run it directly; without the arguments the skill builds it stops with a message.
-  - **Notes**: the engine writes facts per result row (a lane that continued, a resumed branch, a parent that merged meanwhile, QA tests that did not fail first, manual checks not passing). The skill prints them in the Notes column exactly as returned and adds no story of its own.
-  - **Next**: the result table gives the next action for each issue, such as answering questions, syncing a PR, merging it yourself or checking by hand. A PR with no action for you shows “nothing”.
-  - **GitHub MCP unavailable**: preflight notes whether `gh` is installed (`ghCli`). Without it, an agent that finds the MCP server unavailable reports "GitHub MCP unavailable"; the run stops there, the remaining issues are skipped, nothing is cleaned up (no comment, no labels: GitHub is unreachable), and the issue keeps its in-progress label and claim. Run `/devflow:doctor --fix` once GitHub is back.
-  - **Manual checks**: a Test cases row that cannot be an automated test (a Makefile target, a README line) is checked by hand and reported per row (`pass|fail|not-run` with evidence). Review flags a `must` row that is neither tested nor manually passed, and a failing manual check, as warnings; Ship puts the rows in the PR's Tests section.
-  - **Verify lock** (`verify.lock`, default true): Verify takes `mkdir <git common dir>/devflow-verify.lock`, so only one session per machine runs the dev server at a time (waits up to 10 minutes; a lock older than 30 minutes is stale) and always releases it.
-  - **Notifications**: at the end of a run, when `notify.push` is true and the PushNotification tool exists, one push names the repository: blocked issues, a `risk:high` PR waiting for a human, or the done count. Follow background lanes from your phone.
-- `/devflow:dispatch [max lanes] [--plan]`: see Parallel work.
-- `/devflow:accept <spec path or slug>`: after the spec's PRs merged. Works on a fresh worktree of `<remote>/<baseBranch>` (runs `worktree.setup`), takes the verify lock, starts the dev server and walks every acceptance criterion of the merged tasks plus the `http` / `e2e` matrix rows, as `pass`, `fail` or `not checkable` with evidence (`accept.model`). Each `fail` becomes a gap issue (`[slug] Gap: ...`, from the bug template, labelled `needs-triage` and `accept.labels`, with a comment suggesting priority and risk) after one yes for the batch, unless an open duplicate exists; a human sets ready. The result is one comment on the spec PR (`<!-- devflow-accept -->`, edited on a re-run). Without `verify.devServer`, or with empty `verify.modes`, it runs in evidence-only mode: criteria that need a running app are `not checkable`, the others take their result from the merged PRs' checks, test-matrix rows and manual rows recorded as pass in the PR body (no evidence: `not checkable`), and the result is still posted. Changes no tracked file, never merges. The result also lists the open follow-ups filed from the epic's PRs.
-- `/devflow:release <spec | since <tag> | all> [--version X.Y.Z]`: collects the merged `devflow` and `spec:` PRs (`all` is proposed for the first release when no tag exists; refuses while a spec issue still has an open PR), proposes the next semver from the Conventional Commit types (`feat` minor, otherwise patch, breaking major), writes notes (a client-facing What's new, then a Changelog with Features, Fixes (critical fixes first), Docs and Chores, a Risk section naming who merged each `risk:high` PR, and the acceptance result) and shows them for a yes. Then it creates the GitHub release for `<tagPrefix><version>` (a draft when `release.draft`; the release creates the tag, tags are never pushed from the shell). `release.deploy` runs only after a separate explicit yes. Never merges.
-- `/devflow:report <spec path, slug or #epic>`: read-only. With `/devflow:report #<n>` the issues are the epic's native sub-issues plus the issues whose body has `Epic: #<n>` (no spec PR). Each issue also gets five `metrics` (path, review rounds, times blocked, duration from claim to merge, merged by) read from the `devflow-run` marker, the `devflow-blocked` comments and the merge marker; missing values show as "unknown". For each issue of the spec it collects from GitHub the plan, questions and answers, PR, review verdicts and rounds, tests (test-first, matrix rows covered), who merged, acceptance and release, and renders one trace page (`skills/report/templates/trace.html`) published as an artifact; steps without data stay grey on the full path. Plan and Verify show “skipped (short path)” on the short path. When there is no `devflow/review` status, the trace shows the local review verdict and rounds if available. A `devflow-gate-merged` comment or gate trailer identifies a gate merge. A PR with a `devflow-run` marker and no gate evidence is reported as human. Run it again with the artifact URL to refresh. Use it to demo the flow.
-- `/devflow:doctor [--fix]`: checks config and `devflowVersion`, drifted templates, GitHub access (and whether `gh` is installed), worktrees under `worktree.dir`, leftover branches, worktrees and local branches of merged devflow PRs (`--fix` asks one confirmation for the whole merged list, re-checks each item, removes worktrees without `--force`, deletes local branches with `git branch -d` only and remote ones with `git push <remote> --delete`; branches of PRs closed without merging keep a yes per branch), whether "Automatically delete head branches" is on, stale claims, open devflow PRs that are behind, conflicting or red, the allow-list in `.claude/settings.json`, and project files the plugin now owns (a `block_git_add_all.py` hook and its `hook-test` check, deny rules the guard covers, a maintenance `.claude/loop.md`, a project `code-reviewer` agent), which it reports as removable and never deletes, and whether the declared version (`plugin.json` `version`, else the newest changelog heading) has its tag `<release.tagPrefix><version>` (`warn` naming the missing tag, also when the two sources differ; skipped without either), and open follow-up issues (`needs-triage`, `[follow-up #n]`) that may already be fixed: a commit to the recorded `file:line` on the base since the issue was created (`git log -L`; a deleted file counts), or, without a record, a merged PR mentioning `#<n>`; listed as "may be fixed, check and close", never closed by doctor. `/devflow:release` likewise refuses to propose a version when the previous released version in the changelog has no tag, until you say to continue. Prints ok / warn / fail per check with what to do. It ends with a read-only "Waiting on you" section (also with `--fix`): blocked issues (`/devflow:answer #n`), PRs waiting for a human merge, PRs in conflict or behind (`/devflow:sync #pr`), ready issues (`/devflow:next-task` or `/devflow:dispatch`), sub-issues of an open epic without the ready label, and epics to accept (`/devflow:accept #n`), each issue or PR once, with "check by hand" for what it cannot classify and no cap on lines. Doctor lists closed issues with `labels.inProgress`, `labels.review` or `labels.blocked`. It also lists stale `devflow-claim` comments on open issues with no in-progress label and no open PR. With `--fix`, it rechecks and cleans these up after confirmation. With `--fix` it changes only what you confirm item by item (removes clean pushed worktrees, deletes merged branches after one confirmation, clears stale claims, merges missing allow rules); it never fixes PRs (use `/devflow:sync`). Recommended: turn on "Automatically delete head branches" in the repository settings (Settings > General) so GitHub removes a branch when its PR merges; doctor reports `warn` when it is off and `unknown` when it cannot read it.
-- `/devflow:sync [#pr ...]` (replaces `/devflow:address-reviews`): for your open PRs labelled `devflow`, parents before children: retargets a stacked PR to `baseBranch` once its parent merged, updates a behind branch, resolves merge conflicts with a merge commit (never a rebase or force push), then fixes, answers or declines each unresolved review thread with new commits and a reply on every thread. It acts only on trusted authors (you, the review bot, repository collaborators, i.e. OWNER, MEMBER or COLLABORATOR; any other thread is listed as `ignored: not a collaborator`), and skips updating a behind PR that the merge gate updates itself (gate enabled, not dry run, devflow + `risk:low`, not stacked or blocked). Pushing re-runs the automated review by itself, so it posts no re-review comment. A hidden `<!-- devflow-sync -->` marker comment counts rounds, limited by `nextTask.maxReviewRounds`. After resolving conflicts it removes the blocked label from the PR and its issue.
-  - Unattended: `/loop 15m /devflow:sync --unattended` keeps stacked PRs retargeted and review threads addressed while lanes run. An unattended run (started by `/loop` or with `--unattended`) uses a temporary worktree that it always removes, never asks (a thread needing a product decision is left for a human and listed), stops with "nothing to sync" when there is nothing to do, and never merges.
-
-- `/devflow:answer #12 [1: answer; 2: answer]`: for an issue blocked with questions. Finds the latest `<!-- devflow-questions -->` comment (from you or an OWNER, MEMBER or COLLABORATOR), takes the answers from the arguments or from replies after it by you or OWNER, MEMBER, COLLABORATOR authors (never bots; others are listed as `ignored: not a collaborator`) (every question needs one, otherwise nothing changes; `/devflow:answer #12 accept` takes every `Recommended:` option, `accept; 2: <answer>` overrides question 2, a question marked `[changes a criterion: typed answer needed]` is refused and nothing is recorded until all are answered, no open questions changes nothing, an override number out of range or repeated refuses the whole answer), only appends decisions (`- <date> (Q<k>): <question> → <answer>`): to the issue body's `## Decisions` (no criterion or Test cases row is edited), to the epic's `## Decisions` when the issue has an `Epic: #<n>` line, and to the spec through a small PR (`docs(#12): record answers to open questions`, labelled `devflow` and `risk:low`, `Refs #12`) only when the issue has a spec path; with no spec path no branch or PR is created. A failed epic append is reported and the issue's entries stay. Then it deletes the claim comments, swaps blocked and in-progress for ready and posts "Ready again: run /devflow:next-task #12". Never merges.
-
-Issue state is a label state machine: needs-triage, ready, in-progress, review, blocked (names configurable). Only a human moves an issue from needs-triage to ready. A blocked issue gets a comment saying which stage failed and what a human must decide; its branch is pushed so no work is lost. When the block is about questions, the comment is one merged list (see Plans and claims) and `/devflow:answer` unblocks it.
-
-### Priority
-
-Priority is a label from `labels.priority`, highest first (default `priority:critical`, `priority:high`, `priority:normal`, `priority:low`); an issue without one counts as normal. `/devflow:next-task` works in this order: dependencies first (inside the selection), then priority, then issue number. A critical or high issue pulls its open parents forward with it. A running run is never preempted: a new critical issue waits for the next run. The merge gate tries its candidates in the same order (the linked issue's priority, then PR number). Priority only changes the order: who merges is still decided by risk, and no gate condition is loosened.
-
-### Triage
-
-Bugs and gaps that no human has looked at carry `labels.triage` (default `needs-triage`): the gaps from `/devflow:accept`, the out-of-scope problems Ship files while opening a PR, and bugs filed by hand. `/devflow:next-task` and `/devflow:dispatch` never pick them up. Claude adds one comment to each with a suggested priority and risk and the reasons; a human sets the priority and risk labels and swaps `needs-triage` for ready. A fix PR (a `type:fix` / `bug` issue, a gap, or an issue made from the bug template) has three more sections: Root cause, Introduced by (PR, commit or acceptance criterion) and Why it was missed.
-
-### Risk
-
-Each issue and PR carries `labels.riskLow` or `labels.riskHigh`. The spec judges it per task; you approve it by setting the ready label on each sub-issue (epic mode) or by merging the spec PR (`--file`). `next-task` escalates a PR to high, deterministically, when a changed file matches `risk.highPaths` or a weakened check stays in the diff after review (and also labels the issue high). An issue with no risk label counts as high. The PR body has a `Risk: low|high - reason` line.
-
-### Weakened checks and out of scope
-
-Before each review round the engine runs `bin/devflow-scan` in the checkout, a script that scans the diff without a model for checks made to pass by weakening them: new `# noqa`, `type: ignore`, `eslint-disable`, `@ts-ignore`, skipped, focused or deleted tests (including Go `t.Skip`, JUnit `@Disabled` / `@Ignore`, Rust `#[ignore]`), `//nolint`, `rubocop:disable`, hollow assertions such as `assert True` in test files, removed assertions, empty `except` / `catch`, and edits to files that configure your `checks` (linter, type checker, test runner, CI config, `.claude/devflow.json`, scripts a check runs, `Makefile` when a check runs `make`, `.github/scripts` and `.github/actions`), plus `package.json` script and tool-config lines and `collect_ignore` in `conftest.py`. Prose and docs files (`.md`, `.txt`, `docs/`) are exempt from the per-line patterns. Each hit is a critical review finding, except `changed-existing-test`: any changed or deleted line that existed before the branch in a test or fixture file (QA files are not exempt) is a warning finding. Blank lines, comment-only lines, whitespace-only changes, added lines, new files and pure renames do not count. A `qaFiles` hit goes to the QA fix agent, others to the dev Fix agent, and the reviewer may accept it when a Test cases row names the change. The QA prompt also forbids changing an existing test or fixture that no row names (report it in the result instead) and tests that depend on branch state (diff against the base, branch name, unpushed commits, the date); such a row is a review check, not a test. The reviewer may accept a hit only when the issue itself asks for it; an accepted hit stays in the PR and makes it `risk:high` with the hit named in the Risk line, so a human merges it. Review also treats an "Out of scope" item that leaves an acceptance criterion unmet as critical. Real out-of-scope problems are filed by Ship as follow-up issues labelled `needs-triage` and linked in the PR body; a human decides whether they become ready. The CI review check (`claude-code-review.yml`) applies the same two rules.
-Files matching `scan.ignore` (an array of globs, `**` `*` `?`, default `[]`) are skipped by the scan entirely, for a repository whose own tests hold the scanned patterns as fixture data; the files skipped are listed in an `ignored` field of the scan output. `.claude/devflow.json` itself is never ignored, so an edit to the ignore list is itself a `check configuration changed` hit, and a high-risk path at the merge gate.
-
-
-### Review check
-
-The GitHub review is optional: it runs only when `review.github` is `true` in `.claude/devflow.json` (default `false`). A first step of the workflow reads the config through the API (the default-branch copy to learn `baseBranch`, then the copy at `baseBranch`; never the PR head). With the flag off the job ends successfully without a Claude call or a `devflow/review` status and writes `devflow review is off (review.github is not true)` to the step summary; keep `devflow/review` in `mergeGate.requiredChecks` only when it is on. Trade-off: with the flag off, only the local review (`devflow:reviewer`) checks the work, and a PR opened by hand gets no review. When on, `claude-code-review.yml` reviews each PR with Opus and publishes the commit status `devflow/review` (success or failure) from a hidden `devflow-verdict` marker that the review bot puts at the end of its summary comment (it carries the head SHA; only the bot's comment counts); a missing marker, or one for another SHA, is a failure. It re-runs on every push (`synchronize`), but when the only new commits are clean base merges made by GitHub's update-branch it carries the previous verdict over instead of reviewing again. Only a real verdict is carried (a pass, or "N critical, M warning"); a failure without a verdict, or a change to the review workflow itself in those commits, always gets a fresh review. The PR also gets one summary comment and inline comments; the review never approves or requests changes.
-
-### Stacked PRs
-
-If every open `Depends on` issue has an open PR, or shipped earlier in the same run, the issue is stacked and labelled `labels.stacked`. One parent: `next-task` branches from the parent PR's branch and opens the PR against it; after the parent merges, the merge gate (or `/devflow:sync`) retargets the child to `baseBranch`. Several parents: the branch starts from `baseBranch`, an Integrate stage (sonnet) merges every parent branch into it (resolving conflicts between them), and the PR targets `baseBranch`; its diff shrinks to the child's own changes as the parents merge. The merge gate never merges a PR while any `Depends on` issue of its linked issue is open. A parent that did not ship in the run, or an open dependency without a PR, skips the issue with the reason. A parent PR the merge gate merges while the child is still being built (its branch deleted) is handled too: Branch starts from `baseBranch` when the parent is already gone, Integrate skips a merged parent, and Ship re-reads the parent PR before opening the child, so a child whose single parent merged opens against `baseBranch`, not stacked.
-
-Implement must read the spec: the engine takes the spec path from the issue body, tells the agent to start with `git show <base>:<path>`, and requires `specRead` in its result. If the path is missing there, one Fix round re-checks the change against the spec; if it is still missing, the issue is blocked. When the issue has no spec path but a line `Epic: #<n>`, the stages (and the reviewer, with `gh issue view`) read epic `#<n>` instead for the shared design and decisions: the issue's criteria and `## Decisions` win, `specRead` must contain `#<n>` as a whole token, and an epic that cannot be read (`epicRead: false`) blocks the issue with `epic #<n> could not be read`. A spec path wins over an `Epic:` line; an issue with neither is the whole contract.
-
-### Verification and e2e rows
-
-Verify runs when the issue is labelled `needs-e2e`, the diff touches UI, or its Test cases table has a row with level `http` or `e2e`. With `testing.e2eFramework` false (default), `e2e` must rows are covered by Verify against the running app instead of committed tests; with true they need committed tests like any other row.
-
-### Run decisions and branch resume
-
-- `nextTask.onQuestion` defaults to `decide`. The run takes recommended answers only when all questions in the batch are safe and reversible. It records them in the issue's Decisions and the PR's Decisions taken section, and labels the PR `decisions:review` (via `labels.decisionsReview`). The recommendation must preserve behaviour, criteria, contracts, stored formats, risk and required checks. It must stay inside the repository and avoid destructive git. The full branch diff must avoid `risk.highPaths`. A safe review warning left after the last round can ship with the same label. Open critical findings block. Set `nextTask.onQuestion` to `block` to block on questions and remaining warnings.
-- A blocked run posts one numbered comment with recommendations. `/devflow:answer #<n> accept` uses those recommendations. Type an answer for any question that changes a criterion or lacks a recommendation.
-- The engine computes the branch name from `branchPattern` (default `{type}/{issue}-{slug}`). It uses the existing PR head selected for resume or the exact computed name first. If neither exists, it resumes a unique local or remote branch with the prefix `<type>/<issue>-` and an issue-scoped commit. It records the alternate branch in the PR's Assumptions. Multiple matching alternatives block with a list of candidates.
-- A conflict from merging the base into a resumed branch goes to Integrate. It blocks if the issue does not cover the conflicting behaviour. The risk rules still apply to the resulting diff. Commit grouping follows project rules and the plan.
-- `bin/devflow-run branch` sets up the branch. `bin/devflow-run check` runs configured checks in order with per-command timeouts. `bin/devflow-run restore` switches back to the starting branch when the checkout is clean. Next-task preflight uses `bin/devflow-gh` to detect an executable `gh` on PATH.
-- `nextTask.reviewModel` defaults to Sonnet for low-risk issues and Opus for high or unknown risk. Override `low` or `high` separately. `nextTask.maxAgentCalls` limits calls per issue. The default `0` is unlimited. Cleanup calls are exempt.
-
-### Plans and claims
-
-- **Claim** is a lock on the issue. It is skipped only when it has an assignee other than you (the authenticated user) or the in-progress / blocked / review label; an issue assigned only to you is claimed. Otherwise the run assigns you only when not already assigned (`assignedByRun`), swaps ready for in-progress and posts a `<!-- devflow-claim id=... -->` comment, then reads all claim comments back: the earliest wins (ties by comment id). A loser deletes only its own comment and skips the issue ("claimed by <id>"); it also removes the authenticated user from the assignees when it added them and the winner is a different user. Branch creation is a separate step after a won claim; if the branch name already exists locally with no commits of its own and is not on the remote (left over from a run blocked at Plan), Branch recreates it from the parent ref instead of blocking. A blocked run also deletes its own claim comment and removes the authenticated user from the assignees when the run added them.
-- **Parallel QA** (`nextTask.parallelQa`, default true): Plan also returns `qaFiles` (test files the QA agent owns, for the Test cases rows) and `devFiles` (files the dev agent changes); a file in both blocks the issue at Plan ("ownership overlap"). When `qaFiles` is non-empty, Implement runs two sonnet agents in parallel in the same checkout, neither committing: QA writes the acceptance tests for every `must` row from the spec and issue only (black box, it never reads the implementation diff) and touches only `qaFiles`; Dev writes the implementation and touches no `qaFiles` (extra tests go in other files). A Commit stage then commits the QA tests first (`test(#n): ...`), confirms they fail with the implementation stashed, and commits the implementation. The engine blocks the issue if QA changed a file outside `qaFiles` or dev changed a QA file. The dev Fix agent never edits `qaFiles`; a Review finding or a failing check attributed to a `qaFiles` file goes to a QA fix agent instead, which may edit only `qaFiles`. QA and dev fix rounds share `maxFixRounds` / `maxReviewRounds`; a round with both kinds of findings runs the QA fix agent, then the dev Fix agent, and counts once. When the QA fix agent says the test is right and the dev Fix agent says the code is right for the same finding, the issue blocks with one questions comment holding both positions. Review findings about commit split, order or message wording (`category: "commit-structure"`) are suggestions: they appear under the PR's Review notes and never start a fix round or a block. With `parallelQa` false, or without `qaFiles` (for example docs-only issues), one Implement agent writes the test first, then the implementation.
-- **PR trace and markers**: every PR body has a `## Review` section (review rounds, path, verify result) and a hidden `<!-- devflow-run {...} -->` line with `path`, `reviewRounds` and `claimedAt`; each blocked run leaves exactly one comment containing `<!-- devflow-blocked -->` (the questions comment as its second line).
-- **Merged questions**: questions from Plan (BA: spec gaps; QA: Test cases rows not testable as written), from the QA agent and from the dev agent go into ONE comment whose first line is `<!-- devflow-questions -->`, numbered and tagged [BA], [QA] or [Dev], ending with "Answer with /devflow:answer #<n>, or reply on this issue with numbered answers." The issue is blocked once with all of them. Blocking also deletes the run's own claim comment. A `## Decisions` section in the issue body overrides the spec where they differ, in Plan and Implement.
-- **Plan** runs after Branch (and Integrate): a sonnet agent reads the spec and the code, and posts a plan on the issue as a comment starting with `<!-- devflow-plan -->` (edited in place on a re-run): files to change, tests per Test cases row, risks, order of commits, open questions. Nobody approves it. If the spec and the issue leave a behaviour question open, the plan is posted and the issue is blocked with the merged questions comment before any code is written. Otherwise Implement follows the plan and records deviations under assumptions.
-
-## Filing a bug
-
-There is no separate command: ask Claude in the project, for example "File a devflow bug: the task list ignores the sort order from AC2.5, found on PR #54". Claude then:
-
-1. Fills the bug template `skills/spec/templates/bug.md` of the plugin: Context, Expected, Actual, Repro, Introduced by, Risk, Acceptance criteria, Scope, Test cases (at least one `must` regression row) and Dependencies, with "unknown" where it does not know.
-2. Creates the issue labelled `needs-triage` only (title `fix: <summary>`), after showing you the draft.
-3. Comments a suggested priority and risk, each with a reason.
-
-You set the priority and risk labels and replace `needs-triage` with the ready label; then `/devflow:next-task` picks it up and writes the root cause into the PR.
-
-## Parallel work
-
-One ticket per session, each in its own git worktree, so sessions never share a working tree.
-
-- `/devflow:next-task #12 --isolated`: creates a worktree under `worktree.dir` (`git worktree add --detach` from `<remote>/<baseBranch>`), enters it, runs each `worktree.setup` command, then runs the workflow there. There is no start branch to restore and a detached HEAD is fine. Afterwards a worktree with no uncommitted changes and everything pushed is removed; otherwise it is kept and its path is reported. A fresh worktree needs its own setup (about 3 s for `make setup` on TaskBoard).
-- Claims: each run gets a `claimId` (timestamp, name, pid, random). Two sessions on the same issue race on the claim comments; one wins, the other skips. See Plans and claims. Every ticket gets its plan posted on the issue.
-- Lanes: `bin/devflow-lanes` groups issues that share a hotspot file (the `## Hotspots` list in the issue, exact path) or depend on each other (inside the set). Hotspots matching `dispatch.ignoreHotspots` (exact paths or globs with `*` and `**`; default `README.md`, `CHANGELOG.md`) are dropped before grouping and listed as "not used for lanes": conflicts there are small and are resolved by the gate's branch update or `/devflow:sync`. With `changelog.fragmentsDir` set, the fragment directory never needs a lane (one file per issue): add `<fragmentsDir>/**` to `dispatch.ignoreHotspots`. A lane runs its issues in order, parents first, each stacked on the previous one's PR: `/devflow:next-task #a #b --chain`. Tasks that touch the same files therefore never run in parallel, so parallel lanes never conflict. Lanes beyond `dispatch.maxLanes` are deferred; a dependency cycle is kept in number order with a warning. If an issue of a lane does not ship (blocked, skipped, claimed elsewhere), the lane continues: the next issue stacks on the last issue that shipped, or starts from the base; only an issue with a real `Depends on` the failed one is skipped.
-- `/devflow:dispatch --plan` previews epic auto-readying and prints the lane plan without adding labels or comments or starting sessions.
-- `/devflow:dispatch N [--plan]`: with `--plan` it prints the plan (lanes, order, shared and ignored hotspots, deferred and waiting issues) and starts no session; with no ready issue it says "nothing to run". It lists the schedulable ready issues (issues waiting for an open dependency that has no PR and is not in the set are left out and listed), plans the lanes (`N` overrides `dispatch.maxLanes`), prints the plan, and starts one background session per lane: `claude --bg "/devflow:next-task #a #b --chain --isolated"`. If `claude --bg` fails, it prints the equivalent `claude -w lane-<n> "..."` commands to run in a terminal. Per lane it prints `ignoredTouched`: the ignored hotspots (exact path) that the lane and an earlier lane both name, the files where `/devflow:sync` may work. It never merges.
-- Follow the sessions: `claude agents`, `claude logs <id>`, `claude attach <id>`.
-- Background sessions need a trusted workspace and cannot answer permission prompts, so the project needs allow rules (or an auto permission mode); `/devflow:init` offers them (see Permissions snippet).
-- Cleanup: finished worktrees remove themselves (above). A kept one: `git worktree remove <path>` after you have looked at it; `git worktree prune` for stale entries.
+- This optional GitHub Action merges at most one eligible `risk:low` PR per run. Start with `mergeGate.enabled` and `mergeGate.dryRun` both true, then review the summary before turning dry run off.
+- Install the workflow on the default branch, add `DEVFLOW_GATE_TOKEN`, enable merge commits, and match workflow triggers to the required checks. Review and mention workflows use `CLAUDE_CODE_OAUTH_TOKEN`. [Gate details](DESIGN.md#risk-and-the-merge-gate)
+- The gate requires a mergeable PR on the base branch, closed dependencies, green required checks on the PR head, and clear review threads. An empty effective check list stops merges.
+- Behind PRs queue for an update (`deferred: waits for its turn`). The gate holds `decisions:review` for a human unless `nextTask.trustDecisions` is true.
+- The gate records `devflow-gate-merged` and clears `labels.inProgress`, `labels.review`, and `labels.blocked` from issues linked to its merges.
 
 ## Safety
 
-- Claude never merges. The plugin pushes only its own feature branches, never merges, never pushes to `baseBranch` or `protectedBranches`, and never force-pushes (except `--force-with-lease` on its own branch). `/devflow:sync` only adds commits and pushes normally.
-- Merging is done by a human, or for `risk:low` PRs by the merge gate Action, which runs outside Claude with its own token, merges at most one PR per run and is off until `mergeGate.enabled` (dry run first).
-- A PreToolUse hook (`hooks/guard.py`) enforces this: it blocks MCP `merge_pull_request`, `gh pr merge`, `gh api .../merge`, GraphQL merge mutations, MCP file writes (`push_files`, `create_or_update_file`, `delete_file`) to a protected branch or with no branch, pushes to protected branches (explicit refspec, `--delete`, or a bare push while on one), `--force`, `-f`, `+refspec`, `--mirror` and `--all`. Retargeting a PR and updating its branch (`update_pull_request`, `update_pull_request_branch`) are allowed.
-- The same hook blocks git commands that discard work (`reset --hard`, `clean -f`, `branch -D`, `checkout .`, `restore .`, `stash drop|clear`, `filter-branch`, `update-ref -d`, `reflog expire`) `git checkout -f` / `git switch -f`, `--no-verify` on commit and push, `gh api` writes to protected refs or commit statuses, `gh pr|issue edit` removing `risk:high`, and staging everything (`git add -A`, `--all`, `.`, `*`); `git add -u` is allowed. `git clean -n` is a dry run and allowed. The guard fails closed: an internal error blocks the call, and `/devflow:doctor` checks that it runs. Global options such as `git -C <dir>` are seen through. A project no longer needs its own `block_git_add_all.py` hook. It reads the protected branches from `.claude/devflow.json` and falls back to `main`, `master`, `develop`. It guards against habit, not deliberate evasion.
-- More plugin hooks: `hooks/formatter.py` (PostToolUse on Write/Edit) runs the `format` commands of `.claude/devflow.json` on the edited file, for example `{"*.py": ".venv/bin/ruff format {file}"}`; it prints nothing and never fails the edit. `hooks/session_start.py` (SessionStart) adds the workflow rules built from `.claude/devflow.json` to every session: branch pattern, commit scope, failing test first, stage by name, never edit acceptance criteria, ask on ambiguity, never merge. It is silent in projects without a `devflow.json`.
-- The plugin ships a reviewer agent, `devflow:reviewer` (`agents/reviewer.md`). The Review stage runs as it (`nextTask.reviewerAgent`, empty for the default agent), and you can ask for a local review: "review this branch with the devflow reviewer".
-- All committed content is English. No `Co-Authored-By` or AI attribution is added unless the project's `CLAUDE.md` says otherwise.
-- Issues, PRs, comments and replies never contain the review bot's at-sign handle. Pushing new commits re-triggers the review, so no trigger comment is needed. The only place the handle appears is the mention-handler workflow `claude.yml`, whose trigger it is.
-
-Run the hook tests with `python3 -m unittest discover -s hooks -p 'test_*.py' -v` (guard, formatter, session start) and the Node tests with `node --test tests/*.test.cjs`: the merge gate, the lane planner, the engine, `bin/devflow-setup` and the reusable workflows (their jobs must match the copy templates). `tests/engine.test.cjs` runs `workflows/next-task-engine.js` with stub agents and covers stacking, claims, file ownership, merged questions, report notes, the MCP stop, branch resume, manual checks, the verify lock, the weakened-checks scanner and the out-of-scope rules. CI (`.github/workflows/test.yml`) runs both the Node tests and the guard unittests on every PR and on pushes to `main`.
-
-## Permissions snippet
-
-A plugin cannot grant permissions, so the project's `.claude/settings.json` needs allow rules for the workflow not to stop on routine prompts. `/devflow:init` generates them from your config with `node "${CLAUDE_PLUGIN_ROOT}/bin/devflow-setup" allow < .claude/devflow.json` (git commands, `git push` to your remote, `gh issue view` (read-only, so the reviewer agent can read the issue; no other `gh` rule), every `checks[].run`, `verify.devServer.run` and `worktree.setup` command, `curl` scoped to the dev server origin for http verification, the browser and GitHub MCP tools). Rules are specific prefixes, never a bare interpreter, shell or runner: `python3 -m pytest tests` gives `Bash(python3 -m pytest:*)`, `node --test tests/*.cjs` gives `Bash(node --test:*)`. A command with no safe prefix (`bash -c "..."`, `env FOO=1 ...`) is listed for you to allow by hand. The base it starts from:
-
-```json
-{
-  "permissions": {
-    "allow": [
-      "Bash(git status:*)",
-      "Bash(git diff:*)",
-      "Bash(git log:*)",
-      "Bash(git fetch:*)",
-      "Bash(git switch:*)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)",
-      "Bash(git push -u origin:*)",
-      "Bash(git push origin:*)",
-      "Bash(git merge:*)",
-      "Bash(git branch:*)",
-      "Bash(git worktree:*)",
-      "Bash(git stash:*)",
-      "Bash(gh issue view:*)",
-      "Bash(curl:*)",
-      "mcp__github__*"
-    ]
-  }
-}
-```
-
-No `deny` rules: the guard hook blocks merging, force pushes, protected branches, destructive git commands and `git add -A` in every project, and `/devflow:doctor` lists old deny rules that duplicate it as removable. The `mcp__github__*` pattern depends on how your GitHub MCP server is named; `/devflow:init` probes each connected GitHub MCP server by getting the authenticated user and uses the prefix of the one that answers (it asks which when several answer, and stops when none does); `/devflow:doctor` check 3 probes the same way, reports that prefix and warns only when the allow list has another GitHub MCP prefix and no allowed prefix belongs to a server that answers. Add each `checks[].run` command (for example `Bash(npm test:*)`). `git worktree` is for `--isolated` runs; also add each `worktree.setup` command and, for background sessions started by `/devflow:dispatch`, make sure everything above is allowed since they cannot answer prompts. `git merge` is for `/devflow:sync` (merging the base into a PR branch; the guard hook still blocks merging PRs and pushes to protected branches). Use your remote's name instead of `origin` if it differs.
+- Claude never merges PRs. The guard blocks protected-branch pushes, destructive Git commands, and staging everything at once. [Guard rules](DESIGN.md#guard-hook-hooksguardpy)
+- `/devflow:sync` trusts review input from OWNER, MEMBER, or COLLABORATOR. Other input is marked `ignored: not a collaborator`.
+- `/devflow:answer` trusts replies from OWNER, MEMBER, or COLLABORATOR. Other replies are marked `ignored: not a collaborator`.
+- The allow list includes read-only `Bash(gh issue view:*)` for issue context. Ship files out-of-scope follow-ups under `needs-triage` for a human to assess.
 
 ## Releasing devflow
 
-The release steps are at the bottom of `CHANGELOG.md` (the release task template). Before the release PR merges, a smoke run proves the release candidate end to end in the sandbox repository: load the plugin from the release branch with `--plugin-dir`, create two issues from `docs/smoke/low.md` and `docs/smoke/high.md`, run them with `/devflow:dispatch` as two lanes, then check each with the read-only checker:
+- Follow the [release task template](CHANGELOG.md#release-process). This repo stores fragments in `changelog.d/` and assembles them with `bin/devflow-changelog`. The fragment directory never needs a lane.
+- Load the candidate with `--plugin-dir`, create issues from the [low-risk](docs/smoke/low.md) and [high-risk](docs/smoke/high.md) fixtures, and run them in the sandbox as two lanes via `/devflow:dispatch`.
+- Check both issues with the read-only smoke checker. Merge the release PR after both pass, then tag `vX.Y.Z`.
 
-```bash
-node bin/devflow-smoke --repo nhanle-agilityio/devflow-sandbox --issue <n> --expect low   # or --expect high
-```
+  ```bash
+  node bin/devflow-smoke --repo nhanle-agilityio/devflow-sandbox --issue <n> --expect low   # or --expect high
+  ```
 
-It prints one `ok` / `fail` line per check (the issue, exactly one closing `devflow` PR, the `devflow-run` marker, the `## Review` section, the `Risk:` line, how it was merged, and for `high` the `risk:high` label) and exits 0 only when all pass, 1 when one fails, 2 when `gh` is missing or not logged in or the arguments are wrong. It only reads GitHub (`gh api` GET). The release PR merges only when both pass, and a human tags `vX.Y.Z` right after it merges.
-
-## Out of scope
-
-Not planned: GitHub Projects board sync, uploading screenshots to PRs. Within one session issues still run sequentially; parallelism is across sessions.
-
-## License
-
-MIT
+[Design](DESIGN.md) · [Interactive flows](docs/devflow-flows.html) · [Changelog](CHANGELOG.md) · [MIT License](LICENSE)
