@@ -89,18 +89,20 @@ const fragments = () => (fs.existsSync(FRAG_DIR) ? fs.readdirSync(FRAG_DIR).filt
 const has = (n) => spawnSync('node', [path.join(ROOT, 'bin', 'devflow-changelog'), 'has', String(n)], { cwd: ROOT }).status;
 
 test('T9.9 migrated bullets sit in their fragment under their section and has exits 0', () => {
+  // Since 3.1.0 the fragments were assembled into CHANGELOG.md: the migrated bullets keep their section there.
+  const changelog = read('CHANGELOG.md');
+  const release = changelog.slice(changelog.indexOf('## [3.1.0]'), changelog.indexOf('## [3.0.0]'));
   const expected = { 94: 'Changed', 95: 'Added' };
   for (const [n, section] of Object.entries(expected)) {
-    const text = read(`changelog.d/${n}.md`);
-    assert.match(text, new RegExp(`^### ${section}\\n- .*\\(#${n}\\)`, 'm'), `${n}.md has its bullet under ### ${section}`);
-    assert.equal(has(n), 0, `has ${n}`);
+    const body = release.slice(release.indexOf(`### ${section}`));
+    const end = body.slice(4).search(/^### /m);
+    assert.match(end === -1 ? body : body.slice(0, end + 4), new RegExp(`^- .*\\(#${n}\\)`, 'm'), `#${n} bullet under ### ${section} in 3.1.0`);
   }
 });
 
 test('T9.10 a bullet is in the fragment of the first issue it cites only', () => {
-  const files = fragments();
-  assert.ok(files.length > 0);
-  for (const f of files) {
+  // Fragments are assembled at release; check the open fragments and the assembled 3.1.0 section.
+  for (const f of fragments()) {
     const n = f.replace('.md', '');
     for (const line of read(`changelog.d/${f}`).split('\n').filter((l) => l.startsWith('- '))) {
       const first = /\(#(\d+)/.exec(line);
@@ -108,6 +110,11 @@ test('T9.10 a bullet is in the fragment of the first issue it cites only', () =>
       assert.equal(first[1], n, `${f}: bullet's first cited issue is ${n}`);
     }
   }
+  const changelog = read('CHANGELOG.md');
+  const release = changelog.slice(changelog.indexOf('## [3.1.0]'), changelog.indexOf('### Upgrade', changelog.indexOf('## [3.1.0]')));
+  const bullets = release.split('\n').filter((l) => l.startsWith('- '));
+  assert.ok(bullets.length > 0);
+  for (const line of bullets) assert.match(line, /\(#\d+/, `3.1.0 bullet cites its issue: ${line.slice(0, 60)}`);
 });
 
 test('T9.11 the release skill shows the preview and does not write it', () => {

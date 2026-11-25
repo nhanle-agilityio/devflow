@@ -21,8 +21,9 @@ function section(changelog, name) {
   return lines.slice(start, end).join('\n');
 }
 
-test('test_t13_1_version_3_0_0', () => { // T13.1
-  assert.equal(JSON.parse(read('.claude-plugin/plugin.json')).version, '3.0.0');
+test('test_t13_1_version_3_0_0', () => { // T13.1 (since 3.1.0: the plugin version is the newest released changelog version)
+  const newest = /^## \[(\d+\.\d+\.\d+)\] - /m.exec(read('CHANGELOG.md'))[1];
+  assert.equal(JSON.parse(read('.claude-plugin/plugin.json')).version, newest);
 });
 
 test('test_t13_2_changelog_3_0_0_entries', () => { // T13.2
