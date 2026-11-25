@@ -281,7 +281,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     </div>
   </div>
   <h1>devflow</h1>
-  <p class="lead" data-i18n="lead">Từ <b>ý tưởng</b> đến <b>PR đã merge</b> và <b>release</b>, qua chín lệnh: <b>/devflow:spec</b>, <b>/devflow:next-task</b>, <b>/devflow:dispatch</b>, <b>/devflow:sync</b>, <b>/devflow:answer</b>, <b>/devflow:accept</b>, <b>/devflow:release</b>, <b>/devflow:report</b>, <b>/devflow:doctor</b>, cùng <b>/devflow:init</b> (và <b>init --upgrade</b>) để cài đặt. Mỗi task có mức risk; Claude không bao giờ merge. Bạn quyết định ở những ô màu cam.</p>
+  <p class="lead" data-i18n="lead">Từ <b>ý tưởng</b> đến <b>PR đã merge</b> và <b>release</b>, qua mười lệnh: <b>/devflow:spec</b>, <b>/devflow:approve</b>, <b>/devflow:next-task</b>, <b>/devflow:dispatch</b>, <b>/devflow:sync</b>, <b>/devflow:answer</b>, <b>/devflow:accept</b>, <b>/devflow:release</b>, <b>/devflow:report</b>, <b>/devflow:doctor</b>, cùng <b>/devflow:init</b> (và <b>init --upgrade</b>) để cài đặt. Mỗi task có mức risk; Claude không bao giờ merge. Bạn quyết định ở những ô màu cam.</p>
   <div class="legend" aria-label="Chú thích màu">
     <span class="chip" style="--c:var(--human)"><i></i>Bạn quyết định</span>
     <span class="chip" style="--c:var(--haiku)"><i></i>Claude Haiku · việc cơ học</span>
@@ -348,7 +348,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
           <div class="node sonnet"><span class="t">/devflow:accept</span><span class="s">sau merge: kiểm tiêu chí, gap thành issue</span></div>
           <div class="node sonnet"><span class="t">/devflow:release</span><span class="s">semver, notes cho khách, release draft</span></div>
           <div class="node sonnet"><span class="t">/devflow:report</span><span class="s">trang trace của một spec, chỉ đọc</span></div>
-          <div class="node sonnet"><span class="t">/devflow:doctor</span><span class="s">9 kiểm tra sức khoẻ, --fix từng mục</span></div>
+          <div class="node sonnet"><span class="t">/devflow:doctor</span><span class="s">14 kiểm tra sức khoẻ, --fix từng mục</span></div>
         </div>
         <div class="node block"><span class="t">guard.py (hook)</span><span class="s">luôn bật · chặn merge, push vào branch bảo vệ, force push</span></div>
       </div>
@@ -384,7 +384,8 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     <div class="split">
       <div class="panel">
         <h3><span class="dotc" id="spec-dot" style="--c:var(--sonnet)"></span><span id="spec-title">Bấm ▶ để xem từng bước</span></h3>
-        <p class="muted" id="spec-desc">Mỗi bước có một đầu ra cụ thể. Bước cuối là của bạn: sub-issue chỉ sẵn sàng khi bạn đặt agent:ready (chế độ --file: sau khi bạn merge spec ở Gate 1).</p>
+        <p class="muted" id="spec-desc">Sub-issue của epic bắt đầu không có nhãn ready. Với --file, bạn merge spec ở Gate 1.</p>
+        <p class="note" data-i18n="epic-approval"></p>
         <div class="chat" id="spec-chat" aria-live="polite"></div>
       </div>
       <div class="panel">
@@ -430,13 +431,13 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
         <div class="node haiku" data-st="select"><span class="badge">haiku</span><span class="t">Select</span><span class="s">ready, parent đã có PR, ≤ limit</span></div>
         <div class="node haiku" data-st="claim"><span class="badge">haiku</span><span class="t">Claim</span><span class="s">khoá bằng claim comment, sớm nhất thắng</span></div>
         <div class="node haiku" data-st="branch"><span class="badge">haiku</span><span class="t">Branch</span><span class="s">chồng lên PR cha, hoặc tiếp tục branch cũ</span></div>
-        <div class="node sonnet" data-st="integrate"><span class="badge">sonnet</span><span class="t">Integrate</span><span class="s">chỉ khi có nhiều parent: gộp parent</span></div>
+        <div class="node sonnet" data-st="integrate"><span class="badge">sonnet</span><span class="t">Integrate</span><span class="s">gộp nhiều parent hoặc xử lý xung đột khi tiếp tục branch</span></div>
         <div class="node sonnet" data-st="plan"><span class="badge">sonnet</span><span class="t">Plan</span><span class="s">đọc spec hoặc epic, comment devflow-plan, không ai duyệt</span></div>
         <div class="node sonnet" data-st="impl"><span class="badge">sonnet</span><span class="t">Implement</span><span class="s">QA ∥ Dev song song, hoặc 1 agent</span></div>
         <div class="node haiku" data-st="commit"><span class="badge">haiku</span><span class="t">Commit</span><span class="s">test trước, xác nhận đỏ, rồi code</span></div>
         <div class="node haiku" data-st="check"><span class="badge">haiku</span><span class="t">Check</span><span class="s">chạy mọi lệnh trong checks</span></div>
         <div class="node sonnet" data-st="verify"><span class="badge">sonnet</span><span class="t">Verify</span><span class="s">khoá verify.lock, rồi curl / trình duyệt theo AC</span></div>
-        <div class="node opus" data-st="review"><span class="badge">opus</span><span class="t">Review</span><span class="s">diff, spec hoặc epic, CLAUDE.md, dòng must kiểm tay</span></div>
+        <div class="node opus" data-st="review"><span class="badge">sonnet / opus</span><span class="t">Review</span><span class="s">diff, spec hoặc epic, CLAUDE.md, dòng must kiểm tay</span></div>
         <div class="node script" data-st="risk"><span class="badge">code</span><span class="t">Risk</span><span class="s">tất định, highPaths nâng lên high</span></div>
         <div class="node out" data-st="ship"><span class="badge">sonnet</span><span class="t">Ship</span><span class="s">đọc lại PR cha · PR gắn devflow + risk</span></div>
       </div>
@@ -447,6 +448,9 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       </div>
     </div>
     <p class="muted" id="nt-source"></p>
+    <p class="note" data-i18n="branch-resume"></p>
+    <p class="note" data-i18n="run-helpers"></p>
+    <p class="note" data-i18n="review-settings"></p>
     <div class="par" id="par">
       <span class="eyebrow">Implement khi Plan có qaFiles</span>
       <div class="node sonnet" id="par-qa"><span class="badge">sonnet</span><span class="t">QA agent</span><span class="s">viết test cho mọi dòng must, chỉ đọc spec + issue, chỉ sửa qaFiles</span></div>
@@ -466,7 +470,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       <span class="eyebrow">Skill next-task · sau khi workflow xong</span>
     </div>
     <div class="preflight" id="pf2">
-      <span class="pf">bảng kết quả, cột Notes nguyên văn từ engine</span>
+      <span class="pf">bảng kết quả có cột Notes và Next từ engine</span>
       <span class="pf">một push notification duy nhất (notify.*)</span>
     </div>
     <div class="nt-grid">
@@ -514,6 +518,8 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       <div class="panel">
         <h3><span class="dotc" id="an-dot" style="--c:var(--sonnet)"></span><span id="an-title">Bấm ▶ để xem từng bước</span></h3>
         <p class="muted" id="an-desc">Câu hỏi của mọi vai trò nằm trong một comment, nên bạn trả lời một lần thay vì bị hỏi nhiều lần.</p>
+        <p class="note" data-i18n="run-decisions"></p>
+        <p class="note" data-i18n="recommended-answers"></p>
         <div class="chat" id="an-chat" aria-live="polite"></div>
       </div>
       <div class="panel">
@@ -531,7 +537,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     <div>
       <span class="eyebrow">Chạy ngoài Claude · Action với token riêng</span>
       <h2>Merge: risk:low tự merge khi check xanh, risk:high chờ bạn</h2>
-      <p class="muted">Claude không bao giờ merge. Action devflow-merge-gate duyệt các PR gắn devflow, cũ nhất trước, và merge tối đa một PR mỗi lần chạy. Mọi PR do cổng merge đều được đánh dấu để release và report phân biệt với người. Mặc định tắt, chạy thử (dryRun) trước.</p>
+      <p class="muted">Claude không bao giờ merge. Action devflow-merge-gate duyệt các PR gắn devflow, theo độ ưu tiên, và merge tối đa một PR mỗi lần chạy. Mọi PR do cổng merge đều được đánh dấu để release và report phân biệt với người. Mặc định tắt, chạy thử (dryRun) trước.</p>
     </div>
     <div class="controls">
       <button class="ctl primary" id="mg-play" type="button">▶ Chạy</button>
@@ -562,6 +568,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       <span class="pf">3 · retarget PR stacked về base</span>
       <span class="pf">4 · xoá head branch</span>
     </div>
+    <p class="note" data-i18n="gate-cleanup"></p>
     <div class="rv">
       <div class="panel">
         <h3><span class="dotc" style="--c:var(--out)"></span>PR gắn devflow</h3>
@@ -652,6 +659,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     <div class="issues" id="dp-pool" aria-label="Issue sẵn sàng"></div>
     <div class="lanes" id="dp-lanes"></div>
     <div class="log" id="dp-log" aria-live="polite"></div>
+    <p class="note" data-i18n="dispatch-plan"></p>
     <p class="note">Nếu claude --bg lỗi, dispatch dừng và in lệnh claude -w lane-&lt;n&gt; tương đương để bạn chạy trong terminal. Theo dõi bằng claude agents, claude logs, claude attach.</p>
     <p class="note">dispatch.ignoreHotspots (mặc định README.md và CHANGELOG.md) không tham gia việc xếp lane: xung đột ở các file này nhỏ, merge gate (update branch) hoặc /devflow:sync xử lý được.</p>
   </div>
@@ -733,6 +741,9 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       <div class="panel">
         <h3><span class="dotc" style="--c:var(--out)"></span>Đầu ra trên GitHub</h3>
         <div class="queue" id="sh-out"><div class="empty">Chưa có gì. Gap issue, comment accept, trang trace và release xuất hiện dần.</div></div>
+        <p class="note" data-i18n="accept-evidence"></p>
+        <p class="note" data-i18n="report-trace"></p>
+        <p class="note" data-i18n="changelog-fragments"></p>
       </div>
     </div>
   </div>
@@ -757,7 +768,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
   </div>
   <div class="canvas">
     <div class="engine-label">
-      <span class="eyebrow">9 kiểm tra, chạy hết kể cả khi một cái fail</span>
+      <span class="eyebrow">14 kiểm tra, chạy các mục áp dụng</span>
       <span class="js">chỉ đọc; --fix chỉ sửa mục bạn đồng ý</span>
     </div>
     <div class="preflight" id="dr-checks">
@@ -770,6 +781,11 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       <span class="pf">7 · PR cần sync</span>
       <span class="pf">8 · allow-list</span>
       <span class="pf">9 · thứ plugin đã lo</span>
+      <span class="pf">10 · guard</span>
+      <span class="pf">11 · tag release</span>
+      <span class="pf">12 · follow-up có thể đã sửa</span>
+      <span class="pf">13 · nhãn trạng thái trên issue đã đóng</span>
+      <span class="pf">14 · claim cũ trên issue mở</span>
     </div>
     <div class="split">
       <div class="panel">
@@ -801,6 +817,8 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       </div>
     </div>
     <div class="log" id="dr-log" aria-live="polite"></div>
+    <p class="note" data-i18n="doctor-checks"></p>
+    <p class="note" data-i18n="doctor-waiting"></p>
   </div>
 </section>
 
@@ -885,9 +903,61 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
   try { const saved = localStorage.getItem('devflow-lang'); if (saved === 'vi' || saved === 'en') lang = saved; } catch (e) {}
   const t = (vi, en) => (lang === 'vi' ? vi : en);
   const BLOCKS = {
+    'epic-approval': {
+      vi: 'Đặt nhãn ready thủ công hoặc dùng <code>/devflow:approve</code> trên epic. Nhãn <code>labels.epicApproved</code> mặc định là <code>epic:approved</code>. Với <code>spec.autoReady</code> là low hoặc all, dispatch và cổng merge xét các sub-issue đủ điều kiện. Các phụ thuộc phải đóng. Câu hỏi mở, nhãn trạng thái, nhãn triage hoặc dòng Ready: manual giữ việc xét ready ở chế độ thủ công. Mặc định là off.',
+      en: 'Set the ready label by hand or use <code>/devflow:approve</code> on the epic. The <code>labels.epicApproved</code> label defaults to <code>epic:approved</code>. With <code>spec.autoReady</code> set to low or all, dispatch and the merge gate check for eligible sub-issues. Dependencies must be closed. Open questions, state labels, the triage label or a Ready: manual line keep readiness manual. The default is off.',
+    },
+    'branch-resume': {
+      vi: 'Engine tính tên từ <code>branchPattern</code>. <code>bin/devflow-run branch</code> ưu tiên branch của PR cần tiếp tục hoặc tên đã tính. Nếu không có, nó tiếp tục branch local hoặc remote duy nhất có tiền tố <code>&lt;type&gt;/&lt;issue&gt;-</code> và commit thuộc issue đó. PR ghi branch thay thế trong Assumptions. Nhiều branch phù hợp thì dừng và liệt kê chúng. Integrate xử lý xung đột với base và chỉ chặn khi issue không mô tả hành vi liên quan.',
+      en: 'The engine computes the name from <code>branchPattern</code>. <code>bin/devflow-run branch</code> prefers the PR branch selected for resume or the computed name. If neither exists, it resumes a unique local or remote branch with prefix <code>&lt;type&gt;/&lt;issue&gt;-</code> and an issue-scoped commit. The PR records the alternate branch in Assumptions. Multiple matches block with a list. Integrate resolves base conflicts and blocks when the issue does not cover the conflicting behaviour.',
+    },
+    'run-helpers': {
+      vi: '<code>bin/devflow-run check</code> chạy checks theo thứ tự, với timeout riêng cho mỗi lệnh. <code>bin/devflow-run restore</code> quay lại branch ban đầu khi checkout sạch. Preflight dùng <code>bin/devflow-gh</code> để tìm gh trong PATH.',
+      en: '<code>bin/devflow-run check</code> runs checks in order, with a timeout per command. <code>bin/devflow-run restore</code> returns to the starting branch when the checkout is clean. Preflight uses <code>bin/devflow-gh</code> to find gh on PATH.',
+    },
+    'review-settings': {
+      vi: '<code>nextTask.reviewModel</code> mặc định dùng Sonnet cho risk thấp và Opus cho risk cao hoặc chưa rõ. <code>nextTask.maxAgentCalls</code> giới hạn số lần gọi agent cho mỗi issue. 0 là không giới hạn.',
+      en: '<code>nextTask.reviewModel</code> defaults to Sonnet for low risk and Opus for high or unknown risk. <code>nextTask.maxAgentCalls</code> caps agent calls per issue. 0 means unlimited.',
+    },
+    'run-decisions': {
+      vi: '<code>nextTask.onQuestion</code> mặc định là decide. Lượt chạy dùng đáp án đề xuất nếu mọi câu hỏi trong nhóm đều an toàn và có thể đảo ngược. Nó ghi vào Decisions của issue và Decisions taken của PR, rồi gắn <code>decisions:review</code>. Cảnh báo an toàn còn lại sau vòng review cuối cũng có thể đi tiếp với nhãn này. Lỗi critical chặn lượt chạy. Chế độ block chuyển câu hỏi cho bạn.',
+      en: '<code>nextTask.onQuestion</code> defaults to decide. The run uses the recommended answers if all questions in the batch are safe and reversible. It records them in the issue’s Decisions and the PR’s Decisions taken, then adds <code>decisions:review</code>. A safe warning left after the final review round can also ship with this label. Critical findings block. Block mode sends questions to you.',
+    },
+    'recommended-answers': {
+      vi: 'Khi bị chặn, mọi câu hỏi và đề xuất nằm trong một comment. <code>/devflow:answer #&lt;n&gt; accept</code> dùng các đề xuất. Hãy nhập đáp án cho câu làm thay đổi tiêu chí hoặc thiếu đề xuất.',
+      en: 'When blocked, the run puts all questions and recommendations in one comment. <code>/devflow:answer #&lt;n&gt; accept</code> uses the recommendations. Type an answer for any question that changes a criterion or has no recommendation.',
+    },
+    'gate-cleanup': {
+      vi: 'Cổng giữ PR risk thấp có nhãn <code>decisions:review</code> để người merge, trừ khi <code>nextTask.trustDecisions</code> là true. Khi bật trust, cổng vẫn áp dụng các bước kiểm tra thường lệ. Cổng xoá <code>labels.inProgress</code>, <code>labels.review</code> và <code>labels.blocked</code> trên các issue liên kết với PR nó merge. Mỗi lần chạy khi bật, cổng cũng quét issue đã đóng và mới cập nhật để dọn các nhãn đó. Dry run chỉ báo những nhãn sẽ xoá.',
+      en: 'The gate holds low-risk PRs with <code>decisions:review</code> for a human unless <code>nextTask.trustDecisions</code> is true. With trust enabled, the usual checks still apply. The gate clears <code>labels.inProgress</code>, <code>labels.review</code> and <code>labels.blocked</code> from issues linked to its merges. Each enabled run also sweeps recently updated closed issues for those labels. A dry run reports the removals.',
+    },
+    'dispatch-plan': {
+      vi: '<code>/devflow:dispatch --plan</code> xem trước các issue đủ điều kiện auto-ready, thứ tự trong lane, hotspot dùng hoặc bỏ qua, và issue phải chờ hoặc hoãn. Lệnh không thêm nhãn, comment hay mở session.',
+      en: '<code>/devflow:dispatch --plan</code> previews eligible auto-ready issues, lane order, shared and ignored hotspots, and waiting or deferred issues. It adds no labels or comments and starts no sessions.',
+    },
+    'accept-evidence': {
+      vi: 'Nếu thiếu <code>verify.devServer</code> hoặc <code>verify.modes</code> rỗng, <code>/devflow:accept</code> dùng bằng chứng từ các PR đã merge. Nó đọc checks, các dòng ma trận test và các kiểm tra thủ công ghi pass trong PR. Tiêu chí cần app đang chạy hoặc thiếu bằng chứng là not checkable. Kết quả vẫn được đăng.',
+      en: 'If <code>verify.devServer</code> is missing or <code>verify.modes</code> is empty, <code>/devflow:accept</code> uses evidence from merged PRs. It reads checks, test-matrix rows and manual checks recorded as passing in the PR. Criteria that need a running app or lack evidence are not checkable. The result is still posted.',
+    },
+    'report-trace': {
+      vi: '<code>/devflow:report</code> hiện kết quả review local khi thiếu status <code>devflow/review</code>. Plan và Verify hiện skipped (short path) trên đường ngắn. Bước thiếu dữ liệu trên đường đầy đủ hiện màu xám. Báo cáo ghi gate khi có comment <code>devflow-gate-merged</code> hoặc trailer của cổng, và ghi human cho PR có dấu devflow-run mà thiếu bằng chứng từ cổng.',
+      en: '<code>/devflow:report</code> shows local review when there is no <code>devflow/review</code> status. Plan and Verify show skipped (short path) on the short path. Missing steps on the full path appear grey. It reports gate for a <code>devflow-gate-merged</code> comment or the gate trailer, and human for a PR with a devflow-run marker and no gate evidence.',
+    },
+    'changelog-fragments': {
+      vi: 'Repo này đặt <code>changelog.fragmentsDir</code> thành <code>changelog.d/</code>. Mỗi issue có một fragment. <code>bin/devflow-changelog</code> kiểm tra fragment với has, in mục release với preview và ghi mục đó rồi xoá fragment với assemble. Lệnh release hiển thị preview trong ghi chú.',
+      en: 'This repository uses <code>changelog.d/</code> for <code>changelog.fragmentsDir</code>. Each issue has one fragment. <code>bin/devflow-changelog</code> checks a fragment with has, prints the release section with preview, and writes it and deletes the fragments with assemble. The release command shows the preview in its notes.',
+    },
+    'doctor-checks': {
+      vi: '<code>/devflow:doctor</code> kiểm tra tag của phiên bản khai báo với <code>release.tagPrefix</code>. Nó báo follow-up <code>needs-triage</code> có thể đã được sửa. Nó cũng liệt kê issue đã đóng còn <code>labels.inProgress</code>, <code>labels.review</code> hoặc <code>labels.blocked</code>, và comment <code>devflow-claim</code> trên issue mở không còn nhãn in-progress và không có PR mở. --fix chỉ dọn nhãn và claim sau khi bạn đồng ý và doctor kiểm tra lại.',
+      en: '<code>/devflow:doctor</code> checks the tag for the declared version using <code>release.tagPrefix</code>. It flags <code>needs-triage</code> follow-ups that may already be fixed. It lists closed issues still carrying <code>labels.inProgress</code>, <code>labels.review</code> or <code>labels.blocked</code>, and <code>devflow-claim</code> comments on open issues with no in-progress label and no open PR. With --fix it cleans up state labels and claims after confirmation and a recheck.',
+    },
+    'doctor-waiting': {
+      vi: 'Mục Waiting on you ở cuối chỉ đọc. Mỗi issue hoặc PR xuất hiện một lần với việc tiếp theo, như trả lời, merge, sync, chạy issue ready, xét sub-issue chưa ready hoặc accept epic.',
+      en: 'The final Waiting on you section is read-only. Each issue or PR appears once with a next action, such as answering, merging, syncing, running a ready issue, checking a sub-issue without ready, or accepting an epic.',
+    },
     lead: {
-      vi: 'Từ <b>ý tưởng</b> đến <b>PR đã merge</b> và <b>release</b>, qua chín lệnh: <b>/devflow:spec</b>, <b>/devflow:next-task</b>, <b>/devflow:dispatch</b>, <b>/devflow:sync</b>, <b>/devflow:answer</b>, <b>/devflow:accept</b>, <b>/devflow:release</b>, <b>/devflow:report</b>, <b>/devflow:doctor</b>, cùng <b>/devflow:init</b> (và <b>init --upgrade</b>) để cài đặt. Mỗi task có mức risk; Claude không bao giờ merge. Bạn quyết định ở những ô màu cam.',
-      en: 'From an <b>idea</b> to a <b>merged PR</b> and a <b>release</b>, through nine commands: <b>/devflow:spec</b>, <b>/devflow:next-task</b>, <b>/devflow:dispatch</b>, <b>/devflow:sync</b>, <b>/devflow:answer</b>, <b>/devflow:accept</b>, <b>/devflow:release</b>, <b>/devflow:report</b>, <b>/devflow:doctor</b>, plus <b>/devflow:init</b> (and <b>init --upgrade</b>) for setup. Every task carries a risk level; Claude never merges. You decide at the orange boxes.',
+      vi: 'Từ <b>ý tưởng</b> đến <b>PR đã merge</b> và <b>release</b>, qua mười lệnh: <b>/devflow:spec</b>, <b>/devflow:approve</b>, <b>/devflow:next-task</b>, <b>/devflow:dispatch</b>, <b>/devflow:sync</b>, <b>/devflow:answer</b>, <b>/devflow:accept</b>, <b>/devflow:release</b>, <b>/devflow:report</b>, <b>/devflow:doctor</b>, cùng <b>/devflow:init</b> (và <b>init --upgrade</b>) để cài đặt. Mỗi task có mức risk; Claude không bao giờ merge. Bạn quyết định ở những ô màu cam.',
+      en: 'From an <b>idea</b> to a <b>merged PR</b> and a <b>release</b>, through ten commands: <b>/devflow:spec</b>, <b>/devflow:approve</b>, <b>/devflow:next-task</b>, <b>/devflow:dispatch</b>, <b>/devflow:sync</b>, <b>/devflow:answer</b>, <b>/devflow:accept</b>, <b>/devflow:release</b>, <b>/devflow:report</b>, <b>/devflow:doctor</b>, plus <b>/devflow:init</b> (and <b>init --upgrade</b>) for setup. Every task carries a risk level; Claude never merges. You decide at the orange boxes.',
     },
   };
   // Source rule of next-task (VI and EN). Set with textContent, so the angle brackets stay literal.
@@ -896,6 +966,10 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     en: 'Spec source, in order: the spec path in the issue body (or from Claim), else the epic from the first Epic: #<n> line, else the issue alone. Criteria, Test cases and ## Decisions come from the issue and win over the epic. An epic that cannot be read blocks the issue with epic #<n> could not be read.',
   };
   const EN = {
+    '11 · tag release': '11 · release tag',
+    '12 · follow-up có thể đã sửa': '12 · possibly fixed follow-ups',
+    '13 · nhãn trạng thái trên issue đã đóng': '13 · state labels on closed issues',
+    '14 · claim cũ trên issue mở': '14 · stale claims on open issues',
     'Bạn quyết định': 'You decide',
     'Claude Haiku · việc cơ học': 'Claude Haiku · mechanical steps',
     'Claude Sonnet · viết code': 'Claude Sonnet · writes code',
@@ -994,12 +1068,12 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     'merge = duyệt cả mức risk': 'merging = approving the risk levels',
     'label ready + risk, theo thứ tự phụ thuộc': 'ready + risk labels, in dependency order',
     'Bấm ▶ để xem từng bước': 'Press ▶ to step through',
-    'Mỗi bước có một đầu ra cụ thể. Bước cuối là của bạn: sub-issue chỉ sẵn sàng khi bạn đặt agent:ready (chế độ --file: sau khi bạn merge spec ở Gate 1).': 'Every step has a concrete output. The last step is yours: a sub-issue is ready only when you set agent:ready (--file mode: after you merge the spec at Gate 1).',
+    'Sub-issue của epic bắt đầu không có nhãn ready. Với --file, bạn merge spec ở Gate 1.': 'Epic sub-issues start without the ready label. With --file, you merge the spec at Gate 1.',
     'Chưa có issue. Chúng xuất hiện ở bước Tạo (epic) hoặc bước Issues (--file, sau Gate 1).': 'No issues yet. They appear at the Create step (epic mode) or the Issues step (--file mode, after Gate 1).',
     'ready, parent đã có PR, ≤ limit': 'ready, parents have PRs, ≤ limit',
     'khoá bằng claim comment, sớm nhất thắng': 'lock via claim comments, earliest wins',
     'chồng lên branch của PR cha': 'stacked on the parent PR branch',
-    'chỉ khi có nhiều parent: gộp parent': 'only with several parents: merges them',
+    'gộp nhiều parent hoặc xử lý xung đột khi tiếp tục branch': 'merge multiple parents or resolve resume conflicts',
     'đọc spec hoặc epic, comment devflow-plan, không ai duyệt': 'reads the spec or epic, devflow-plan comment, nobody approves',
     'QA ∥ Dev song song, hoặc 1 agent': 'QA ∥ Dev in parallel, or 1 agent',
     'test trước, xác nhận đỏ, rồi code': 'tests first, confirm red, then code',
@@ -1029,7 +1103,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     'Issue #38 trên GitHub': 'Issue #38 on GitHub',
     'Chạy ngoài Claude · Action với token riêng': 'Runs outside Claude · an Action with its own token',
     'Merge: risk:low tự merge khi check xanh, risk:high chờ bạn': 'Merge: risk:low merges itself when checks are green, risk:high waits for you',
-    'Claude không bao giờ merge. Action devflow-merge-gate duyệt các PR gắn devflow, cũ nhất trước, và merge tối đa một PR mỗi lần chạy. Mặc định tắt, chạy thử (dryRun) trước.': 'Claude never merges. The devflow-merge-gate Action walks the PRs labelled devflow, oldest first, and merges at most one PR per run. It is off by default and starts as a dry run.',
+    'Claude không bao giờ merge. Action devflow-merge-gate duyệt các PR gắn devflow, theo độ ưu tiên, và merge tối đa một PR mỗi lần chạy. Mặc định tắt, chạy thử (dryRun) trước.': 'Claude never merges. The devflow-merge-gate Action walks the PRs labelled devflow, in priority order, and merges at most one PR per run. It is off by default and starts as a dry run.',
     'Luật theo thứ tự, lỗi đầu tiên quyết định': 'Rules in order, the first failure decides',
     'không phải draft, không blocked': 'not a draft, not blocked',
     'có risk:low': 'has risk:low',
@@ -1067,7 +1141,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     'sau merge: kiểm tiêu chí, gap thành issue': 'after merge: checks the criteria, gaps become issues',
     'semver, notes cho khách, release draft': 'semver, client notes, draft release',
     'trang trace của một spec, chỉ đọc': 'a trace page of one spec, read-only',
-    '9 kiểm tra sức khoẻ, --fix từng mục': '9 health checks, --fix item by item',
+    '14 kiểm tra sức khoẻ, --fix từng mục': '14 health checks, --fix item by item',
     '9 · thứ plugin đã lo': '9 · owned by the plugin',
     'merge PR risk:low khi check xanh, đánh dấu Merged-by, chạy ngoài Claude': 'merges risk:low PRs when checks are green, marks them Merged-by, runs outside Claude',
     'notes + tag, bạn là người publish': 'notes + tag, you are the one who publishes',
@@ -1081,9 +1155,9 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     '3 · rmdir, luôn nhả (lock cũ hơn 30 phút là stale)': '3 · rmdir, always released (a lock older than 30 minutes is stale)',
     'GitHub MCP không dùng được và máy không có gh: cả lượt dừng ngay, các issue còn lại bị bỏ qua, không comment, không đổi label (issue giữ agent:in-progress và claim). Dọn bằng /devflow:doctor --fix khi GitHub trở lại.': 'GitHub MCP unavailable and gh not installed: the whole run stops at once, the remaining issues are skipped, no comment and no label change (the issue keeps agent:in-progress and its claim). Clean up with /devflow:doctor --fix once GitHub is back.',
     'Skill next-task · sau khi workflow xong': 'Skill next-task · after the workflow finishes',
-    'bảng kết quả, cột Notes nguyên văn từ engine': 'result table, Notes column verbatim from the engine',
+    'bảng kết quả có cột Notes và Next từ engine': 'result table with Notes and Next from the engine',
     'một push notification duy nhất (notify.*)': 'one single push notification (notify.*)',
-    'Claude không bao giờ merge. Action devflow-merge-gate duyệt các PR gắn devflow, cũ nhất trước, và merge tối đa một PR mỗi lần chạy. Mọi PR do cổng merge đều được đánh dấu để release và report phân biệt với người. Mặc định tắt, chạy thử (dryRun) trước.': 'Claude never merges. The devflow-merge-gate Action walks the PRs labelled devflow, oldest first, and merges at most one PR per run. Every PR the gate merges is marked, so release and report can tell it from a human merge. It is off by default and starts as a dry run.',
+    'Claude không bao giờ merge. Action devflow-merge-gate duyệt các PR gắn devflow, theo độ ưu tiên, và merge tối đa một PR mỗi lần chạy. Mọi PR do cổng merge đều được đánh dấu để release và report phân biệt với người. Mặc định tắt, chạy thử (dryRun) trước.': 'Claude never merges. The devflow-merge-gate Action walks the PRs labelled devflow, in priority order, and merges at most one PR per run. Every PR the gate merges is marked, so release and report can tell it from a human merge. It is off by default and starts as a dry run.',
     'Sau khi merge, theo thứ tự': 'After a merge, in order',
     '1 · merge commit kết thúc bằng Merged-by: devflow merge gate': '1 · the merge commit ends with Merged-by: devflow merge gate',
     '2 · comment <!-- devflow-gate-merged --> ngay sau merge': '2 · comment <!-- devflow-gate-merged --> right after the merge',
@@ -1142,7 +1216,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     'Bảo trì · setup còn khoẻ không': 'Maintenance · is the setup still healthy',
     'Doctor và upgrade: kiểm tra, sửa từng mục, nâng cấp template': 'Doctor and upgrade: check, fix item by item, refresh the templates',
     '▶ Thiếu config': '▶ Missing config',
-    '9 kiểm tra, chạy hết kể cả khi một cái fail': '9 checks, all run even when one fails',
+    '14 kiểm tra, chạy các mục áp dụng': '14 checks, run all that apply',
     'chỉ đọc; --fix chỉ sửa mục bạn đồng ý': 'read-only; --fix changes only what you agree to',
     '1 · config + devflowVersion': '1 · config + devflowVersion',
     '2 · template có lệch không': '2 · do the templates drift',
@@ -1261,7 +1335,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
         { n: 31, t: 'T1: PATCH /projects/<id>', l: ['risk:low', 'type:feat'], x: 'Test cases: 4 rows · Hotspots: services.py' },
         { n: 32, t: 'T2: DELETE /projects/<id>', l: ['risk:high', 'type:feat', 'needs-e2e'], dep: 'Depends on #31', x: 'Test cases: 6 rows · Hotspots: services.py, repository.py' },
       ] },
-    { id: 'epic-ready', c: '--human', m: 'you', l: t('Bạn đặt ready', 'Human sets ready'), s: t('bạn đặt agent:ready cho từng sub-issue', 'you set agent:ready on each sub-issue'),
+    { id: 'epic-ready', c: '--human', m: 'you', l: t('Bạn đặt ready', 'Human sets ready'), s: t('ví dụ: đặt agent:ready thủ công', 'example: set agent:ready by hand'),
       d: t('Bạn đọc từng sub-issue rồi tự đặt agent:ready; đó là cách bạn duyệt task và mức risk. Epic không bao giờ có agent:ready.', 'You read each sub-issue and set agent:ready yourself; that is how you approve the task and its risk level. The epic never gets agent:ready.'),
       chat: [['a', t('Bạn', 'You'), t('Đặt agent:ready cho #31 và #32 ✓', 'agent:ready set on #31 and #32 ✓')]],
       cards: [
@@ -1341,7 +1415,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     specR.stop();
     specRender(SPEC_EPIC());
     sTitle.textContent = t('Bấm ▶ để xem từng bước', 'Press ▶ to step through');
-    sDesc.textContent = t('Mỗi bước có một đầu ra cụ thể. Bước cuối là của bạn: sub-issue chỉ sẵn sàng khi bạn đặt agent:ready (chế độ --file: sau khi bạn merge spec ở Gate 1).', 'Every step has a concrete output. The last step is yours: a sub-issue is ready only when you set agent:ready (--file mode: after you merge the spec at Gate 1).');
+    sDesc.textContent = t('Sub-issue của epic bắt đầu không có nhãn ready. Với --file, bạn merge spec ở Gate 1.', 'Epic sub-issues start without the ready label. With --file, you merge the spec at Gate 1.');
     sDot.style.setProperty('--c', 'var(--sonnet)');
     sChat.innerHTML = '';
     sIssues.innerHTML = emptyIssues();
@@ -1530,7 +1604,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
         commit: t('#31 commit test(#31) trước → stash code, test fail đúng lý do ✓ → commit feat(#31): allow renaming a project', '#31 commits test(#31) first → stashes the code, tests fail for the right reason ✓ → commits feat(#31): allow renaming a project'),
         checkFail: ['#31 make test: 1 failed (test_t1_3_duplicate_name: expected 409, got 500)', t('#31 fix(#31): map duplicate-name IntegrityError to 409 (không sửa file QA)', '#31 fix(#31): map duplicate-name IntegrityError to 409 (QA files untouched)')],
         check: '#31 make test ✓ · ruff ✓',
-        review: t('#31 review (opus): pass · 1 suggestion ghi vào PR', '#31 review (opus): pass · 1 suggestion noted in the PR'),
+        review: t('#31 review (sonnet): pass · 1 suggestion ghi vào PR', '#31 review (sonnet): pass · 1 suggestion noted in the PR'),
         risk: t('#31 Risk: low (theo issue) · không file nào khớp risk.highPaths', '#31 Risk: low (from the issue) · no changed file matches risk.highPaths'),
         ship: t('#31 push + PR #40 "feat(#31): allow editing a project" · base = main · labels devflow, risk:low · Closes #31', '#31 push + PR #40 "feat(#31): allow editing a project" · base = main · labels devflow, risk:low · Closes #31'),
         res: t('<b>PR #40</b> ← #31 · risk:low', '<b>PR #40</b> ← #31 · risk:low'),
@@ -1606,7 +1680,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
         impl: '#36 QA ∥ Dev',
         commit: '#36 test(#36) first → fail without the code ✓ → feat(#36): project summary endpoint',
         check: '#36 make test ✓ · ruff ✓',
-        review: '#36 review (opus): pass',
+        review: '#36 review (sonnet): pass',
         risk: t('#36 Risk: issue ghi low, nhưng app/db.py khớp risk.highPaths → nâng lên high, issue cũng được gắn risk:high', '#36 Risk: the issue says low, but app/db.py matches risk.highPaths → escalated to high, the issue is relabelled risk:high too'),
         ship: t('#36 PR #43 base = main, dòng "Stacked on #40 and #41", labels devflow, risk:high, stacked. Cổng không merge khi còn Depends on mở', '#36 PR #43 base = main, line "Stacked on #40 and #41", labels devflow, risk:high, stacked. The gate will not merge while a Depends on is open'),
         res: t('<b>PR #43</b> ← #36 · risk:high (nâng bởi highPaths) · stacked trên #40, #41', '<b>PR #43</b> ← #36 · risk:high (escalated by highPaths) · stacked on #40, #41'),
@@ -1617,13 +1691,13 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       await runIssue(sleep, {
         n: 37, level: 'risk:low', extra: [], rest: ['risk:low'],
         claim: t('#37 claim ✓ · issue vừa được /devflow:answer mở khoá, agent:ready lại', '#37 claim ✓ · the issue was just unblocked by /devflow:answer and is agent:ready again'),
-        branch: t('#37 feat/37-tasks-due-today đã có 2 commit của issue này (lần chạy trước bị chặn bởi câu hỏi): git switch vào branch cũ rồi merge github/feature/example_taskboard → resumed, không bắt đầu lại. Nếu merge conflict: merge --abort, block kèm danh sách file', '#37 feat/37-tasks-due-today already has 2 commits of this issue (the earlier run was blocked on a question): git switch to the old branch, then merge github/feature/example_taskboard → resumed, not started over. On a merge conflict: merge --abort and block with the file list'),
+        branch: t('#37 feat/37-tasks-due-today đã có 2 commit của issue này (lần chạy trước bị chặn bởi câu hỏi): git switch vào branch cũ rồi merge github/feature/example_taskboard → resumed, không bắt đầu lại. Nếu merge conflict: huỷ merge và chuyển danh sách file sang Integrate', '#37 feat/37-tasks-due-today already has 2 commits of this issue (the earlier run was blocked on a question): git switch to the old branch, then merge github/feature/example_taskboard → resumed, not started over. On a merge conflict, abort the merge and pass the file list to Integrate'),
         plan: t('#37 plan mới, đọc mục ## Decisions của issue (ghi đè spec) và 2 commit đã có', '#37 a fresh plan that reads the issue ## Decisions (overrides the spec) and the 2 existing commits'),
         par: false,
         parNote: t('Branch được tiếp tục: một agent Implement đi tiếp từ các commit cũ, không chạy QA song song (test của QA có thể đã nằm trong branch).', 'Resumed branch: a single Implement agent continues from the earlier commits; no parallel QA (the QA tests may already be on the branch).'),
         impl: t('#37 một agent Implement giữ phần còn khớp spec + Decisions, thêm test fail trước cho hành vi mới, rồi code', '#37 a single Implement agent keeps what still matches the spec + Decisions, adds a failing test first for new behaviour, then the code'),
         check: '#37 make test ✓ · ruff ✓',
-        review: '#37 review (opus): pass',
+        review: '#37 review (sonnet): pass',
         risk: t('#37 Risk: low · không file nào khớp highPaths', '#37 Risk: low · no file matches highPaths'),
         ship: '#37 push + PR #45 "feat(#37): list tasks due today" · labels devflow, risk:low · Closes #37',
         res: '<b>PR #45</b> ← #37 · risk:low',
@@ -1631,7 +1705,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       });
       $$('.q-item', queue).forEach((q) => q.classList.remove('current'));
       log('skill', t('Xong: 5 PR (3 risk:low cho merge gate, 2 risk:high chờ bạn) · 1 blocked cần /devflow:answer · 1 bỏ qua', 'Done: 5 PRs (3 risk:low for the merge gate, 2 risk:high wait for you) · 1 blocked needs /devflow:answer · 1 skipped'));
-      log('skill', t('In bảng kết quả: mỗi dòng có cột Notes lấy nguyên văn từ engine, skill không thêm lời kể riêng', 'Prints the result table: every row has a Notes column taken verbatim from the engine, the skill adds no story of its own'));
+      log('skill', t('In bảng kết quả với cột Notes và Next từ engine. #34 cần /devflow:answer #34.', 'Prints the result table with Notes and Next from the engine. #34 needs /devflow:answer #34.'));
       $$('#pf2 .pf')[0].classList.add('ok');
       await sleep(900);
       log('notify', t('notify.push = true và có tool PushNotification → đúng một push (≤ 200 ký tự), gộp các trường hợp: "devflow ai-tools-training: #34 blocked at Plan; PR #41, #43 are risk:high and wait for your merge"', 'notify.push = true and the PushNotification tool exists → exactly one push (≤ 200 characters), combining the cases: "devflow ai-tools-training: #34 blocked at Plan; PR #41, #43 are risk:high and wait for your merge"'));
@@ -1660,7 +1734,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       await go(sleep, 'commit', '#31 test(#31) → feat(#31) ✓', 600);
       await go(sleep, 'check', '#31 make test ✓ · ruff ✓', 600);
       await skipSt(sleep, 'verify', t('#31 bỏ qua Verify', '#31 skips Verify'), 250);
-      await go(sleep, 'review', '#31 review (opus): pass', 600);
+      await go(sleep, 'review', '#31 review (sonnet): pass', 600);
       await go(sleep, 'risk', '#31 Risk: low', 500);
       await fail(sleep, 'ship', t('#31 Ship: mọi cuộc gọi GitHub MCP đều lỗi, gh chưa cài → agent không tìm đường khác, trả về "GitHub MCP unavailable"', '#31 Ship: every GitHub MCP call fails and gh is not installed → the agent looks for no other way and reports "GitHub MCP unavailable"'));
       log('stop', t('#31 dừng ở Ship: không có comment dọn dẹp, không đổi label vì GitHub không với tới được. Issue giữ agent:in-progress và claim', '#31 stopped at Ship: no cleanup comment and no label change, because GitHub cannot be reached. The issue keeps agent:in-progress and its claim'));
@@ -1785,7 +1859,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
   function mgPlay() {
     mgReset();
     mgR.start(async (sleep) => {
-      mgLog('run 1', t('workflow_run: "Claude Code Review" vừa xong → cổng thức dậy, đọc devflow.json ở base, duyệt PR cũ nhất trước', 'workflow_run: "Claude Code Review" finished → the gate wakes, reads devflow.json at base, walks PRs oldest first'), '--haiku');
+      mgLog('run 1', t('workflow_run: "Claude Code Review" vừa xong → cổng thức dậy, đọc devflow.json ở base, duyệt PR theo độ ưu tiên', 'workflow_run: "Claude Code Review" finished → the gate wakes, reads devflow.json at base, walks PRs in priority order'), '--haiku');
       mgLog('review', t('review.github (mặc định false): workflow review chỉ chạy khi cờ là true ở devflow.json trên baseBranch; tắt thì không gọi Claude, không tạo status devflow/review, và review local (devflow:reviewer) là review duy nhất', 'review.github (default false): the review workflow runs only when the flag is true in devflow.json on baseBranch; when off it makes no Claude call and no devflow/review status, and the local review (devflow:reviewer) is the only review'), '--haiku');
       mgLog('checks', t('danh sách check hiệu lực = requiredChecks bỏ devflow/review khi review.github tắt; nếu rỗng, cổng không đổi gì và báo mọi PR là skipped: "no required checks (devflow/review is ignored while review.github is off); refusing to merge"', 'effective checks = requiredChecks without devflow/review while review.github is off; when that list is empty the gate changes nothing and reports every PR as skipped: "no required checks (devflow/review is ignored while review.github is off); refusing to merge"'), '--haiku');
       await sleep(900);
@@ -2182,13 +2256,13 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
   const drChecks = $$('#dr-checks .pf'), drReport = $('#dr-report'), drChat = $('#dr-chat'), drLog = $('#dr-log');
   const drNodes = $$('#dr-up .node');
   const drArrows = drNodes.map((n) => (n.nextElementSibling ? $('.arrow', n.nextElementSibling) : null));
-  const DR_NAMES = ['Config', 'Templates', 'GitHub access', 'Worktrees', 'Branches', 'Claims', 'Open PRs', 'Allow-list', 'Owned by the plugin'];
+  const DR_NAMES = ['Config', 'Templates', 'GitHub access', 'Worktrees', 'Branches', 'Claims', 'Open PRs', 'Allow-list', 'Owned by the plugin', 'Guard', 'Release tag', 'Follow-ups', 'Closed issues', 'Stale claims'];
   function drReset() {
     drR.stop();
     drChecks.forEach((c) => c.classList.remove('ok', 'warn', 'no', 'skip', 'cur'));
     drReport.innerHTML = ''; drChat.innerHTML = '';
     drNodes.forEach((n) => n.classList.remove('active', 'done'));
-    drLog.innerHTML = `<div>${t('Bấm ▶: doctor chạy 9 kiểm tra, rồi --fix từng mục, rồi init --upgrade. Hoặc ▶ Thiếu config để xem nhánh không có devflow.json.', 'Press ▶: doctor runs 9 checks, then --fix item by item, then init --upgrade. Or ▶ Missing config for the branch without devflow.json.')}</div>`;
+    drLog.innerHTML = `<div>${t('Bấm ▶: doctor chạy các kiểm tra, rồi --fix từng mục, rồi init --upgrade. Hoặc ▶ Thiếu config để xem nhánh không có devflow.json.', 'Press ▶: doctor runs its checks, then --fix item by item, then init --upgrade. Or ▶ Missing config for the branch without devflow.json.')}</div>`;
   }
   async function drCheck(sleep, i, status, msg) {
     drChecks[i].classList.add('cur'); await sleep(520);
@@ -2206,7 +2280,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
     drR.start(async (sleep) => {
       const L = (k, m, c) => logTo(drLog, k, m, c);
       drLog.innerHTML = '';
-      L('doctor', t('Đọc .claude/devflow.json, plugin là 3.0.0. Chạy cả 9 kiểm tra dù một cái fail', 'Reads .claude/devflow.json, the plugin is 3.0.0. All 9 checks run even if one fails'), '--haiku');
+      L('doctor', t('Đọc .claude/devflow.json, plugin là 3.0.0. Chạy các mục kiểm tra áp dụng', 'Reads .claude/devflow.json, the plugin is 3.0.0. Runs all applicable checks'), '--haiku');
       await drCheck(sleep, 0, 'warn', t('devflowVersion 2.4.0 thấp hơn plugin 3.0.0 (khác minor) → /devflow:init --upgrade. Chỉ khác patch thì vẫn ok: bản patch không đổi template, schema hay key config', 'devflowVersion 2.4.0 is lower than plugin 3.0.0 (a minor difference) → /devflow:init --upgrade. A patch-only difference stays ok: patch releases never change templates, the schema or config keys'));
       await drCheck(sleep, 1, 'warn', t('lệch 2 file: .github/scripts/devflow-merge-gate.cjs, .claude/devflow.schema.json. Chỉ báo cáo; cách sửa là /devflow:init --upgrade', '2 files drift: .github/scripts/devflow-merge-gate.cjs, .claude/devflow.schema.json. Report only; the fix is /devflow:init --upgrade'));
       await drCheck(sleep, 2, 'ok', t('MCP kết nối (lấy được user đăng nhập), gh đã cài. Thiếu gh chỉ là warn', 'MCP reachable (the authenticated user was found), gh installed. A missing gh is only a warn'));
@@ -2216,18 +2290,22 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       await drCheck(sleep, 6, 'warn', t('PR #47 conflict, PR #42 behind base → /devflow:sync #47 #42. Doctor không sửa các PR này', 'PR #47 conflicts and PR #42 is behind its base → /devflow:sync #47 #42. Doctor never fixes these'));
       await drCheck(sleep, 7, 'warn', t('.claude/settings.json thiếu rule Bash(make test:*) và các lệnh git worktree → phiên nền sẽ kẹt ở permission prompt', '.claude/settings.json lacks Bash(make test:*) and the git worktree rules → background sessions would stall on permission prompts'));
       await drCheck(sleep, 8, 'warn', t('.claude/hooks/block_git_add_all.py, check hook-test và deny rule Bash(git push --force:*) nay plugin đã lo → có thể xoá (doctor không xoá)', '.claude/hooks/block_git_add_all.py, the hook-test check and the deny rule Bash(git push --force:*) are now covered by the plugin → removable (doctor never deletes them)'));
-      L('report', t('fail = thứ làm các workflow dừng (config sai, MCP không với tới); warn = lệch hoặc đồ thừa. Cả chín đã xong, 8 warn', 'fail = something that stops the workflows (invalid config, MCP unreachable); warn = drift or leftovers. All nine done, 8 warn'), '--fg');
+      await drCheck(sleep, 9, 'ok', t('Guard chặn lệnh merge thử.', 'The guard blocks the test merge call.'));
+      await drCheck(sleep, 10, 'ok', t('Tag v3.0.0 tồn tại.', 'The v3.0.0 tag exists.'));
+      await drCheck(sleep, 11, 'ok', t('Không thấy follow-up nào có thể đã được sửa.', 'No follow-up appears to have been fixed.'));
+      await drCheck(sleep, 12, 'ok', t('Không có issue đã đóng còn nhãn trạng thái.', 'No closed issues still carry state labels.'));
+      await drCheck(sleep, 13, 'ok', t('Không có claim cũ trên issue mở thiếu nhãn in-progress và không có PR mở.', 'No stale claims on open issues without an in-progress label or an open PR.'));
+      L('Waiting on you', t('#34: trả lời câu hỏi với /devflow:answer #34.', '#34: answer the open questions with /devflow:answer #34.'), '--fg');
       await sleep(1000);
 
       L('--fix', t('Chỉ sửa cái bạn đồng ý, từng mục một (AskUserQuestion). Không bao giờ merge, force push, push vào branch bảo vệ hay xoá base', 'Changes only what you confirm, one item at a time (AskUserQuestion). Never merges, force pushes, pushes to a protected branch or deletes the base'), '--human');
       await drAsk(sleep, t('Fix 4: gỡ worktree lane-31-32-33 (sạch, branch đã push)? git worktree remove, không --force. Worktree còn thay đổi không bao giờ bị đụng', 'Fix 4: remove worktree lane-31-32-33 (clean, branch pushed)? git worktree remove, no --force. A dirty worktree is never touched'), t('Có', 'Yes'), t('Đã gỡ.', 'Removed.'));
-      await drAsk(sleep, t('Fix 5: xoá branch local feat/31-patch-project (git branch -d)?', 'Fix 5: delete the local branch feat/31-patch-project (git branch -d)?'), t('Có', 'Yes'), t('Đã xoá.', 'Deleted.'));
-      await drAsk(sleep, t('Fix 5: xoá branch remote github/feat/31-patch-project? Remote chỉ sau yes rõ ràng cho từng branch; không bao giờ base hay protectedBranches', 'Fix 5: delete the remote branch github/feat/31-patch-project? Remote only after an explicit yes per branch; never the base or protectedBranches'), t('Không', 'No'), t('Giữ nguyên, ghi nhận là từ chối.', 'Left as it is, recorded as declined.'));
+      await drAsk(sleep, t('Fix 5: dọn toàn bộ danh sách branch của PR đã merge?', 'Fix 5: clean up the entire merged-branch list?'), t('Có', 'Yes'), t('Đã kiểm tra lại rồi xoá branch local và remote của PR #40.', 'Rechecked and deleted the local and remote branches for PR #40.'));
       await drAsk(sleep, t('Fix 6: xoá claim comment treo trên #35 và đổi agent:in-progress thành agent:ready?', 'Fix 6: delete the stale claim comment on #35 and swap agent:in-progress for agent:ready?'), t('Có', 'Yes'), t('Xong: #35 ready lại.', 'Done: #35 is ready again.'));
       await drAsk(sleep, t('Fix 8: gộp các rule còn thiếu vào .claude/settings.json? Không bao giờ thêm rule cho phép merge PR hay push vào branch bảo vệ', 'Fix 8: merge the missing rules into .claude/settings.json? Never a rule that allows merging a PR or pushing to a protected branch'), t('Có', 'Yes'), t('Đã gộp.', 'Merged in.'));
       await sleep(600);
-      bub(drChat, 'q', 'doctor', t('Đã áp dụng 4, từ chối 1. Lệnh nên chạy tiếp: /devflow:init --upgrade', 'Applied 4, declined 1. Next command: /devflow:init --upgrade'));
-      L('next', t('4 fix áp dụng, 1 từ chối. Việc kế tiếp: /devflow:init --upgrade', '4 fixes applied, 1 declined. Next command: /devflow:init --upgrade'), '--fg');
+      bub(drChat, 'q', 'doctor', t('Đã áp dụng 4 mục. Lệnh nên chạy tiếp: /devflow:init --upgrade', 'Applied 4 fixes. Next command: /devflow:init --upgrade'));
+      L('next', t('Đã áp dụng 4 mục. Việc kế tiếp: /devflow:init --upgrade', 'Applied 4 fixes. Next command: /devflow:init --upgrade'), '--fg');
       await sleep(1400);
 
       const UP = [
@@ -2247,13 +2325,13 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       drNodes[drNodes.length - 1].classList.remove('active'); drNodes[drNodes.length - 1].classList.add('done');
     });
   }
-  // Second scenario: no .claude/devflow.json, so only checks 3 and 8 run.
+  // Second scenario: no .claude/devflow.json, so only checks 3, 8, 9 and 10 run after check 1.
   function drPlayNoCfg() {
     drReset();
     drR.start(async (sleep) => {
       const L = (k, m, c) => logTo(drLog, k, m, c);
       drLog.innerHTML = '';
-      L('doctor', t('Không có .claude/devflow.json: kiểm tra 1 fail, gợi ý /devflow:init và chỉ chạy kiểm tra 3, 8 và 9', 'No .claude/devflow.json: check 1 fails, /devflow:init is suggested and only checks 3, 8 and 9 run'), '--haiku');
+      L('doctor', t('Không có .claude/devflow.json: kiểm tra 1 fail, gợi ý /devflow:init và chỉ chạy kiểm tra 3, 8, 9 và 10', 'No .claude/devflow.json: check 1 fails, /devflow:init is suggested and only checks 3, 8, 9 and 10 run'), '--haiku');
       const skip = async (i) => { drChecks[i].classList.add('skip'); drReport.append(el('div', 'res skp', `<span class="stat skip">skip</span><b>${DR_NAMES[i]}</b> ${t('bỏ qua: cần config', 'skipped: needs the config')}`)); await sleep(300); };
       await drCheck(sleep, 0, 'fail', t('thiếu .claude/devflow.json → chạy /devflow:init', '.claude/devflow.json is missing → run /devflow:init'));
       for (const i of [1]) await skip(i);
@@ -2261,6 +2339,9 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line)
       for (const i of [3, 4, 5, 6]) await skip(i);
       await drCheck(sleep, 7, 'warn', t('chưa có rule permissions nào cho phiên nền trong .claude/settings.json: xem snippet trong README của plugin', 'no permissions rules for background sessions in .claude/settings.json yet: see the snippet in the plugin README'));
       await drCheck(sleep, 8, 'ok', t('không có file hay rule nào trùng với plugin', 'no project file or rule duplicates the plugin'));
+      await drCheck(sleep, 9, 'ok', t('Guard chặn lệnh merge thử.', 'The guard blocks the test merge call.'));
+      for (const i of [10, 11, 12, 13]) await skip(i);
+      L('Waiting on you', t('Cần config để đọc nhãn.', 'The config is needed to read the labels.'), '--fg');
       L('next', t('Lệnh nên chạy tiếp: /devflow:init', 'Next command: /devflow:init'), '--fg');
     });
   }
