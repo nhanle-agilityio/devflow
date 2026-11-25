@@ -1717,8 +1717,11 @@ test('test_t6_3_prompts_use_epic_source', async () => {
 });
 
 // T6.4
+// T6.4-T6.6 check the block path, which since #155 applies with nextTask.onQuestion "block"; with "decide" an unread epic is recorded as a decision (tests/avoidable-blocks-155.test.cjs).
+const BASE_BLOCK = { ...BASE, config: { ...CFG, nextTask: { ...(CFG.nextTask || {}), onQuestion: 'block' } } };
+
 test('test_t6_4_spec_read_whole_token', async () => {
-  let r = await run({ ...BASE, issues: [1] }, { ...EPIC_OPTS, planOut: { specRead: '#420', epicRead: true } });
+  let r = await run({ ...BASE_BLOCK, issues: [1] }, { ...EPIC_OPTS, planOut: { specRead: '#420', epicRead: true } });
   assert.equal(r.rep[0].status, 'blocked');
   assert.match(r.rep[0].reason, /^Plan/);
   r = await run({ ...BASE, issues: [1] }, { ...EPIC_OPTS, planOut: { specRead: 'epic #42.', epicRead: true } });
@@ -1727,7 +1730,7 @@ test('test_t6_4_spec_read_whole_token', async () => {
 
 // T6.5
 test('test_t6_5_implement_missing_epic_read_fix_then_block', async () => {
-  const { rep, calls } = await run({ ...BASE, issues: [1] }, { ...EPIC_OPTS, devOut: { specRead: '', epicRead: true } });
+  const { rep, calls } = await run({ ...BASE_BLOCK, issues: [1] }, { ...EPIC_OPTS, devOut: { specRead: '', epicRead: true } });
   assert.equal(rep[0].status, 'blocked');
   assert.match(rep[0].reason, /^Implement/);
   assert.equal(calls.filter((c) => c.l.startsWith('fix')).length, 1, 'exactly one corrective fix');
@@ -1735,7 +1738,7 @@ test('test_t6_5_implement_missing_epic_read_fix_then_block', async () => {
 
 // T6.6
 test('test_t6_6_unreadable_epic_blocks', async () => {
-  const r = await run({ ...BASE, issues: [1] }, { ...EPIC_OPTS, planOut: { specRead: 'none', epicRead: false } });
+  const r = await run({ ...BASE_BLOCK, issues: [1] }, { ...EPIC_OPTS, planOut: { specRead: 'none', epicRead: false } });
   assert.equal(r.rep[0].status, 'blocked');
   assert.match(r.rep[0].reason, /epic #42 could not be read/);
   const ok = await run({ ...BASE, issues: [1], ghCli: true }, { ...QA, ...EPIC_OPTS, checkFirstFails: true });
@@ -1745,7 +1748,7 @@ test('test_t6_6_unreadable_epic_blocks', async () => {
     assert.equal(c.schema.properties.epicRead.type, 'boolean', `${l} schema lists epicRead`);
   }
   // An unreadable epic reported by a later stage blocks too.
-  const d = await run({ ...BASE, issues: [1] }, { ...EPIC_OPTS, devOut: { specRead: 'epic #42', epicRead: false } });
+  const d = await run({ ...BASE_BLOCK, issues: [1] }, { ...EPIC_OPTS, devOut: { specRead: 'epic #42', epicRead: false } });
   assert.equal(d.rep[0].status, 'blocked');
   assert.match(d.rep[0].reason, /epic #42 could not be read/);
 });
