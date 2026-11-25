@@ -5,6 +5,8 @@
 //        devflow-run branch --issue <n> --name <branch> --from <ref> [--parents <ref,...>] [--remote origin]
 //        devflow-run restore --to <branch>
 //        devflow-run commit < payload.json
+//        devflow-run push --branch <branch> [--remote origin]
+//        devflow-run pr-body [--template <path>] < payload.json
 //        devflow-run lock acquire --name <name> [--wait <seconds>]
 //        devflow-run lock release --name <name>
 // Prints one JSON object. Exit 1 means the operation could not run.
@@ -238,6 +240,77 @@ function runRestore(args) {
   return { ok: true, restored: true };
 }
 
+function runPush(args) {
+  const options = optionsFor(args, ['branch', 'remote']);
+  const protectedName = protectedMatcher(readConfig(CONFIG_PATH));
+  const branch = checkRefName(options.branch);
+  const remote = options.remote ?? 'origin';
+  if (protectedName(branch)) throw new Error(`Refusing protected branch ${branch}`);
+  if (git('symbolic-ref', 'HEAD').trimEnd() !== `refs/heads/${branch}`) {
+    throw new Error(`Branch ${branch} is not the current branch`);
+  }
+  if (!remote) throw new Error('Expected a remote');
+  git('push', '-u', '--no-follow-tags', '--', remote, `refs/heads/${branch}:refs/heads/${branch}`);
+  return { ok: true, branch, remote, pushed: true };
+}
+
+function runPrBody(args) {
+  const { template } = optionsFor(args, ['template']);
+  const {
+    issue, type, scope, summary, how, riskLine, stackLine, isFix, rootCause, tests, checks,
+    verification, manualChecks, reviewNotes, decisions, assumptions, outOfScope, reviewTrace, runMarker, closes,
+  } = JSON.parse(fs.readFileSync(0, 'utf8'));
+  const isLine = (value) => typeof value === 'string' && !/[\r\n]/.test(value);
+  if (!isLine(issue?.title) || !isLine(type) || !isLine(scope) || !isLine(runMarker) ||
+      !Array.isArray(reviewTrace) || reviewTrace.length !== 3 || !reviewTrace.every(isLine) ||
+      !Array.isArray(closes) || !closes.length || closes[0] !== issue.number ||
+      !closes.every((number) => Number.isSafeInteger(number) && number > 0)) {
+    throw new Error('Invalid PR body payload');
+  }
+  const list = (items = []) => items.map((item) => /^[-*+]\s/.test(item) ? item : `- ${item}`).join('\n');
+  const table = (headers, rows) => {
+    if (!rows.length) return '';
+    const line = (cells) => '| ' + cells.map((cell) =>
+      String(cell).replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>')).join(' | ') + ' |';
+    return [headers, headers.map(() => '---'), ...rows].map(line).join('\n');
+  };
+  const sections = new Map([
+    ['What', summary],
+    ['How', how],
+    ['Risk', [riskLine, stackLine].filter(Boolean).join('\n\n')],
+    ['Tests', [list(tests), table(['Row', 'Result', 'Evidence'],
+      (manualChecks ?? []).map(({ row, result, evidence }) => [row, result, evidence]))].filter(Boolean).join('\n\n')],
+    ['Checks', table(['Check', 'Result'], (checks ?? []).map(({ name, result }) => [name, result]))],
+    ['Verification', verification],
+    ['Review notes', list(reviewNotes)],
+    ['Decisions taken', list(decisions)],
+    ['Assumptions', list(assumptions)],
+    ['Out of scope', list(outOfScope)],
+  ]);
+  const fixSections = new Map([
+    ['Root cause', rootCause?.cause || 'unknown'],
+    ['Introduced by', rootCause?.introducedBy || 'unknown'],
+    ['Why it was missed', rootCause?.whyMissed || 'unknown'],
+  ]);
+  const withoutComments = (value) => value.replace(/<!--[\s\S]*?-->/g, '').trim();
+  const headings = template === undefined
+    ? [...sections.keys()].map((heading) => [`## ${heading}`, heading])
+    : Array.from(withoutComments(fs.readFileSync(template, 'utf8')).matchAll(/^#{1,6}[ \t]+(.+)$/gm),
+      ([heading, name]) => [heading, name]);
+  const body = [];
+  for (const [heading, name] of headings) {
+    const section = name.trim();
+    if (section === 'Review' || (!isFix && fixSections.has(section))) continue;
+    const content = sections.get(section) ?? fixSections.get(section) ?? '';
+    const rendered = section === 'Risk' ? content : withoutComments(content);
+    body.push(`${heading}\n\n${rendered || 'None'}`);
+  }
+  body.push(`## Review\n\n${reviewTrace.join('\n')}`, runMarker, closes.map((number) => `Closes #${number}`).join('\n'));
+  const subject = issue.title.replace(/^\s*\[[^\]\r\n]+\]\s+T\d+:\s*/i, '');
+  const title = Array.from(`${type}(${scope}): ${subject}`).slice(0, 72).join('').trimEnd();
+  return { ok: true, title, body: body.join('\n\n') };
+}
+
 async function checkRed(sha, setup, testCommand) {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-red-'));
   const checkout = path.join(temporary, 'checkout');
@@ -357,6 +430,8 @@ async function main([subcommand, ...options]) {
   if (subcommand === 'lock') return runLock(options);
   if (subcommand === 'branch') return runBranch(options);
   if (subcommand === 'restore') return runRestore(options);
+  if (subcommand === 'push') return runPush(options);
+  if (subcommand === 'pr-body') return runPrBody(options);
   if (subcommand !== 'check' || (options.length && (options.length !== 2 || options[0] !== '--config' || !options[1]))) {
     throw new Error('Usage: devflow-run check [--config .claude/devflow.json]');
   }

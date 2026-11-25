@@ -1628,7 +1628,7 @@ function shipPrompt(issue, branch, state, risk, trace) {
   const epicN = epicFor(issue)
   const epicClosesStep = epicN
     ? `
-1c. Epic resolves: read epic #${epicN} with the GitHub MCP (issue_read, method get) and its sub-issues (method get_sub_issues). If its body has no "Resolves:" line, add no "Closes" lines. Otherwise, when the issue being shipped (#${issue.number}) is the last open sub-issue of the epic (no other sub-issue of the epic is open; the issue being shipped counts as open), add one "Closes #<n>" line for each listed issue that is still open, after the line "Closes #${issue.number}" in step 2. When another sub-issue of the epic is still open, add no "Closes" lines. A listed issue that is already closed gets no "Closes" line. A listed number that does not exist or belongs to another repository (for example "o/r#5", or a number that is not found in ${gh.owner}/${gh.repo}) is skipped, with a one-line note in the PR body naming it; it gets no "Closes" line.`
+1c. Epic resolves: read epic #${epicN} with the GitHub MCP (issue_read, method get) and its sub-issues (method get_sub_issues). If its body has no "Resolves:" line, add no "Closes" lines. Otherwise, when the issue being shipped (#${issue.number}) is the last open sub-issue of the epic (no other sub-issue of the epic is open; the issue being shipped counts as open), add one "Closes #<n>" line for each listed issue that is still open, by appending its number to the payload's closes array before step 2. When another sub-issue of the epic is still open, add no "Closes" lines. A listed issue that is already closed gets no "Closes" line. A listed number that does not exist or belongs to another repository (for example "o/r#5", or a number that is not found in ${gh.owner}/${gh.repo}) is skipped, with a one-line note in the PR body naming it (append the note to reviewNotes); it gets no "Closes" line.`
     : ''
   const tr = Object.assign({ path: 'full', reviewRounds: 0, claimedAt: null }, trace)
   const ghReview = cfg.review && cfg.review.github === true ? 'on' : 'off'
@@ -1656,43 +1656,78 @@ function shipPrompt(issue, branch, state, risk, trace) {
   const prLabels = [labels.devflow, prRisk].concat(stacked ? [labels.stacked] : []).concat(decidedNew[issue.number] ? [labels.decisionsReview] : [])
   // A decision the run took earlier (line already on the issue) still marks a brand-new PR; a reused PR only gets the label for a new decision.
   const newPrOnlyLabel = !decidedNew[issue.number] && (decided[issue.number] || []).length ? ` When no open PR was reused in step 0 (a new PR was opened), also add "${labels.decisionsReview}".` : ''
-  const template = args.prTemplatePath
-    ? `Read the PR body template at ${args.prTemplatePath} and fill every section from the data below (keep its headings).`
-    : 'Write the PR body with sections: What, How, Tests, Checks, Verification, Review notes, Decisions taken, Assumptions, Out of scope.'
+  const isFix = isFixIssue(issue, cfg)
+  const rootCause = {
+    cause: state.rootCause?.cause || 'unknown',
+    introducedBy: state.rootCause?.introducedBy || 'unknown',
+    whyMissed: state.rootCause?.whyMissed || 'unknown',
+  }
+  const reviewTrace = [
+    `Review: pass after ${tr.reviewRounds} round(s) - local devflow reviewer in this run (GitHub review: ${ghReview})`,
+    `Path: ${pathValue}`,
+    `Verify: ${verifyValue}`,
+  ]
+  const verification = state.verification
+    ? [
+        state.verification.ran ? `Mode: ${state.verification.mode}` : 'Not run',
+        ...(state.verification.steps || []).map((step) =>
+          `- ${step.action}: expected ${step.expected}; actual ${step.actual} (${step.pass ? 'pass' : 'fail'})`),
+        state.verification.notes,
+      ].filter(Boolean).join('\n')
+    : state.verify || 'not needed'
+  const payload = {
+    issue: { number: issue.number, title: issue.title },
+    type: branchTypeFor(issue),
+    scope: scopeFor(issue),
+    summary: state.summary,
+    how: [
+      ...state.commits.map((commit) => `- ${commit}`),
+      ...state.fixes.map((fix) => `- Follow-up fix: ${fix}`),
+      state.filesChanged.length ? `Files changed: ${state.filesChanged.join(', ')}` : '',
+    ].filter(Boolean).join('\n\n'),
+    riskLine,
+    stackLine,
+    isFix,
+    rootCause,
+    tests: state.tests.concat(state.commits.filter((commit) => /^(?:[a-f0-9]+ )?test\(/i.test(commit))),
+    checks: cfg.checks.map(({ name }) => ({ name, result: 'pass' })),
+    verification,
+    manualChecks: state.manualChecks.map(({ rowId, result, evidence }) => ({ row: rowId, result, evidence })),
+    reviewNotes: state.suggestions.map((f) => `[${f.severity}] ${f.file}:${f.line}: ${f.problem} (suggested fix: ${f.fix})`),
+    decisions: decisionItems,
+    assumptions: state.assumptions,
+    outOfScope: state.outOfScope,
+    reviewTrace,
+    runMarker,
+    closes: [issue.number],
+  }
+  const renderCommand = runCommand('pr-body', args.prTemplatePath ? ['--template', args.prTemplatePath] : []).trimEnd()
   return `Ship issue #${issue.number}: push branch ${branch} and open the pull request. ${MCP_NOTE}
 
 devflow config:
 ${cfgJson}
 
-${template}
-
-Data:
-- Issue: #${issue.number} ${issue.title}
-- Summary: ${state.summary}
-- Follow-up fixes (checks, verification, review): ${JSON.stringify(state.fixes)}
-- Commits: ${JSON.stringify(state.commits)}
-- Files changed: ${JSON.stringify(state.filesChanged)}
-- Check result: all configured checks passed (${cfg.checks.map((c) => c.name).join(', ')})
-- Verification: ${state.verification ? JSON.stringify(state.verification) : state.verify || 'Not run (not required for this issue)'}
-- Manual checks (put them in the Tests section as a table: row, result, evidence): ${JSON.stringify(state.manualChecks)}
-- Review notes (suggestions that were NOT applied): ${JSON.stringify(state.suggestions)}
-- Decisions taken (a "## Decisions taken" section, one "- " line per entry, "None" when empty): ${JSON.stringify(decisionItems)}
-- Assumptions: ${JSON.stringify(state.assumptions)}
-- Out of scope: ${JSON.stringify(state.outOfScope)} (review already confirmed none of these is required by the acceptance criteria)${isFixIssue(issue, cfg) ? `
-- Root cause: ${(state.rootCause && state.rootCause.cause) || 'unknown'}; Introduced by: ${(state.rootCause && state.rootCause.introducedBy) || 'unknown'}; Why it was missed: ${(state.rootCause && state.rootCause.whyMissed) || 'unknown'}` : ''}
+PR rendering inputs to check before publishing:
 - ${riskLine}
-- Review trace (a "## Review" section of exactly these three lines):
-Review: pass after ${tr.reviewRounds} round(s) - local devflow reviewer in this run (GitHub review: ${ghReview})
-Path: ${pathValue}
-Verify: ${verifyValue}
-- Run marker (its own line in the PR body, verbatim): ${runMarker}
-${stacked ? `- Stacked on ${parentList(issue)}.\n` : ''}
+- Verification: ${verifyValue}
+- Manual checks (Tests): ${JSON.stringify(payload.manualChecks)}
+- The renderer uses the payload's decisions for Decisions taken.
+- Out of scope: ${JSON.stringify(payload.outOfScope)}${isFix ? `
+- Fix sections "Root cause", "Introduced by" and "Why it was missed": Root cause: ${rootCause.cause}; Introduced by: ${rootCause.introducedBy}; Why it was missed: ${rootCause.whyMissed}` : ''}
+- The ## Review footer includes the run marker ${runMarker} and closing references.
+
 Steps:
-0. Look for an open PR with head ${branch} in ${gh.owner}/${gh.repo} (a PR left by an earlier run). If one exists, reuse it: push normally (step 1), retarget its base to ${prBase}${parents.length === 1 ? ` (or to ${base} when step 1b finds the parent merged)` : ''} with update_pull_request when it differs, rewrite its title and body from the data as in step 2, add the labels of step 3${decidedNew[issue.number] ? ` (including "${labels.decisionsReview}": this run took a new decision)` : ''} without removing any label already on it (never remove "${labels.riskHigh}" or any other label already on it${parents.length === 1 ? `, except "${labels.stacked}" when step 1b finds the parent merged` : ''}), do not open a new PR, return reused=true with its number and URL, then continue with step 4 (the issue labels). Steps 2 and 3 apply only when no such PR exists; step 2b still applies. If none exists, go on with step 1 and return reused=false.
-1. \`git push -u ${remote} ${branch}\`. Never push to ${base} or any protected branch; never force-push.${parents.length === 1 ? `
-1b. Read PR #${parents[0].prNumber} with pull_request_read; it may have been merged (and its branch deleted) while this issue was built. Merged (\`merged_at\` is not null in that result): its changes are in ${base}, so in steps 0, 2 and 3 use base ${base} (on a reused PR retarget to it, remove the stack line and the "${labels.stacked}" label), leave out the stack line and do not add the "${labels.stacked}" label, and return unstacked=true. Closed without merging: stop and return ok=false with the problem.` : ''}${epicClosesStep}
-2. Open a PR with head ${branch} and base ${prBase} in ${gh.owner}/${gh.repo}. Title: Conventional Commits style summary with scope "${scopeFor(issue)}", English, under 72 characters. Body as described,${isFixIssue(issue, cfg) ? ' with the sections "Root cause", "Introduced by" and "Why it was missed" filled from the Root cause data (this is a fix; write "unknown" where the data says so),' : ''} with a "Risk" section holding exactly this line: "${riskLine}"${stacked ? `, and the line "${stackLine}"` : ''}, with a "## Review" section holding exactly the three trace lines from the data, the run marker line from the data on a line of its own, ending with the line "Closes #${issue.number}". The body must not contain any at-sign mention of a bot or user, and no AI attribution.
-2b. Out of scope: for each out-of-scope item that describes a real problem in the product (not a note about style or a remark), search open issues in ${gh.owner}/${gh.repo} for one that already covers it; if there is none, create an issue titled "[follow-up #${issue.number}] <short summary>" with labels "${labels.triage}" only (never "${labels.ready}": a human triages it) and a body ${args.bugTemplatePath ? `from the bug template at ${args.bugTemplatePath} (keep its headings, "unknown" or "None" where you have nothing)` : 'with the sections Context, Expected, Actual, Repro, Introduced by, Risk, Acceptance criteria, Scope, Test cases and Dependencies'}; Context says it was found while working on #${issue.number}. The body also has a line "Found in: #<PR number>" (the number of the PR opened in step 2, or of the reused PR; when no PR exists yet, the line is "Found in: ${branch}", the branch name) and, when the location of the problem is known, the \`file:line\` of it (for example src/a.js:10); with no known location write only the "Found in:" line. Then comment on the new issue: suggest a priority (one of ${priorityList.join(', ')}) and a risk (${labels.riskLow} or ${labels.riskHigh}, judged against risk.highWhen and risk.highPaths; unsure means high), each with a one-line reason, and say that a human sets the labels and "${labels.ready}". Do not set those labels yourself. List every such issue in the PR body's "Out of scope" section as "- <item>: #<number>", and return them in followUps (existing=true for one that was already open). Items that are only remarks stay in the section as text.
+0. Look for an open PR with head ${branch} in ${gh.owner}/${gh.repo} (a PR left by an earlier run). If one exists, reuse it: push normally (step 1), retarget its base to ${prBase}${parents.length === 1 ? ` (or to ${base} when step 1b finds the parent merged)` : ''} with update_pull_request when it differs, update its title and body with the rendered result of step 2, add the labels of step 3${decidedNew[issue.number] ? ` (including "${labels.decisionsReview}": this run took a new decision)` : ''} without removing any label already on it (never remove "${labels.riskHigh}" or any other label already on it${parents.length === 1 ? `, except "${labels.stacked}" when step 1b finds the parent merged` : ''}), do not open a new PR, return reused=true with its number and URL, then continue with step 4 (the issue labels). For a reused PR, step 2 updates it and step 3 adds the computed labels; step 2b still applies. If none exists, go on with step 1 and return reused=false.
+1. Run \`${runCommand('push', ['--branch', branch, '--remote', remote])}\`. If it exits 1, return ok=false with its error.${parents.length === 1 ? `
+1b. Read PR #${parents[0].prNumber} with pull_request_read; it may have been merged (and its branch deleted) while this issue was built. Merged (\`merged_at\` is not null in that result): its changes are in ${base}, so in steps 0, 2 and 3 use base ${base} (on a reused PR retarget to it, remove the stack line and the "${labels.stacked}" label), set stackLine to an empty string in the payload and do not add the "${labels.stacked}" label, and return unstacked=true. Closed without merging: stop and return ok=false with the problem.` : ''}${epicClosesStep}
+2. Render the PR title and body. Use the following command with only the payload changes from steps 1b and 1c, when applicable.
+\`\`\`sh
+${renderCommand} <<'DEVFLOW_PR_JSON'
+${JSON.stringify(payload, null, 2)}
+DEVFLOW_PR_JSON
+\`\`\`
+If rendering exits 1, return ok=false with its error. Use the returned title and body unchanged with the GitHub MCP. Create a PR with head ${branch} and base ${prBase} in ${gh.owner}/${gh.repo}, or update the existing PR from step 0. Use the base determined in step 1b when applicable.
+2b. Out of scope: for each out-of-scope item that describes a real problem in the product (not a note about style or a remark), search open issues in ${gh.owner}/${gh.repo} for one that already covers it; if there is none, create an issue titled "[follow-up #${issue.number}] <short summary>" with labels "${labels.triage}" only (never "${labels.ready}": a human triages it) and a body ${args.bugTemplatePath ? `from the bug template at ${args.bugTemplatePath} (keep its headings, "unknown" or "None" where you have nothing)` : 'with the sections Context, Expected, Actual, Repro, Introduced by, Risk, Acceptance criteria, Scope, Test cases and Dependencies'}; Context says it was found while working on #${issue.number}. The body also has a line "Found in: #<PR number>" (the number of the PR opened in step 2, or of the reused PR; when no PR exists yet, the line is "Found in: ${branch}", the branch name) and, when the location of the problem is known, the \`file:line\` of it (for example src/a.js:10); with no known location write only the "Found in:" line. Then comment on the new issue: suggest a priority (one of ${priorityList.join(', ')}) and a risk (${labels.riskLow} or ${labels.riskHigh}, judged against risk.highWhen and risk.highPaths; unsure means high), each with a one-line reason, and say that a human sets the labels and "${labels.ready}". Do not set those labels yourself. For every such issue, replace its outOfScope entry in the payload with "<item>: #<number>". Keep remarks as they are. If any entries changed, run the same pr-body command with the updated payload and use its returned title and body unchanged to update the PR. Return the issues in followUps (existing=true for one that was already open).
 3. Label the new PR (a PR is an issue: use issue_write with the PR number; read its labels first, keep existing ones): ${prLabels.map((l) => '"' + l + '"').join(', ')}.${newPrOnlyLabel}
 4. On issue #${issue.number} add the label "${labels.review}" and remove "${labels.inProgress}" (keep other labels).${risk.escalation ? ` Also add "${labels.riskHigh}" to the issue and remove "${labels.riskLow}" (the change was escalated to high).` : ''}
 5. Stay on the branch. ${isolated ? 'This checkout is a dedicated worktree.' : 'The engine handles checkout restoration.'}
@@ -2025,6 +2060,7 @@ async function runIssue(issue) {
     summary: '',
     fixes: [],
     commits: [],
+    tests: [],
     filesChanged: [],
     assumptions: [],
     outOfScope: [],
@@ -2332,6 +2368,8 @@ Make no other changes. Return ok=true when those comments are gone.`, {
         commits: committed.commits,
         filesChanged: Array.from(new Set((qa.filesChanged || []).concat(dev.filesChanged || []))),
       })
+      state.tests = (qa.tests || []).map(({ rowId, test }) => `${rowId} ${test}`)
+      if (committed.failedFirst) state.tests.push('The QA test commit ran first and failed before the implementation.')
       merge(state, impl)
     } else {
       const implAsked = await withQuestions(
