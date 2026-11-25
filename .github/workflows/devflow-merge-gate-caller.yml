@@ -33,9 +33,9 @@ jobs:
   gate:
     permissions:
       contents: read
-    uses: nhanle-agilityio/devflow/.github/workflows/devflow-merge-gate.yml@v3.0.0
+    uses: nhanle-agilityio/devflow/.github/workflows/devflow-merge-gate.yml@v3.1.0
     with:
-      devflow-ref: "v3.0.0"
+      devflow-ref: "v3.1.0"
     # Passed by name: inheriting all secrets only works inside one organization or enterprise.
     # DEVFLOW_READ_TOKEN is only needed (and may stay unset) when the devflow repository is private.
     secrets:
