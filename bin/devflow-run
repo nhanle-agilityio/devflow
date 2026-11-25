@@ -4,11 +4,17 @@
 // Usage: devflow-run check [--config .claude/devflow.json]
 //        devflow-run branch --issue <n> --name <branch> --from <ref> [--parents <ref,...>] [--remote origin]
 //        devflow-run restore --to <branch>
+//        devflow-run commit < payload.json
+//        devflow-run lock acquire --name <name> [--wait <seconds>]
+//        devflow-run lock release --name <name>
 // Prints one JSON object. Exit 1 means the operation could not run.
 
 const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { performance } = require('node:perf_hooks');
+const { setTimeout: delay } = require('node:timers/promises');
 const { parseArgs } = require('node:util');
 
 const CONFIG_PATH = '.claude/devflow.json';
@@ -26,11 +32,12 @@ function readConfig(file) {
   }
 }
 
-function runCheck({ name, run: command, timeoutSeconds = DEFAULT_TIMEOUT }) {
+function runCheck({ name, run: command, timeoutSeconds = DEFAULT_TIMEOUT }, cwd) {
   return new Promise((resolve, reject) => {
     const start = performance.now();
     const child = spawn('/bin/sh', ['-c', 'exec /bin/sh -c "$1" 2>&1', 'devflow-run', command], {
       detached: true,
+      cwd,
       stdio: ['ignore', 'pipe', 'ignore'],
     });
     let timedOut = false;
@@ -231,7 +238,123 @@ function runRestore(args) {
   return { ok: true, restored: true };
 }
 
+async function checkRed(sha, setup, testCommand) {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-red-'));
+  const checkout = path.join(temporary, 'checkout');
+  try {
+    git('worktree', 'add', '--detach', checkout, sha);
+    for (const run of setup) {
+      const result = await runCheck({ run }, checkout);
+      if (result.exitCode !== 0) {
+        throw new Error(`Red check setup failed: ${run}\n${result.outputTail}`.trimEnd());
+      }
+    }
+    const result = await runCheck({ run: testCommand }, checkout);
+    if (result.exitCode === null) {
+      throw new Error(`Red check ${result.timedOut ? 'timed out' : 'was interrupted'}\n${result.outputTail}`.trimEnd());
+    }
+    return {
+      redConfirmed: result.exitCode !== 0,
+      redOutput: result.outputTail.split('\n').slice(-40).join('\n'),
+    };
+  } finally {
+    try {
+      if (fs.existsSync(checkout)) git('worktree', 'remove', '--force', checkout);
+    } finally {
+      fs.rmdirSync(temporary);
+    }
+  }
+}
+
+async function runCommit() {
+  const config = readConfig(CONFIG_PATH);
+  const protectedName = protectedMatcher(config);
+  const branch = git('symbolic-ref', 'HEAD').trimEnd().replace(/^refs\/heads\//, '');
+  if (protectedName(branch)) throw new Error(`Refusing protected branch ${branch}`);
+
+  const { scope, type, title, qaFiles, devFiles, separate, testCommand, setup } = JSON.parse(fs.readFileSync(0, 'utf8'));
+  const nonEmptyString = (value) => typeof value === 'string' && !!value.trim();
+  const stringList = (value) => Array.isArray(value) && value.every(nonEmptyString);
+  if (![scope, type, title, testCommand].every(nonEmptyString) || ![qaFiles, devFiles, setup].every(stringList) ||
+      typeof separate !== 'boolean') {
+    throw new Error('Invalid commit payload');
+  }
+
+  const listed = new Set([...qaFiles, ...devFiles]);
+  const changed = new Set(dirtyFiles());
+  const result = {
+    ok: true, commits: [], leftover: [...changed].filter((file) => !listed.has(file)),
+    redConfirmed: false, redOutput: '',
+  };
+  if (result.leftover.length) return result;
+
+  function commit(files, subject) {
+    const paths = [...new Set(files)].filter((file) => changed.has(file));
+    if (!paths.length) return;
+    const message = Array.from(subject.replace(/[\r\n]+/g, ' ')).slice(0, 100).join('').trimEnd();
+    for (const file of paths) git('--literal-pathspecs', 'add', '--', file);
+    git('--literal-pathspecs', 'commit', '--only', '-m', message, '--', ...paths);
+    const sha = git('rev-parse', 'HEAD').trim();
+    result.commits.push({ sha, message, files: paths });
+    for (const file of paths) changed.delete(file);
+    return sha;
+  }
+
+  const fragments = config.changelog?.fragmentsDir ?? 'changelog.d';
+  const isDoc = (file) => /^[^/]+\.md$/.test(file) || file.startsWith('docs/') ||
+    (!/^(skills|agents)\//.test(file) && file.startsWith(`${fragments}/`));
+  const testSha = commit(qaFiles, `test(${scope}): tests for ${title}`);
+  commit(separate ? devFiles.filter((file) => !isDoc(file)) : devFiles, `${type}(${scope}): ${title}`);
+  if (separate) commit(devFiles.filter(isDoc), `docs(${scope}): docs for ${title}`);
+  if (testSha) Object.assign(result, await checkRed(testSha, setup, testCommand));
+  return result;
+}
+
+async function runLock([action, ...args]) {
+  if (action !== 'acquire' && action !== 'release') throw new Error('Expected lock acquire or release');
+  const { name, wait = String(DEFAULT_TIMEOUT) } = optionsFor(args, action === 'acquire' ? ['name', 'wait'] : ['name']);
+  if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) throw new Error('Invalid lock name');
+  if (!/^\d+$/.test(wait) || !Number.isSafeInteger(Number(wait) * 1000)) {
+    throw new Error('Expected --wait in non-negative whole seconds');
+  }
+  const lock = path.join(git('rev-parse', '--git-common-dir').trimEnd(), `devflow-${name}.lock`);
+
+  function removeLock() {
+    try {
+      fs.rmdirSync(lock);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
+  if (action === 'release') {
+    removeLock();
+    return { ok: true, acquired: false };
+  }
+
+  const deadline = performance.now() + Number(wait) * 1000;
+  while (true) {
+    try {
+      fs.mkdirSync(lock);
+      return { ok: true, acquired: true };
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+    const held = fs.lstatSync(lock, { throwIfNoEntry: false });
+    if (!held) continue;
+    if (!held.isDirectory()) throw new Error(`Lock path is not a directory: ${lock}`);
+    if (Date.now() - held.mtimeMs > 30 * 60 * 1000) {
+      removeLock();
+      continue;
+    }
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) return { ok: true, acquired: false, heldSince: held.mtime.toISOString() };
+    await delay(Math.min(10000, remaining));
+  }
+}
+
 async function main([subcommand, ...options]) {
+  if (subcommand === 'commit' && !options.length) return runCommit();
+  if (subcommand === 'lock') return runLock(options);
   if (subcommand === 'branch') return runBranch(options);
   if (subcommand === 'restore') return runRestore(options);
   if (subcommand !== 'check' || (options.length && (options.length !== 2 || options[0] !== '--config' || !options[1]))) {

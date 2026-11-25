@@ -301,12 +301,38 @@ const COMMIT_SCHEMA = {
   type: 'object',
   properties: {
     ok: { type: 'boolean' },
-    commits: { type: 'array', items: { type: 'string' }, description: 'One "<sha> <message>" per commit, in order' },
-    failedFirst: { type: 'boolean', description: 'True when the QA tests failed with the implementation stashed' },
-    failureNote: { type: 'string', description: 'How the QA tests failed (or why they did not), a few lines' },
-    problem: { type: 'string' },
+    commits: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          sha: { type: 'string' },
+          message: { type: 'string' },
+          files: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['sha', 'message', 'files'],
+      },
+    },
+    leftover: { type: 'array', items: { type: 'string' } },
+    redConfirmed: { type: 'boolean' },
+    redOutput: { type: 'string' },
+    error: { type: 'string' },
   },
-  required: ['ok', 'commits', 'failedFirst'],
+  required: ['ok'],
+}
+
+function commitResult(result) {
+  if (!result) return result
+  if (result.leftover?.length) {
+    return { ok: false, problem: `Unlisted changed files: ${result.leftover.join(', ')}` }
+  }
+  if (!result.ok) return { ok: false, problem: result.error || result.problem }
+  return {
+    ok: true,
+    commits: result.commits.map((commit) => typeof commit === 'string' ? commit : `${commit.sha} ${commit.message}`),
+    failedFirst: result.redConfirmed ?? result.failedFirst,
+    failureNote: result.redOutput ?? result.failureNote,
+  }
 }
 
 const INTEGRATE_SCHEMA = {
@@ -1420,31 +1446,34 @@ function guideBlock(guide) {
   return g.order ? `${rules}\nThe plan's order of commits:\n${g.order}` : rules
 }
 
-function commitPrompt(issue, branch, own, qa, dev, guide) {
+function commitPrompt(issue, branch, qa, dev, guide) {
   const testCheck = cfg.checks.find((c) => /test/i.test(c.name)) || cfg.checks[0]
-  const scope = scopeFor(issue)
-  const separate = !!(guide && guide.separate)
-  const devSteps = separate
-    ? `4. Code commit: stage the dev files that are not docs files by name and commit them with the type that fits (feat|fix|chore|refactor) and scope "${scope}". Skip this commit only if there are none.
-5. Docs commit: stage by name the changed repository-root \`*.md\` files, \`docs/**\` and changelog fragment files among the dev files (never \`skills/**\` or \`agents/**\`: they are behaviour here, so they belong to the code commit) and commit them: \`docs(${scope}): <what the docs cover>\`. If there are none, skip the docs commit.
-6.`
-    : `4. Stage the dev files by name and commit them with the type that fits (feat|fix|chore|refactor) and scope "${scope}". Skip this commit only if the dev list is empty.
-5.`
-  const head = separate ? 'the QA test commit first, then the code commit, then the docs commit' : 'the QA tests first, then the implementation'
-  return `Commit the work on branch ${branch} for issue #${issue.number}: ${head}. Do not edit any file.
+  const payload = {
+    issue: issue.number,
+    scope: scopeFor(issue),
+    type: (issue.labels || []).find((name) => /^type:(fix|chore|refactor)$/.test(name))?.slice(5) || 'feat',
+    title: branchTitle(issue),
+    qaFiles: qa.filesChanged || [],
+    devFiles: dev.filesChanged || [],
+    separate: !!(guide && guide.separate),
+    testCommand: testCheck.run,
+    setup: cfg.worktree?.setup || [],
+  }
+  const grouping = payload.separate
+    ? 'The runner creates the QA test commit, then the code commit, then docs(<scope>) for repository-root `*.md`, `docs/**` and changelog fragment files (never `skills/**` or `agents/**`). It will skip the docs commit when there are no changed docs files.'
+    : 'The runner creates test(<scope>) first and then feat|fix|chore|refactor(<scope>) for the dev files.'
+  return `Commit the work on branch ${branch} for issue #${issue.number}. Do not edit any file.
+
+${grouping}
 
 ${guideBlock(guide)}
 
-QA files: ${JSON.stringify(qa.filesChanged)}
-Dev files: ${JSON.stringify(dev.filesChanged)}
-Tests written (row id -> test): ${JSON.stringify(qa.tests)}
-
-Steps, in order:
-1. \`git status --porcelain\`. Every changed or new file must be in one of the two lists; if not, return ok=false naming the extra files.
-2. ${separate ? 'QA test commit: stage' : 'Stage'} the QA files by name and commit them:\`test(${scope}): <what the tests cover>\` (Conventional Commits, English, no AI attribution).
-3. Prove they fail without the implementation: \`git stash push -u -m devflow-red-${issue.number} -- <every dev file>\`, run \`${testCheck.run}\`, note how the QA tests fail, then \`git stash pop\`. If the stash pop does not restore every dev file cleanly, stop and return ok=false with the problem (the stash keeps the work). failedFirst = true only if at least one QA test failed because the behaviour is missing (not a syntax or collection error); describe it in failureNote.
-${devSteps} \`git status --porcelain\` must be empty. Never push, never rewrite a commit, never stage everything at once.
-Return ok, commits ("<sha> <message>", in order), failedFirst, failureNote.`
+From the repository root, run the following command. Return its JSON output exactly, including on exit 1.
+\`\`\`sh
+${runCommand('commit', []).trimEnd()} <<'DEVFLOW_COMMIT_JSON'
+${JSON.stringify(payload)}
+DEVFLOW_COMMIT_JSON
+\`\`\``
 }
 
 // The QA fix agent: fixes problems that sit in the QA agent's own test files, and only those.
@@ -1522,11 +1551,11 @@ Allowed modes: ${modes}.
 ${dev ? `Dev server: run \`${dev.run}\` in the background, then poll ${dev.url} until it answers (give up after ${dev.readyTimeoutSec || 60} seconds).` : 'No dev server is configured: set ran=false and explain in notes.'}
 
 Steps:
-${verifyCfg.lock !== false ? `0. Take the verify lock first, so parallel sessions on this machine never run the dev server at the same time: \`mkdir "$(git rev-parse --git-common-dir)/devflow-verify.lock"\`. If it already exists, wait 10 seconds and try again, up to 10 minutes; a lock directory older than 30 minutes is stale: remove it and take it. If you still cannot take it, return ran=false with notes "verify lock busy".
+${verifyCfg.lock !== false ? `0. Take the shared devflow-verify.lock before starting the dev server. Run \`${runCommand('lock', ['acquire', '--name', 'verify'])}\`. If it reports acquired=false, return ran=false with notes "verify lock busy". If it reports ok=false, return ran=false with the error.
 ` : ''}1. Start the dev server in the background and wait until the URL answers.
 2. Walk EVERY acceptance criterion of the issue, and every "Test cases" row with level "http" or "e2e" if the issue has that table. mode "http": call the API with curl and compare status and body to the criterion. mode "browser": use ${browser} to navigate, act as the user, and read the page (accessibility tree or text) to check the visible result; take screenshots only for your own check. Use whichever allowed mode fits each criterion and report the mode(s) used.
 3. Record each step as action / expected / actual / pass.
-4. ALWAYS stop the dev server you started, also when a step fails, and make sure no process is left listening on its port.${verifyCfg.lock !== false ? ' Then ALWAYS remove the lock directory you took (rmdir), also when something failed.' : ''}
+4. ALWAYS stop the dev server you started, also when a step fails, and make sure no process is left listening on its port.${verifyCfg.lock !== false ? ` If you acquired the lock, ALWAYS run \`${runCommand('lock', ['release', '--name', 'verify'])}\`, also when something failed.` : ''}
 5. Do not edit or commit any file, and do not push.
 If you cannot run verification at all (server never started, tool unavailable), return ran=false with the reason in notes; a failure of the code under test is ran=true with pass=false steps.`
 }
@@ -2285,12 +2314,12 @@ Make no other changes. Return ok=true when those comments are gone.`, {
       if (specPathForPlan && !readSpec(qa, specPathForPlan)) return block('Implement', `The QA agent did not read the spec ${specPathForPlan}`)
       if (srcPlan.kind === 'epic' && !readSource(qa, srcPlan)) return block('Implement', `The QA agent did not read epic #${srcPlan.n}`)
 
-      const committed = await callAgent(commitPrompt(issue, branch, own, qa, dev, state.guide), {
+      const committed = commitResult(await callAgent(commitPrompt(issue, branch, qa, dev, state.guide), {
         label: `commit #${issue.number}`,
         phase: 'Implement',
         schema: COMMIT_SCHEMA,
         model: 'haiku',
-      })
+      }))
       if (!committed || !committed.ok) return block('Implement', (committed && committed.problem) || 'The commit agent failed.')
       if (!committed.failedFirst) {
         log(`#${issue.number}: the QA tests did not fail without the change (${committed.failureNote || 'no note'}).`)
