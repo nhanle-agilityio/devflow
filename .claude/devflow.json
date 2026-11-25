@@ -1,6 +1,6 @@
 {
   "$schema": "./devflow.schema.json",
-  "devflowVersion": "3.0.0",
+  "devflowVersion": "3.1.0",
   "github": {
     "owner": "nhanle-agilityio",
     "repo": "devflow"
