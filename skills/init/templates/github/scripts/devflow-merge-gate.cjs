@@ -329,6 +329,10 @@ function issueLabels(issue) {
   return new Set((issue.labels || []).map((label) => typeof label === 'string' ? label : label.name));
 }
 
+function isProtectedRef(ref, baseBranch) {
+  return ref === baseBranch || ALWAYS_PROTECTED.includes(ref) || ref.startsWith('release/');
+}
+
 function hasOpenQuestions(body) {
   const lines = body.split(/\r?\n/);
   const start = lines.findIndex((line) => /^##[ \t]+Open questions[ \t]*#*[ \t]*$/i.test(line));
@@ -338,9 +342,11 @@ function hasOpenQuestions(body) {
   return questions !== '' && !/^None$/i.test(questions);
 }
 
-async function autoReadyAfterMerge(ctx, config, pr, dryRun) {
+async function autoReadyAfterMerge(ctx, config, pr, dryRun, postMerge = false) {
+  const readied = [];
   const mode = config.spec?.autoReady;
-  if (mode !== 'low' && mode !== 'all') return;
+  if (mode !== 'low' && mode !== 'all') return readied;
+  const projectClosure = dryRun && !postMerge;
   const { github, context, core } = ctx;
   const repo = context.repo;
   const repositoryPath = `/repos/${repo.owner}/${repo.repo}`.toLowerCase();
@@ -373,7 +379,7 @@ async function autoReadyAfterMerge(ctx, config, pr, dryRun) {
     const children = new Set();
     function include(issue) {
       if (issue.repository_url?.toLowerCase().endsWith(repositoryPath) && !issue.pull_request &&
-          issue.state === 'open' && issue.number !== epic && !(dryRun && closing.has(issue.number))) {
+          issue.state === 'open' && issue.number !== epic && !(projectClosure && closing.has(issue.number))) {
         children.add(issue.number);
       }
     }
@@ -409,7 +415,7 @@ async function autoReadyAfterMerge(ctx, config, pr, dryRun) {
         let waiting = false;
         for (const dep of dependencies) {
           // In a dry run, project the closure of issues this PR would close.
-          if (dryRun && closing.has(dep)) continue;
+          if (projectClosure && closing.has(dep)) continue;
           const dependency = await read(dep);
           if (dependency.pull_request || dependency.state !== 'closed') {
             waiting = true;
@@ -418,13 +424,17 @@ async function autoReadyAfterMerge(ctx, config, pr, dryRun) {
         }
         if (waiting) continue;
         if (dryRun) {
-          core.info(`#${number}: would add ${labels.ready} and post the auto-ready comment for epic #${epic}`);
+          core.info(postMerge
+            ? `would ready #${number} for epic #${epic}`
+            : `#${number}: would add ${labels.ready} and post the auto-ready comment for epic #${epic}`);
+          readied.push(number);
           continue;
         }
         // Approval can be removed while the sweep is in progress.
         const { data: approval } = await github.rest.issues.get({ ...repo, issue_number: epic });
         if (!issueLabels(approval).has(labels.epicApproved)) break;
         await github.rest.issues.addLabels({ ...args, labels: [labels.ready] });
+        readied.push(number);
         const comments = await github.paginate(github.rest.issues.listComments, { ...args, per_page: 100 });
         if (!comments.some((comment) => (comment.body || '').includes(AUTO_READY_MARKER))) {
           await github.rest.issues.createComment({
@@ -437,6 +447,41 @@ async function autoReadyAfterMerge(ctx, config, pr, dryRun) {
       }
     }
   }
+  return readied;
+}
+
+async function retargetStackedPulls({ github, context, core }, headRef, targetBase, { label, dryRun } = {}) {
+  const { owner, repo } = context.repo;
+  const children = await github.paginate(github.rest.pulls.list, {
+    owner, repo, state: 'open', base: headRef, per_page: 100,
+  });
+  const retargeted = [];
+  for (const child of children) {
+    if (child.base.ref !== headRef || (label !== undefined && !issueLabels(child).has(label))) continue;
+    if (dryRun) {
+      core.info(`would retarget #${child.number} to ${targetBase}`);
+    } else {
+      await github.rest.pulls.update({ owner, repo, pull_number: child.number, base: targetBase });
+      core.info(`Retargeted #${child.number} to ${targetBase}`);
+    }
+    retargeted.push(child.number);
+  }
+  return retargeted;
+}
+
+async function postMergePass(ctx, config, pr, dryRun) {
+  const readied = await autoReadyAfterMerge(ctx, config, pr, dryRun, true);
+  const retargeted = issueLabels(pr).has(config.labels.devflow) && !isProtectedRef(pr.head.ref, config.baseBranch)
+    ? await retargetStackedPulls(ctx, pr.head.ref, pr.base.ref, { label: config.labels.devflow, dryRun })
+    : [];
+  const list = (numbers) => numbers.map((number) => `#${number}`).join(', ') || 'none';
+  const summary = ctx.core.summary.addHeading('Devflow merge gate (post-merge)', 2);
+  summary.addRaw(`Merged PR #${pr.number}\n\n`, true);
+  summary.addList([
+    `${dryRun ? 'Would ready' : 'Readied issues'}: ${list(readied)}`,
+    `${dryRun ? 'Would retarget' : 'Retargeted PRs'}: ${list(retargeted)}`,
+  ]);
+  await summary.write();
 }
 
 async function mergeAndRetarget({ github, context, core }, config, pr, dryRun) {
@@ -467,17 +512,9 @@ async function mergeAndRetarget({ github, context, core }, config, pr, dryRun) {
   }
   await autoReadyAfterMerge({ github, context, core }, config, pr, dryRun);
   // Children stacked on this branch must move to the base before the branch disappears.
-  const children = await github.paginate(github.rest.pulls.list, {
-    owner, repo, state: 'open', base: pr.head.ref, per_page: 100,
-  });
-  for (const child of children.filter((c) => c.base.ref === pr.head.ref)) {
-    await github.rest.pulls.update({ owner, repo, pull_number: child.number, base: baseBranch });
-    core.info(`Retargeted #${child.number} to ${baseBranch}`);
-  }
+  await retargetStackedPulls({ github, context, core }, pr.head.ref, baseBranch);
   const sameRepo = pr.head.repo && pr.base.repo && pr.head.repo.full_name === pr.base.repo.full_name;
-  const protectedName =
-    pr.head.ref === baseBranch || ALWAYS_PROTECTED.includes(pr.head.ref) || pr.head.ref.startsWith('release/');
-  if (sameRepo && !protectedName) {
+  if (sameRepo && !isProtectedRef(pr.head.ref, baseBranch)) {
     await github.rest.git.deleteRef({ owner, repo, ref: `heads/${pr.head.ref}` });
   }
   return 'merged';
@@ -604,14 +641,22 @@ async function writeSummary(core, rows, dryRun) {
 module.exports = async function gate({ github, context, core, config }) {
   const ctx = { github, context, core };
   try {
+    const postMerge = context.eventName === 'pull_request' && context.payload?.action === 'closed';
+    const pr = context.payload?.pull_request;
+    if (postMerge && (pr?.merged !== true || !pr.head?.repo?.full_name ||
+        pr.head.repo.full_name !== pr.base?.repo?.full_name)) return;
     const cfg = config ? withDefaults(config) : await loadConfig(ctx);
-    if (!cfg.mergeGate.enabled) {
+    if (postMerge ? cfg.mergeGate.enabled !== true : !cfg.mergeGate.enabled) {
       core.info('Merge gate disabled (mergeGate.enabled is not true).');
       core.summary.addHeading('Devflow merge gate', 2).addRaw('Merge gate disabled.', true);
       await core.summary.write();
       return;
     }
     const dryRun = cfg.mergeGate.dryRun !== false;
+    if (postMerge) {
+      await postMergePass(ctx, cfg, pr, dryRun);
+      return;
+    }
     await sweepClosedIssues(ctx, cfg, dryRun);
     const only = Number(context.payload?.inputs?.pr) || null;
     const state = { merged: false, slotTaken: false };

@@ -6,6 +6,7 @@ name: devflow merge gate (reusable)
 # so the script is not copied into the project.
 # The caller must live on its default branch and pass DEVFLOW_GATE_TOKEN (see the README checklist).
 # Grant the PAT Issues: read/write for epic auto-readying.
+# Human merges ready eligible dependents and retarget stacked devflow PRs. The PAT needs no new permissions.
 # A private devflow repository must allow access from the calling repositories
 # (Settings > Actions > General > Access) and the caller must also pass DEVFLOW_READ_TOKEN, a token that can
 # read this repository, for the script checkout; a public one needs neither.
@@ -28,10 +29,16 @@ permissions:
 
 jobs:
   gate:
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.merged == true &&
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout default branch
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.repository.default_branch || '' }}
 
       - name: Checkout the devflow gate script
         uses: actions/checkout@v7

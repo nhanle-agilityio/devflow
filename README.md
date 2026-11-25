@@ -100,6 +100,8 @@ See the full [config schema](skills/init/templates/devflow.schema.json) and [sta
 - Behind PRs queue for an update (`deferred: waits for its turn`). The gate holds `decisions:review` for a human unless `nextTask.trustDecisions` is true.
 - The gate records `devflow-gate-merged` and clears `labels.inProgress`, `labels.review`, and `labels.blocked` from issues linked to its merges.
 
+Post-merge mode readies eligible dependent issues after human merges of same-repository PRs and retargets stacked devflow PRs when the merged PR has the devflow label and an unprotected head branch. A repository gets this mode only after upgrading its caller with `/devflow:init --upgrade` to a release that includes it.
+
 ## Safety
 
 - Claude never merges PRs. The guard blocks protected-branch pushes, destructive Git commands, and staging everything at once. [Guard rules](DESIGN.md#guard-hook-hooksguardpy)
