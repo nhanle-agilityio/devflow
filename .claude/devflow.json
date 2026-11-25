@@ -13,6 +13,9 @@
       "skills/init/templates/github/**"
     ]
   },
+  "spec": {
+    "autoReady": "low"
+  },
   "mergeGate": {
     "enabled": true,
     "dryRun": false,
