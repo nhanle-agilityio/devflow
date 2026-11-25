@@ -575,7 +575,6 @@ function readSource(result, src) {
   return true
 }
 
-// An epic stage that could not read the epic blocks the issue.
 function epicUnread(result, src) {
   return src.kind === 'epic' && !!result && result.epicRead === false
 }
@@ -1816,6 +1815,18 @@ const decided = {}
 const decidedNew = {}
 const leftovers = {}
 
+// Return the original block reason, or record the fallback once for this stage.
+function epicFallback(issue, stage, src, reason = epicReason(src)) {
+  if (nt.onQuestion !== 'decide') return reason
+  const line = `${epicReason(src)} at ${stage}; continued on the issue's criteria and Test cases`
+  const items = leftovers[issue.number] ||= []
+  if (!items.includes(line)) {
+    items.push(line)
+    issue.notes.push(line)
+    decidedNew[issue.number] = true
+  }
+}
+
 // Agents return question objects; a bare string (an older agent, a tagged reason) has no flags and so always blocks.
 function asQuestions(raw) {
   return (Array.isArray(raw) ? raw : []).map((q) => {
@@ -1949,7 +1960,9 @@ async function runFix(issue, branch, state, why, details, disputed) {
   const fix = asked.result
   if (!fix) return { ok: false, reason: `The fix agent died (${why}).` }
   if (fix.problem && mcpDown(fix.problem)) return { ok: false, mcpDown: true, reason: fix.problem }
-  if (epicUnread(fix, sourceFor(issue))) return { ok: false, reason: epicReason(sourceFor(issue)) }
+  const src = sourceFor(issue)
+  const epicBlock = epicUnread(fix, src) && epicFallback(issue, 'Implement', src)
+  if (epicBlock) return { ok: false, reason: epicBlock }
   if (asked.blocked) return Object.assign({ ok: false }, asked.blocked)
   if (fix.status === 'blocked') return { ok: false, reason: fix.blockedReason || `The fix agent reported blocked (${why}).` }
   merge(state, fix)
@@ -1970,7 +1983,9 @@ async function runQaFix(issue, branch, state, why, details) {
   const fix = asked.result
   if (!fix) return { ok: false, reason: `The QA fix agent died (${why}).` }
   if (fix.problem && mcpDown(fix.problem)) return { ok: false, mcpDown: true, reason: fix.problem }
-  if (epicUnread(fix, sourceFor(issue))) return { ok: false, reason: epicReason(sourceFor(issue)) }
+  const src = sourceFor(issue)
+  const epicBlock = epicUnread(fix, src) && epicFallback(issue, 'Implement', src)
+  if (epicBlock) return { ok: false, reason: epicBlock }
   if (asked.blocked) return Object.assign({ ok: false }, asked.blocked)
   if (fix.status === 'blocked') return { ok: false, reason: fix.blockedReason || `The QA fix agent reported blocked (${why}).` }
   merge(state, fix)
@@ -2041,16 +2056,20 @@ let agentCalls = 0
 const budgetReached = () => nt.maxAgentCalls > 0 && agentCalls >= nt.maxAgentCalls
 
 async function callAgent(prompt, options, receive, opts) {
-  // Reserve the call before awaiting so parallel QA and Dev share the same limit.
-  if (budgetReached()) throw new AgentBudgetExceeded(agentCalls)
-  agentCalls++
-  try {
-    const result = await agent(prompt, options)
-    if (receive) receive(result)
-    return result
-  } finally {
-    // Ship is the last call: once it has opened the PR, never turn the issue into a block.
-    if (!(opts && opts.last) && budgetReached()) throw new AgentBudgetExceeded(agentCalls)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    // Reserve each attempt before awaiting so parallel QA and Dev share the same limit.
+    if (budgetReached()) throw new AgentBudgetExceeded(agentCalls)
+    agentCalls++
+    try {
+      const result = await agent(prompt, options)
+      if (result != null || attempt === 1) {
+        if (receive) receive(result)
+        return result
+      }
+    } finally {
+      // Ship is the last call: once it has opened the PR, never turn the issue into a block.
+      if (!(opts && opts.last) && budgetReached()) throw new AgentBudgetExceeded(agentCalls)
+    }
   }
 }
 
@@ -2274,7 +2293,8 @@ Make no other changes. Return ok=true when those comments are gone.`, {
       plan = planAsked.result
       if (!plan) return block('Plan', 'The plan agent died.')
       if (down(plan)) return block('Plan', plan.problem)
-      if (epicUnread(plan, srcPlan)) return block('Plan', epicReason(srcPlan))
+      const planEpicBlock = epicUnread(plan, srcPlan) && epicFallback(issue, 'Plan', srcPlan)
+      if (planEpicBlock) return block('Plan', planEpicBlock)
       // The plan read the acceptance criteria from GitHub; the Select copy's count is a cross-check only.
       if (!Number.isInteger(plan.acceptanceCriteria)) {
         notes.push('plan did not report the acceptance criteria count')
@@ -2291,7 +2311,8 @@ Make no other changes. Return ok=true when those comments are gone.`, {
         return block('Plan', 'The plan agent reported blocked without questions.')
       }
       if (specPathForPlan && !readSpec(plan, specPathForPlan)) return block('Plan', `Plan did not read the spec ${specPathForPlan}`)
-      if (srcPlan.kind === 'epic' && !readSource(plan, srcPlan)) return block('Plan', `Plan did not read epic #${srcPlan.n}`)
+      const planReadBlock = srcPlan.kind === 'epic' && !readSource(plan, srcPlan) && epicFallback(issue, 'Plan', srcPlan, `Plan did not read epic #${srcPlan.n}`)
+      if (planReadBlock) return block('Plan', planReadBlock)
     }
 
     state.guide = guideFor(plan)
@@ -2340,15 +2361,18 @@ Make no other changes. Return ok=true when those comments are gone.`, {
       if (!dev) return block('Implement', 'The implement agent died.')
       if (down(qa)) return block('Implement', qa.problem)
       if (down(dev)) return block('Implement', dev.problem)
-      if (epicUnread(qa, srcPlan)) return block('Implement', epicReason(srcPlan))
-      if (epicUnread(dev, srcPlan)) return block('Implement', epicReason(srcPlan))
+      const qaEpicBlock = epicUnread(qa, srcPlan) && epicFallback(issue, 'Implement', srcPlan)
+      if (qaEpicBlock) return block('Implement', qaEpicBlock)
+      const devEpicBlock = epicUnread(dev, srcPlan) && epicFallback(issue, 'Implement', srcPlan)
+      if (devEpicBlock) return block('Implement', devEpicBlock)
       if (pairAsked.blocked) return block('Implement', pairAsked.blocked.reason, pairAsked.blocked.questions)
       const qaOut = outside(qa.filesChanged, own.qaFiles)
       if (qaOut.length) return block('Implement', `The QA agent changed files outside its own: ${qaOut.join(', ')}.`)
       const devIn = overlap(dev.filesChanged, own.qaFiles)
       if (devIn.length) return block('Implement', `The dev agent changed QA test files: ${devIn.join(', ')}.`)
       if (specPathForPlan && !readSpec(qa, specPathForPlan)) return block('Implement', `The QA agent did not read the spec ${specPathForPlan}`)
-      if (srcPlan.kind === 'epic' && !readSource(qa, srcPlan)) return block('Implement', `The QA agent did not read epic #${srcPlan.n}`)
+      const qaReadBlock = srcPlan.kind === 'epic' && !readSource(qa, srcPlan) && epicFallback(issue, 'Implement', srcPlan, `The QA agent did not read epic #${srcPlan.n}`)
+      if (qaReadBlock) return block('Implement', qaReadBlock)
 
       const committed = commitResult(await callAgent(commitPrompt(issue, branch, qa, dev, state.guide), {
         label: `commit #${issue.number}`,
@@ -2381,7 +2405,8 @@ Make no other changes. Return ok=true when those comments are gone.`, {
       impl = implAsked.result
       if (!impl) return block('Implement', 'The implement agent died.')
       if (down(impl)) return block('Implement', impl.problem)
-      if (epicUnread(impl, srcAll)) return block('Implement', epicReason(srcAll))
+      const implEpicBlock = epicUnread(impl, srcAll) && epicFallback(issue, 'Implement', srcAll)
+      if (implEpicBlock) return block('Implement', implEpicBlock)
       merge(state, impl)
       if (implAsked.blocked) return block('Implement', implAsked.blocked.reason, implAsked.blocked.questions)
       if (impl.status === 'blocked') {
@@ -2390,9 +2415,9 @@ Make no other changes. Return ok=true when those comments are gone.`, {
       }
     }
 
-    // The spec (or the epic) must have been read: one corrective fix, then block.
+    // Give an unconfirmed source read one corrective fix before handling the miss.
     const specPath = specPathFor(issue)
-    if (srcAll.kind === 'epic' && !readSource(impl, srcAll)) {
+    if (srcAll.kind === 'epic' && !epicUnread(impl, srcAll) && !readSource(impl, srcAll)) {
       log(`#${issue.number}: Implement did not report reading epic #${srcAll.n}; running one corrective fix.`)
       const fix = await runFix(
         issue,
@@ -2402,7 +2427,8 @@ Make no other changes. Return ok=true when those comments are gone.`, {
         `Read epic #${srcAll.n} (GitHub MCP issue_read, method get), compare its shared design and decisions and the issue's criteria with the change on this branch, and fix any difference. Return specRead = "epic #${srcAll.n}" and epicRead.`,
       )
       if (!fix.ok) return block('Implement', fix.reason)
-      if (!readSource(fix.result, srcAll)) return block('Implement', `Implement did not read epic #${srcAll.n}`)
+      const fixReadBlock = !readSource(fix.result, srcAll) && epicFallback(issue, 'Implement', srcAll, `Implement did not read epic #${srcAll.n}`)
+      if (fixReadBlock) return block('Implement', fixReadBlock)
     }
     if (specPath && !readSpec(impl, specPath)) {
       log(`#${issue.number}: Implement did not report reading ${specPath}; running one corrective fix.`)
@@ -2503,7 +2529,7 @@ Make no other changes. Return ok=true when those comments are gone.`, {
       // The reviewer agent reads the issue with gh; without gh, or once it could not read the issue, the default agent reads it with the MCP server.
       if (nt.reviewerAgent && ghCli && !reviewerMissing && !reviewerCannotRead) {
         try {
-          review = await callAgent(reviewPrompt(issue, branch, state, round, hits, true), Object.assign({ agentType: nt.reviewerAgent }, reviewOpts))
+          review = (await callAgent(reviewPrompt(issue, branch, state, round, hits, true), Object.assign({ agentType: nt.reviewerAgent }, reviewOpts))) ?? null
         } catch (e) {
           if (e instanceof AgentBudgetExceeded) throw e
           reviewerMissing = `reviewer agent ${nt.reviewerAgent} unavailable (${e && e.message ? e.message : e}); reviewed with the default agent`
@@ -2520,12 +2546,12 @@ Make no other changes. Return ok=true when those comments are gone.`, {
         const why = !ghCli ? 'gh is not installed' : reviewerCannotRead ? 'the reviewer could not read the issue' : ''
         if (why && notes.indexOf(`review ran on the default agent: ${why}`) === -1) notes.push(`review ran on the default agent: ${why}`)
         review = await callAgent(reviewPrompt(issue, branch, state, round, hits, false), reviewOpts)
-        if (review && !down(review) && epicUnread(review, srcAll)) return block('Review', epicReason(srcAll))
-        if (review && !down(review) && review.issueRead === false) return block('Review', 'the review could not read the issue')
       }
       if (!review) return block('Review', 'The review agent died.')
       if (down(review)) return block('Review', review.problem)
-      if (epicUnread(review, srcAll)) return block('Review', epicReason(srcAll))
+      const reviewEpicBlock = epicUnread(review, srcAll) && epicFallback(issue, 'Review', srcAll)
+      if (reviewEpicBlock) return block('Review', reviewEpicBlock)
+      if (review.issueRead === false) return block('Review', 'the review could not read the issue')
       if (Array.isArray(review.questions) && review.questions.length) {
         const c = await classifyAll(issue, branch, review.questions)
         if (!c.allDecide) return block('Review', c.reason, c.lines)
@@ -2564,7 +2590,8 @@ Make no other changes. Return ok=true when those comments are gone.`, {
         if (nt.onQuestion !== 'decide' || blocking.some((f) => f.severity !== 'warning')) return block('Review', stillOpen)
         const c = await classifyAll(issue, branch, blocking.map((f) => warningQuestion(f, nt.maxReviewRounds)))
         if (!c.allDecide) return block('Review', stillOpen)
-        leftovers[issue.number] = blocking.map((f) => `${f.file}:${f.line}: ${f.problem} (shipped open after ${nt.maxReviewRounds} fix round(s); ship with the warning)`)
+        const items = leftovers[issue.number] ||= []
+        items.push(...blocking.map((f) => `${f.file}:${f.line}: ${f.problem} (shipped open after ${nt.maxReviewRounds} fix round(s); ship with the warning)`))
         decidedNew[issue.number] = true
         notes.push(`review warning(s) left open after ${nt.maxReviewRounds} round(s) were shipped as decisions: ${blocking.map((f) => `${f.file}:${f.line}`).join(', ')}`)
         log(`#${issue.number}: ${blocking.length} review warning(s) still open after ${nt.maxReviewRounds} round(s); shipping with decisions:review.`)
