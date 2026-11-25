@@ -53,11 +53,11 @@ test('M5.8 gives Ship both CLI commands and a JSON payload with the exact review
   assert.deepEqual(payload.closes, [7]);
   assert.deepEqual(payload.reviewTrace, [
     'Review: pass after 1 round(s) - local devflow reviewer in this run (GitHub review: off)',
-    'Path: full',
+    'Path: short (Plan and Verify skipped)',
     'Verify: not needed',
   ]);
   assert.equal(payload.runMarker,
-    '<!-- devflow-run {"path":"full","reviewRounds":1,"claimedAt":"2026-01-01T00:00:05Z"} -->');
+    '<!-- devflow-run {"path":"short","reviewRounds":1,"claimedAt":"2026-01-01T00:00:05Z"} -->');
 
   assert.doesNotMatch(ship, /\b(?:write the PR body with sections|fill every section from the data|rewrite its title and body from the data)\b/i);
   assert.doesNotMatch(ship, /\bBody as described\b|\bgit push -u\b/);
