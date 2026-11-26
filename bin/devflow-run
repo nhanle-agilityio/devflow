@@ -4,11 +4,14 @@
 // Usage: devflow-run check [--config .claude/devflow.json]
 //        devflow-run branch --issue <n> --name <branch> --from <ref> [--parents <ref,...>] [--remote origin]
 //        devflow-run restore --to <branch>
-//        devflow-run commit < payload.json
+//        devflow-run commit < payload.json   (paths may be absolute under the repository root; optional testLock
+//                                             names a lock held during the red check)
 //        devflow-run push --branch <branch> [--remote origin]
 //        devflow-run pr-body [--template <path>] < payload.json
 //        devflow-run lock acquire --name <name> [--wait <seconds>]
 //        devflow-run lock release --name <name>
+//        devflow-run park --issue <n> --stage <stage>   (stashes uncommitted work as "devflow #<n> blocked at <stage>")
+// check: a check with "lock": "<name>" holds that lock while it runs.
 // Prints one JSON object. Exit 1 means the operation could not run.
 
 const { spawn, spawnSync } = require('node:child_process');
@@ -21,6 +24,7 @@ const { parseArgs } = require('node:util');
 
 const CONFIG_PATH = '.claude/devflow.json';
 const DEFAULT_TIMEOUT = 600;
+const LOCK_NAME = /^[a-zA-Z0-9_-]+$/;
 
 function readConfig(file) {
   try {
@@ -137,6 +141,29 @@ function dirtyFiles() {
     if (/[RC]/.test(entry.slice(0, 2))) files.add(entries[++i]);
   }
   return [...files];
+}
+
+let topLevel;
+function repoPath(file) {
+  let value = file.trim();
+  if (path.isAbsolute(value)) {
+    topLevel ??= fs.realpathSync(git('rev-parse', '--show-toplevel').trimEnd());
+    let absolute = path.resolve(value);
+    try {
+      absolute = fs.realpathSync(absolute);
+    } catch {
+      const dir = path.dirname(absolute);
+      try {
+        absolute = path.join(fs.realpathSync(dir), path.basename(absolute));
+      } catch {
+        // keep the path as given
+      }
+    }
+    const relative = path.relative(topLevel, absolute);
+    if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) value = relative.split(path.sep).join('/');
+  }
+  while (value.startsWith('./')) value = value.slice(2);
+  return value;
 }
 
 function commitFor(ref) {
@@ -345,21 +372,22 @@ async function runCommit() {
   const branch = git('symbolic-ref', 'HEAD').trimEnd().replace(/^refs\/heads\//, '');
   if (protectedName(branch)) throw new Error(`Refusing protected branch ${branch}`);
 
-  const { scope, type, title, qaFiles, devFiles, separate, testCommand, setup } = JSON.parse(fs.readFileSync(0, 'utf8'));
+  const payload = JSON.parse(fs.readFileSync(0, 'utf8'));
+  const { scope, type, title, qaFiles: rawQa, devFiles: rawDev, separate, testCommand, setup, testLock } = payload;
   const nonEmptyString = (value) => typeof value === 'string' && !!value.trim();
   const stringList = (value) => Array.isArray(value) && value.every(nonEmptyString);
-  if (![scope, type, title, testCommand].every(nonEmptyString) || ![qaFiles, devFiles, setup].every(stringList) ||
-      typeof separate !== 'boolean') {
+  if (![scope, type, title, testCommand].every(nonEmptyString) || ![rawQa, rawDev, setup].every(stringList) ||
+      typeof separate !== 'boolean' || (testLock !== undefined && (typeof testLock !== 'string' || !LOCK_NAME.test(testLock)))) {
     throw new Error('Invalid commit payload');
   }
 
+  const qaFiles = rawQa.map(repoPath);
+  const devFiles = rawDev.map(repoPath);
   const listed = new Set([...qaFiles, ...devFiles]);
   const changed = new Set(dirtyFiles());
-  const result = {
-    ok: true, commits: [], leftover: [...changed].filter((file) => !listed.has(file)),
-    redConfirmed: false, redOutput: '',
-  };
-  if (result.leftover.length) return result;
+  const unlisted = [...changed].filter((file) => !listed.has(file)).sort();
+  devFiles.push(...unlisted);
+  const result = { ok: true, commits: [], leftover: [], unlisted, redConfirmed: false, redOutput: '' };
 
   function commit(files, subject) {
     const paths = [...new Set(files)].filter((file) => changed.has(file));
@@ -379,32 +407,43 @@ async function runCommit() {
   const testSha = commit(qaFiles, `test(${scope}): tests for ${title}`);
   commit(separate ? devFiles.filter((file) => !isDoc(file)) : devFiles, `${type}(${scope}): ${title}`);
   if (separate) commit(devFiles.filter(isDoc), `docs(${scope}): docs for ${title}`);
-  if (testSha) Object.assign(result, await checkRed(testSha, setup, testCommand));
+  if (testSha) {
+    const red = await withLock(testLock, DEFAULT_TIMEOUT, () => checkRed(testSha, setup, testCommand));
+    if (red.busy) throw new Error(`Red check lock "${testLock}" was busy (held since ${red.heldSince})`);
+    Object.assign(result, red);
+  }
   return result;
 }
 
 async function runLock([action, ...args]) {
   if (action !== 'acquire' && action !== 'release') throw new Error('Expected lock acquire or release');
   const { name, wait = String(DEFAULT_TIMEOUT) } = optionsFor(args, action === 'acquire' ? ['name', 'wait'] : ['name']);
-  if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) throw new Error('Invalid lock name');
+  if (!name || !LOCK_NAME.test(name)) throw new Error('Invalid lock name');
   if (!/^\d+$/.test(wait) || !Number.isSafeInteger(Number(wait) * 1000)) {
     throw new Error('Expected --wait in non-negative whole seconds');
   }
-  const lock = path.join(git('rev-parse', '--git-common-dir').trimEnd(), `devflow-${name}.lock`);
-
-  function removeLock() {
-    try {
-      fs.rmdirSync(lock);
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-    }
-  }
   if (action === 'release') {
-    removeLock();
+    releaseLock(name);
     return { ok: true, acquired: false };
   }
+  return acquireLock(name, Number(wait));
+}
 
-  const deadline = performance.now() + Number(wait) * 1000;
+function lockPath(name) {
+  return path.join(git('rev-parse', '--git-common-dir').trimEnd(), `devflow-${name}.lock`);
+}
+
+function releaseLock(name) {
+  try {
+    fs.rmdirSync(lockPath(name));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
+
+async function acquireLock(name, waitSeconds) {
+  const lock = lockPath(name);
+  const deadline = performance.now() + waitSeconds * 1000;
   while (true) {
     try {
       fs.mkdirSync(lock);
@@ -416,13 +455,49 @@ async function runLock([action, ...args]) {
     if (!held) continue;
     if (!held.isDirectory()) throw new Error(`Lock path is not a directory: ${lock}`);
     if (Date.now() - held.mtimeMs > 30 * 60 * 1000) {
-      removeLock();
+      releaseLock(name);
       continue;
     }
     const remaining = deadline - performance.now();
     if (remaining <= 0) return { ok: true, acquired: false, heldSince: held.mtime.toISOString() };
-    await delay(Math.min(10000, remaining));
+    await delay(Math.min(1000, remaining));
   }
+}
+
+async function withLock(name, waitSeconds, fn) {
+  if (!name) return fn();
+  const lock = await acquireLock(name, waitSeconds);
+  if (!lock.acquired) return { busy: true, heldSince: lock.heldSince };
+  try {
+    return await fn();
+  } finally {
+    releaseLock(name);
+  }
+}
+
+async function runLockedCheck(check) {
+  const { name, run: command, lock, timeoutSeconds = DEFAULT_TIMEOUT } = check;
+  const start = performance.now();
+  const result = await withLock(lock, timeoutSeconds, () => runCheck(check));
+  if (result.busy) {
+    return {
+      name, command, lock, exitCode: null, timedOut: true, durationMs: Math.round(performance.now() - start),
+      outputTail: `Lock "${lock}" was busy (held since ${result.heldSince}) for ${timeoutSeconds} seconds; the check did not run.`,
+    };
+  }
+  return lock ? { ...result, lock } : result;
+}
+
+function runPark(args) {
+  const { issue, stage } = optionsFor(args, ['issue', 'stage']);
+  if (!/^[1-9]\d*$/.test(issue ?? '') || !Number.isSafeInteger(Number(issue))) {
+    throw new Error('Expected --issue as a positive integer');
+  }
+  if (!stage || !stage.trim()) throw new Error('Expected --stage');
+  const message = `devflow #${issue} blocked at ${stage.trim()}`;
+  if (!git('status', '--porcelain').trim()) return { ok: true, stashed: false, message };
+  git('stash', 'push', '-u', '-m', message);
+  return { ok: true, stashed: true, message };
 }
 
 async function main([subcommand, ...options]) {
@@ -432,19 +507,22 @@ async function main([subcommand, ...options]) {
   if (subcommand === 'restore') return runRestore(options);
   if (subcommand === 'push') return runPush(options);
   if (subcommand === 'pr-body') return runPrBody(options);
+  if (subcommand === 'park') return runPark(options);
   if (subcommand !== 'check' || (options.length && (options.length !== 2 || options[0] !== '--config' || !options[1]))) {
     throw new Error('Usage: devflow-run check [--config .claude/devflow.json]');
   }
   const { checks } = readConfig(options[1] ?? CONFIG_PATH);
   if (!Array.isArray(checks) || !checks.length || checks.some((check) =>
     !check || typeof check.name !== 'string' || !check.name.trim() || typeof check.run !== 'string' || !check.run.trim() ||
-    (check.timeoutSeconds !== undefined && (!Number.isInteger(check.timeoutSeconds) || check.timeoutSeconds < 1))
+    (check.timeoutSeconds !== undefined && (!Number.isInteger(check.timeoutSeconds) || check.timeoutSeconds < 1)) ||
+    (check.lock !== undefined && (typeof check.lock !== 'string' || !LOCK_NAME.test(check.lock)))
   )) {
-    throw new Error('Invalid config: expected checks with a name, command and optional positive integer timeoutSeconds');
+    throw new Error('Invalid config: expected checks with a name, command, optional positive integer timeoutSeconds and ' +
+      'optional lock name (letters, digits, _ and -)');
   }
 
   const results = [];
-  for (const check of checks) results.push(await runCheck(check));
+  for (const check of checks) results.push(await runLockedCheck(check));
   return { ok: true, passed: results.every(({ exitCode, timedOut }) => exitCode === 0 && !timedOut), checks: results };
 }
 

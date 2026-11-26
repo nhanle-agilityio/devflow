@@ -86,7 +86,7 @@ The Next column tells you what to do after each issue. The `devflow-claim` marke
 
 | Key | What it controls |
 | --- | --- |
-| `github`, `baseBranch`, `checks` | Required settings for the repository, target branch, and local checks. |
+| `github`, `baseBranch`, `checks` | Required settings for the repository, target branch, and local checks. A check's optional `lock` name makes lanes that share a local service (one database) run it one at a time. |
 | `spec.autoReady`, `labels.epicApproved` | Ready eligible tasks on approved epics (`epic:approved`). Choose `off` (default), `low`, or `all`. |
 | `review.github`, `mergeGate.requiredChecks` | Enable GitHub review and name the checks that must pass. Include `devflow/review` when GitHub review is on. |
 | `nextTask.onQuestion`, `nextTask.trustDecisions` | Choose whether runs take safe recommendations and whether the gate can merge those PRs. |

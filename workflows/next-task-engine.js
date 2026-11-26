@@ -19,7 +19,7 @@ export const meta = {
 
 // Test hook: the pure helpers below are function declarations (hoisted), so tests get them without a run.
 // They take every input as a parameter and never touch the run state.
-if (args && args.exports === true) return { branchNameFor, parseDiff, scanWeakenedChecks, checkConfigGlobs, globToRegExp, priorityRank, orderIssues, isFixIssue, pathFor, hasHttpOrE2eRow, epicFor, classifyQuestion, questionsSchema, decisionLine, addDecisions, questionLine, warningQuestion, pickClaimWinner, nextStep }
+if (args && args.exports === true) return { branchNameFor, parseDiff, outside, overlap, scanWeakenedChecks, checkConfigGlobs, globToRegExp, priorityRank, orderIssues, isFixIssue, pathFor, hasHttpOrE2eRow, epicFor, classifyQuestion, questionsSchema, decisionLine, addDecisions, questionLine, warningQuestion, pickClaimWinner, nextStep }
 
 // Run through /devflow:next-task only: it does the preflight and builds args. Calling this workflow
 // directly (e.g. /devflow:next-task-engine) arrives without args, so stop with a clear message.
@@ -218,8 +218,8 @@ const PLAN_SCHEMA = {
     status: { enum: ['ready', 'blocked'] },
     plan: { type: 'string', description: 'The plan in markdown, as posted on the issue' },
     questions: questionsSchema('Open questions the spec and issue do not answer; tag BA or QA'),
-    qaFiles: { type: 'array', items: { type: 'string' }, description: 'Test files that hold the tests for the Test cases rows (owned by the QA agent)' },
-    devFiles: { type: 'array', items: { type: 'string' }, description: 'Files the implementation changes (owned by the dev agent)' },
+    qaFiles: { type: 'array', items: { type: 'string' }, description: 'Test files that hold the tests for the Test cases rows (owned by the QA agent), as repository-relative paths' },
+    devFiles: { type: 'array', items: { type: 'string' }, description: 'Files the implementation changes (owned by the dev agent), as repository-relative paths' },
     specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
     epicRead: { type: 'boolean', description: 'Epic issues only: false when the epic named by the issue\'s Epic: line is missing, closed, a pull request or could not be read; true when it was read' },
     httpOrE2eRows: { type: 'boolean', description: 'True when the issue\'s Test cases table has a row with Level http or e2e' },
@@ -237,7 +237,7 @@ const IMPLEMENT_SCHEMA = {
     status: { enum: ['done', 'blocked'] },
     summary: { type: 'string' },
     commits: { type: 'array', items: { type: 'string' }, description: 'One "<sha> <message>" per commit made in this stage' },
-    filesChanged: { type: 'array', items: { type: 'string' } },
+    filesChanged: { type: 'array', items: { type: 'string' }, description: 'Files changed in this stage, as repository-relative paths' },
     assumptions: { type: 'array', items: { type: 'string' } },
     outOfScope: { type: 'array', items: { type: 'string' } },
     rootCause: {
@@ -296,7 +296,7 @@ const QA_SCHEMA = {
         required: ['rowId', 'test'],
       },
     },
-    filesChanged: { type: 'array', items: { type: 'string' } },
+    filesChanged: { type: 'array', items: { type: 'string' }, description: 'Files changed in this stage, as repository-relative paths' },
     questions: questionsSchema('Questions that block a test; tag QA'),
     problem: { type: 'string', description: `Report starting with exactly "${MCP_DOWN}" when GitHub cannot be reached; otherwise omit` },
     specRead: { type: 'string', description: 'The spec path that was read, or "none" when the issue links no spec' },
@@ -322,6 +322,7 @@ const COMMIT_SCHEMA = {
       },
     },
     leftover: { type: 'array', items: { type: 'string' } },
+    unlisted: { type: 'array', items: { type: 'string' } },
     redConfirmed: { type: 'boolean' },
     redOutput: { type: 'string' },
     error: { type: 'string' },
@@ -340,6 +341,7 @@ function commitResult(result) {
     commits: result.commits.map((commit) => typeof commit === 'string' ? commit : `${commit.sha} ${commit.message}`),
     failedFirst: result.redConfirmed ?? result.failedFirst,
     failureNote: result.redOutput ?? result.failureNote,
+    unlisted: result.unlisted || [],
   }
 }
 
@@ -635,17 +637,36 @@ function answersNote(issue) {
 }
 const qEnd = (issue) => `\n\n${QUESTION_NOTE}${answersNote(issue)}`
 
-// Files in both lists. Paths are compared as written, without a leading "./".
+// Paths are compared without a leading "./". An absolute path equals a relative one when it ends with "/" + the
+// relative path (agents sometimes report absolute paths); a match is returned in its repository-relative form.
+function normPath(f) {
+  return String(f).trim().replace(/^(\.\/)+/, '')
+}
+
+function samePath(x, y) {
+  if (x === y) return x
+  if (x.startsWith('/') && !y.startsWith('/') && x.endsWith('/' + y)) return y
+  if (y.startsWith('/') && !x.startsWith('/') && y.endsWith('/' + x)) return x
+  return null
+}
+
+function matchPath(f, list) {
+  for (const g of list) {
+    const m = samePath(f, g)
+    if (m !== null) return m
+  }
+  return null
+}
+
+// Files in both lists.
 function overlap(a, b) {
-  const norm = (f) => String(f).trim().replace(/^\.\//, '')
-  const set = new Set((a || []).map(norm))
-  return Array.from(new Set((b || []).map(norm).filter((f) => set.has(f))))
+  const list = (a || []).map(normPath)
+  return Array.from(new Set((b || []).map(normPath).map((f) => matchPath(f, list)).filter((f) => f !== null)))
 }
 
 function outside(files, allowed) {
-  const norm = (f) => String(f).trim().replace(/^\.\//, '')
-  const set = new Set((allowed || []).map(norm))
-  return (files || []).map(norm).filter((f) => !set.has(f))
+  const list = (allowed || []).map(normPath)
+  return (files || []).map(normPath).filter((f) => matchPath(f, list) === null)
 }
 
 // True when the issue body has a Test cases table row whose Level cell is "http" or "e2e".
@@ -1211,6 +1232,13 @@ function runCommand(subcommand, options) {
   return `node "${bin}" ${subcommand} ${options.map(shellWord).join(' ')}`
 }
 
+// Checks that declare a lock share a resource (for example one local database) with other lanes.
+function lockNote() {
+  const locked = (cfg.checks || []).filter((c) => c && c.lock)
+  if (!locked.length) return ''
+  return `\n\nChecks with a lock: ${locked.map((c) => `${c.name} (lock "${c.lock}")`).join(', ')}: run them only through ${runCommand('check', [])} so the lock is held; never reset or migrate a shared service (database, emulator) by hand.`
+}
+
 function branchPrompt(issue, computed) {
   const parents = parentsOf(issue)
   const parent = parents.length === 1 ? parents[0] : null
@@ -1342,7 +1370,7 @@ Instructions:
 6. If a requirement is ambiguous in a way that changes behaviour or a contract and the spec does not answer it, do NOT guess: return status "blocked" with the question in "questions" (blockedReason repeats it). For minor ambiguity, decide, and record the decision in "assumptions".
 7. Do not push, open a PR, or touch GitHub labels.
 Return: status, a short summary, the commits you made ("<sha> <message>"), files changed, assumptions, outOfScope, touchesUi (true when the diff against ${parentRef} changes user-facing UI), ${readReturn(src)}, and manualChecks ([] when there are no such rows).`}
-${COMMIT_STRUCTURE_NOTE}${qEnd(issue)}`
+${lockNote()}${COMMIT_STRUCTURE_NOTE}${qEnd(issue)}`
 }
 
 // Changelog fragments (changelog.fragmentsDir): the entry goes into <fragmentsDir>/<issue>.md, never into the changelog file.
@@ -1428,7 +1456,7 @@ Instructions:
    No test may depend on branch state: not on a diff against the base branch, the current branch name, unpushed commits or the current date. A row that can only be checked that way is not written as a test: leave it out and report it in the result as a review check, not a test.
 5. Do NOT commit, stage or stash anything: the workflow commits your tests first. The tests are expected to fail until the change exists; you may run them to check they are collected and fail for the right reason (a missing behaviour, not a syntax or import error of your own).
 6. If a row cannot be tested as written (no clear expected result, contradicts the acceptance criteria or another row), do not invent the expectation: add a question starting with "[QA] " and return status "blocked". Otherwise questions = [].
-Return status, tests (row id and test name), filesChanged (the files you created or edited), questions, and ${readReturn(src)}.${qEnd(issue)}`
+Return status, tests (row id and test name), filesChanged (the files you created or edited), questions, and ${readReturn(src)}.${lockNote()}${qEnd(issue)}`
 }
 
 // What the plan agent read from CLAUDE.md and the plan: the commit rules, whether code, tests and docs go in
@@ -1464,6 +1492,7 @@ function commitPrompt(issue, branch, qa, dev, guide) {
     testCommand: testCheck.run,
     setup: cfg.worktree?.setup || [],
   }
+  if (testCheck.lock) payload.testLock = testCheck.lock
   const grouping = payload.separate
     ? 'The runner creates the QA test commit, then the code commit, then docs(<scope>) for repository-root `*.md`, `docs/**` and changelog fragment files (never `skills/**` or `agents/**`). It will skip the docs commit when there are no changed docs files.'
     : 'The runner creates test(<scope>) first and then feat|fix|chore|refactor(<scope>) for the dev files.'
@@ -1499,7 +1528,7 @@ Instructions:
 - Decide for each problem whether the test is wrong or right. The contract is the issue, its acceptance criteria, its Test cases table and its Decisions, not the current code. If the test is wrong, fix it and keep it traceable to its row id. If the test is right (the code is wrong), do not change the test: return positions with {finding: <id>, position: "test is right"} for that problem; the dev fix agent then gets it. Never weaken or delete a test to make it pass.
 - Follow the project's CLAUDE.md. Commit your changes with Conventional Commits in English, scope "${scopeFor(issue)}", staging files by name. Never rewrite existing commits. Do not push. Make no commit when you change nothing.
 - If you cannot decide without a decision the spec does not make, return status "blocked" with the question in "questions" (tag QA) and blockedReason. ${DECISIONS_NOTE}
-Return the same structure as the implement stage; "commits" lists only the commits you made now. ${src.kind === 'epic' ? `In "specRead" put "epic #${src.n}" and in "epicRead" whether you read it: ${epicStep(src.n, EPIC_MCP)}` : `In "specRead" put the spec path if you read the spec, otherwise "none".`}${qEnd(issue)}`
+Return the same structure as the implement stage; "commits" lists only the commits you made now. ${src.kind === 'epic' ? `In "specRead" put "epic #${src.n}" and in "epicRead" whether you read it: ${epicStep(src.n, EPIC_MCP)}` : `In "specRead" put the spec path if you read the spec, otherwise "none".`}${lockNote()}${qEnd(issue)}`
 }
 
 function checkPrompt() {
@@ -1533,7 +1562,7 @@ Instructions:
 - Commit with Conventional Commits in English, scope "${scopeFor(issue)}", staging files by name. Add new commits only; never rewrite existing ones. Do not push.${guide && guide.separate ? ` Keep code and docs apart: the fix in one commit, then the changed repository-root \`*.md\` files, \`docs/**\` and changelog fragment files in a \`docs(${scopeFor(issue)}): ...\` commit (never \`skills/**\` or \`agents/**\`); skip the docs commit when there are none.` : ''}
 - If you cannot fix it without a decision the spec does not make, return status "blocked" with the question in "questions" and blockedReason. ${DECISIONS_NOTE}
 When a problem says an out-of-scope item is required by the acceptance criteria, implement it (test first) and copy that item exactly into "outOfScopeDone".
-Return the same structure as the implement stage; "commits" lists only the commits you made now. ${src.kind === 'epic' ? `In "specRead" put "epic #${src.n}" and in "epicRead" whether you read it: ${epicStep(src.n, EPIC_MCP)}` : `In "specRead" put the spec path if you read the spec (for example with \`git show ${baseRef}:<path>\`), otherwise "none".`}${qEnd(issue)}`
+Return the same structure as the implement stage; "commits" lists only the commits you made now. ${src.kind === 'epic' ? `In "specRead" put "epic #${src.n}" and in "epicRead" whether you read it: ${epicStep(src.n, EPIC_MCP)}` : `In "specRead" put the spec path if you read the spec (for example with \`git show ${baseRef}:<path>\`), otherwise "none".`}${lockNote()}${qEnd(issue)}`
 }
 
 function verifyPrompt(issue, branch, impl) {
@@ -1763,7 +1792,7 @@ Reason / question: ${reason}
 Branch: ${branch || '(none created)'}
 
 Steps, in order:
-1. Do not make any more code changes or commits. If uncommitted changes exist, leave them; do not discard anything.
+1. Do not make any more code changes or commits. Run \`${runCommand('park', ['--issue', issue.number, '--stage', stage])}\` from the repository root: it stashes uncommitted changes (if any) under a named stash so the next issue starts on a clean tree; nothing is discarded. When it reports stashed=true, the blocked comment in step 3 must end with a line naming the stash message it printed and how to restore it: run \`git stash list\` to find that stash, then \`git stash apply <stash>\` on the issue branch${branch ? ` ${branch}` : ''}.
 2. ${branch ? `If \`git log ${parentRefFor(issue)}..${branch} --oneline\` shows commits, push the branch so work is not lost: \`git push -u ${remote} ${branch}\` (never force, never push to ${base}).` : 'No branch to push.'}
 ${questionsStep}
 4. On the issue add the label "${labels.blocked}" and remove "${labels.inProgress}" (keep other labels). Delete the comment(s) whose body contains "<!-- devflow-claim id=${claimId} -->" (this run's claim; a later run claims again).${assignedByRun === true ? ' Also remove the authenticated user from the assignees of the issue (this run added them); do not remove any other assignee.' : ''}
@@ -2435,9 +2464,10 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
       } else {
         notes.push('QA and dev ran in parallel; the test commit came first and failed without the change')
       }
+      if (committed.unlisted.length) notes.push(`changed files no agent listed were committed with the code: ${committed.unlisted.join(', ')}`)
       impl = Object.assign({}, dev, {
         commits: committed.commits,
-        filesChanged: Array.from(new Set((qa.filesChanged || []).concat(dev.filesChanged || []))),
+        filesChanged: Array.from(new Set((qa.filesChanged || []).concat(dev.filesChanged || [], committed.unlisted))),
       })
       state.tests = (qa.tests || []).map(({ rowId, test }) => `${rowId} ${test}`)
       if (committed.failedFirst) state.tests.push('The QA test commit ran first and failed before the implementation.')
@@ -2779,10 +2809,6 @@ for (const issue of queue) {
   // Chain: an issue that did not ship does not stop the lane. The next one stacks on the last issue that
   // shipped, or starts from the base; only a real "Depends on" the failed issue skips it (resolved below).
   const laneNotes = []
-  if (chain && previous && previous.status !== 'pr') {
-    laneNotes.push(`the lane continued although #${previous.number} did not ship (${previous.status}); ${lastShipped ? `stacked on #${lastShipped}` : `started from ${base}`}`)
-    log(`#${issue.number}: lane continues although #${previous.number} did not ship (${previous.status}); ${lastShipped ? `stacking on #${lastShipped}` : `starting from ${base}`}.`)
-  }
   // Resolve parents selected in this run from the PRs they shipped.
   const resolved = []
   let unshipped = null
@@ -2810,6 +2836,13 @@ for (const issue of queue) {
     log(`Skipped #${issue.number}: ${why}`)
     report.push({ issue: issue.number, status: 'skipped', reason: why })
     continue
+  }
+  if (chain && previous && previous.status !== 'pr') {
+    const stackedOn = lastShipped
+      ? `#${lastShipped}`
+      : resolved.map((p) => `#${p.issue}${p.prNumber ? ` (PR #${p.prNumber})` : ''}`).join(', ')
+    laneNotes.push(`the lane continued although #${previous.number} did not ship (${previous.status}); ${stackedOn ? `stacked on ${stackedOn}` : `started from ${base}`}`)
+    log(`#${issue.number}: lane continues although #${previous.number} did not ship (${previous.status}); ${stackedOn ? `stacking on ${stackedOn}` : `starting from ${base}`}.`)
   }
   issue.parents = resolved
   let result
