@@ -37,7 +37,7 @@ After a merge, run accept, report, or release as needed.
 | Command | What it does |
 | --- | --- |
 | `/devflow:init` | Set up a project and optionally install GitHub workflows. |
-| `/devflow:spec` | Create an epic and tasks, or use `--file` for a spec PR. |
+| `/devflow:spec` | Create an epic and tasks, or use `--file` for a spec PR. Both modes extract shared groundwork into foundation tasks, record dependencies only on code or files a task uses, and warn when a task has 3 or more dependents. |
 | `/devflow:approve` | Approve an epic so eligible tasks can become ready. |
 | `/devflow:autopilot #<epic>` | Run an approved epic in a self-paced loop until all its sub-issues close. |
 | `/devflow:next-task` | Test, implement, review, and open PRs for ready issues. |

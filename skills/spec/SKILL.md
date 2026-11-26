@@ -44,6 +44,8 @@ Writes no spec file and opens no PR. The grill decisions, design and tasks live 
 
  Pick a kebab-case `<slug>` (at most 5 words). Draft the epic from `${CLAUDE_SKILL_DIR}/templates/epic.md` (Goal, Design, `## Decisions` with the grill answers, and the Tasks table with risk and reason, depends-on and an empty issue column) and the task list. When the request names existing issues it resolves, write a line `Resolves: #a, #b` into the epic body (see the template); the Ship stage of the epic's last open sub-issue then adds a `Closes #<n>` line for each of them that is still open. Without such issues, write no `Resolves:` line. Split anything bigger than M. Record each task's risk with a one-line reason and its hotspot files (real file paths, as `/devflow:dispatch` uses them).
 
+Extract shared groundwork (auth, schema, layout or config) into a small foundation task. Add a `Depends on` line only when a task calls or imports another task's code or uses a schema or file it creates. A shared topic or preferred work order alone does not justify a dependency.
+
 ### E2. Draft and test matrix (QA)
 
  Fill `${CLAUDE_SKILL_DIR}/templates/spec.md` into a scratchpad file `<slug>.draft.md` from the epic and tasks of E1. It is never committed. Then run the same QA step as F2 below (skipped when `spec.testMatrix` is `false`), giving the QA agent the path of the draft in place of the spec file, and writing the answers and the final rows back into the draft. Put the final rows in each task's Test cases.
@@ -84,6 +86,7 @@ The 2.9.0 flow: a spec file and spec PR, a human merge (Gate 1), then one issue 
 3. Each task has: stable id `T1..Tn`, title, type, area, depends-on, acceptance criteria as checkable behaviour (API: request then response; UI: user action then visible result), files and areas in scope, test plan, needs-e2e yes/no, size S or M, risk and hotspot files. Split anything bigger than M.
 4. Risk: judge each task against `risk.highWhen` and `risk.highPaths` in the config (the defaults apply when unset; a task whose scope matches a `highPaths` glob is high). Record `risk: low|high` with a one-line reason. When unsure, high.
 5. Hotspot files: list the files likely to be touched by other tasks too (routes, registries, schema, shared config). `/devflow:dispatch` uses them to put tasks that share a hotspot in the same lane, so list real file paths.
+6. Extract shared groundwork (auth, schema, layout or config) into a small foundation task. Add a `Depends on` line only when a task calls or imports another task's code or uses a schema or file it creates. A shared topic or preferred work order alone does not justify a dependency.
 
 ### F2. Test matrix (QA)
 
@@ -146,6 +149,7 @@ The spec review runs in both modes, after the QA step and before any issue is cr
    Each finding is `critical`, `warning` or `suggestion`. It does not edit any file.
 3. Only critical findings start another round: fix the draft (asking the user when the fix is a decision), then run the review again. At most 2 reviewer calls in total (the first review plus one after a fix). After the second, list the remaining critical findings to the user, who chooses to proceed or stop.
 4. Warnings and suggestions are shown to the user once and never start a round.
+5. For each task with 3 or more dependents, show a warning in the draft summary naming the task and its dependents. Suggest extracting shared groundwork into a foundation task. The warning never blocks review and needs no answer.
 
 ## Final message
 
