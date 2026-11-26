@@ -17,7 +17,7 @@ const CFG = {
   specDir: 'docs/specs',
   risk: { highPaths: ['.github/**'] },
 };
-const BASE = { config: CFG, limit: 3, startBranch: 'main', prTemplatePath: '', claimId: 'C-me', pluginRoot: '/plugin' };
+const BASE = { config: CFG, limit: 3, startBranch: 'main', prTemplatePath: '', claimId: 'C-me', runDate: '2026-11-18', pluginRoot: '/plugin' };
 const withNt = (nt, extra = {}) => ({ ...BASE, config: { ...CFG, nextTask: nt }, issues: [1], ...extra });
 
 const BOOLS = ['productDecision', 'reversible', 'changesCriterion', 'dropsMustRow', 'changesContract', 'changesStoredFormat', 'lowersRisk', 'skipsCheck', 'needsDestructiveGit', 'outsideRepo'];
