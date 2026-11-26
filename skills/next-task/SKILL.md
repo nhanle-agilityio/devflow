@@ -56,11 +56,12 @@ Call the Workflow tool with name `devflow:next-task-engine` and this `args` obje
   "isolated": false,
   "chain": false,
   "claimId": "<from step 2b>",
+  "runDate": "<output of date +%Y-%m-%d>",
   "ghCli": true
 }
 ```
 
-Fill `config` with the full parsed config object, and the other values from steps 1 and 2. `pluginRoot` is the plugin directory: the Review stage runs `bin/devflow-scan` from it (without it every PR is risk:high, because the weakened-checks scan cannot run).
+Fill `config` with the full parsed config object, and the other values from steps 1 and 2. `runDate` is today's local date from `date +%Y-%m-%d`: the workflow cannot read the clock, and it dates `## Decisions` lines with it. `pluginRoot` is the plugin directory: the Review stage runs `bin/devflow-scan` from it (without it every PR is risk:high, because the weakened-checks scan cannot run).
 
 ## 4. Report
 

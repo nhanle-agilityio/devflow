@@ -97,6 +97,7 @@ async function run({ question, redOutput, missingEnv = false, chain = false, nex
     prTemplatePath: '',
     bugTemplatePath: BUG_TEMPLATE,
     claimId: 'C-me',
+    runDate: '2026-11-26',
     pluginRoot: '/plugin',
   };
   const files = ['src/x.js'];

@@ -1,7 +1,7 @@
 export const meta = {
   name: 'next-task-engine',
   description: 'Pick up ready GitHub issues one at a time: implement test-first, run checks, verify, review, and open a PR for each.',
-  whenToUse: 'Internal engine of /devflow:next-task; do not run it directly. Started by /devflow:next-task after preflight. Needs args: config (parsed .claude/devflow.json), limit, issues, startBranch, prTemplatePath, isolated, chain, claimId, ghCli.',
+  whenToUse: 'Internal engine of /devflow:next-task; do not run it directly. Started by /devflow:next-task after preflight. Needs args: config (parsed .claude/devflow.json), limit, issues, startBranch, prTemplatePath, isolated, chain, claimId, runDate, ghCli.',
   phases: [
     { title: 'Select', detail: 'list ready issues, dependencies first' },
     { title: 'Implement', detail: 'claim, branch, plan on the issue, QA tests and the change in parallel, test commit first' },
@@ -67,6 +67,14 @@ const startBranch = args.startBranch
 const isolated = args.isolated === true // own worktree: there is no start branch to return to
 const chain = args.chain === true // explicit issues are a lane: in order, each stacked on the previous one
 const claimId = String(args.claimId || 'run')
+// The Workflow runtime forbids reading the clock (it breaks resume), so the run's date comes from its args:
+// runDate (YYYY-MM-DD), else the YYYYMMDD prefix of claimId (built with `date +%Y%m%dT%H%M%S`), else "undated".
+const runDate = (() => {
+  const given = /^\d{4}-\d{2}-\d{2}$/.exec(String(args.runDate || ''))
+  if (given) return given[0]
+  const m = /^(\d{4})(\d{2})(\d{2})T/.exec(claimId)
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : 'undated'
+})()
 const ghCli = args.ghCli !== false // false: the gh CLI is not installed, so the GitHub MCP server is the only way to GitHub
 const limit = args.limit || nt.defaultLimit
 const explicitIssues = Array.isArray(args.issues) ? args.issues : []
@@ -1871,7 +1879,7 @@ const needsDecisionReview = (issue) =>
   reviewDecisions.has(issue.number) || /^- .* decided by run: .*\[needs human review\]\s*$/m.test(String(issue.body || ''))
 
 async function recordDecisions(issue, { questions, verdicts }) {
-  const date = new Date().toISOString().slice(0, 10)
+  const date = runDate
   const items = questions.map((q, i) => ({
     question: plainText(q), option: q.recommended.trim(), reason: q.reason.trim(),
     needsReview: verdicts[i] === 'decide-high',
