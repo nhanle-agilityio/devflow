@@ -64,7 +64,8 @@ One block per task. Rules:
 - Size S or M only. Split anything bigger.
 - Acceptance criteria are checkable behaviour. API: request -> response. UI: user action -> visible result.
 - Every task has a test plan. needs-e2e is "yes" when the task changes a user-visible flow that needs the running app to verify.
-- depends-on lists task ids; the issue creation step turns them into issue numbers.
+- Extract shared groundwork into a small foundation task.
+- List another task's id under Depends on only if this task uses its code, schema or files. A shared topic or preferred work order alone does not qualify. Issue creation turns task ids into issue numbers.
 - Risk is low or high with a one-line reason, judged against risk.highWhen / risk.highPaths in the config. Unsure means high.
 - Hotspots: files likely to be touched by other tasks too (routes, registries, schema, shared config). `/devflow:dispatch` puts tasks sharing a hotspot in one lane.
 -->
