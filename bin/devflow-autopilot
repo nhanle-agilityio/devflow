@@ -1,0 +1,191 @@
+#!/usr/bin/env node
+'use strict';
+
+const { planLanes } = require('./devflow-lanes');
+
+const PLAN_MARKER = '<!-- devflow-autopilot-plan -->';
+const USAGE = `Usage: devflow-autopilot < state.json
+
+Reads planTick input as JSON on stdin. For example:
+{"now":"2026-11-26T10:00:00Z","children":[{"number":1,"state":"open","labels":["agent:ready"],"body":"","hotspots":[],"dependsOn":[],"lastActivity":null,"pr":null}]}
+Optional settings: external, labels, autoReady, maxLanes, ignoreHotspots, stallHours,
+maxAgentCallsPerTick, agentCallsUsed and nextTaskMaxAgentCalls.
+Prints ready issues, running and stalled issues, dispatch lanes, stacked issues, waiting reasons,
+warnings, budgetLeft and done as JSON. Exits 1 on invalid input.`;
+
+const DEFAULT_LABELS = {
+  ready: 'agent:ready', inProgress: 'agent:in-progress', review: 'agent:review',
+  blocked: 'agent:blocked', triage: 'needs-triage', riskLow: 'risk:low',
+};
+
+const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const isCount = (value) => Number.isSafeInteger(value) && value >= 0;
+const isPositiveInt = (value) => isCount(value) && value > 0;
+const isStringList = (value) => Array.isArray(value) && value.every((item) => typeof item === 'string');
+
+function timestamp(value, name) {
+  const time = typeof value === 'string' ? Date.parse(value) : NaN;
+  if (!Number.isFinite(time)) throw new Error(`${name} must be a timestamp`);
+  return time;
+}
+
+function validateIssue(issue, child) {
+  if (!isObject(issue) || !isPositiveInt(issue.number)) throw new Error('expected a positive issue number');
+  const { number, state, pr } = issue;
+  if (!['open', 'closed'].includes(state) || !isStringList(issue.labels))
+    throw new Error(`#${number} needs an open or closed state and a list of labels`);
+  if (pr !== null && (!isObject(pr) || !isPositiveInt(pr.number) || !['open', 'closed'].includes(pr.state)
+    || typeof pr.merged !== 'boolean' || (pr.state === 'open' && !isCount(pr.aheadBy))))
+    throw new Error(`#${number} has invalid PR data`);
+  if (!child) return;
+  if (typeof issue.body !== 'string' || !isStringList(issue.hotspots)
+    || !Array.isArray(issue.dependsOn) || !issue.dependsOn.every(isPositiveInt))
+    throw new Error(`#${number} needs a body, hotspot paths and dependency numbers`);
+  if (issue.lastActivity != null) timestamp(issue.lastActivity, `#${number} lastActivity`);
+}
+
+function readState(input) {
+  if (!isObject(input)) throw new Error('input must be a JSON object');
+  const {
+    children, external = [], labels = {}, autoReady = 'off', maxLanes = 3, stallHours = 12,
+    maxAgentCallsPerTick = 20, agentCallsUsed = 0, nextTaskMaxAgentCalls = 0, ignoreHotspots,
+  } = input;
+  const now = timestamp(input.now, 'now');
+  if (!Array.isArray(children) || !Array.isArray(external)) throw new Error('children and external must be arrays');
+  if (!isObject(labels) || Object.keys(DEFAULT_LABELS).some((key) => key in labels && typeof labels[key] !== 'string'))
+    throw new Error('labels must map label keys to names');
+  if (!['off', 'low', 'all'].includes(autoReady)) throw new Error('autoReady must be off, low or all');
+  if (!isPositiveInt(maxLanes) || !isPositiveInt(maxAgentCallsPerTick))
+    throw new Error('maxLanes and maxAgentCallsPerTick must be positive integers');
+  if (!isCount(agentCallsUsed) || !isCount(nextTaskMaxAgentCalls))
+    throw new Error('agentCallsUsed and nextTaskMaxAgentCalls must be non-negative integers');
+  if (!Number.isFinite(stallHours) || stallHours <= 0) throw new Error('stallHours must be positive');
+  if (ignoreHotspots !== undefined && !isStringList(ignoreHotspots)) throw new Error('ignoreHotspots must be a list of paths');
+
+  children.forEach((issue) => validateIssue(issue, true));
+  external.forEach((issue) => validateIssue(issue, false));
+  const byNumber = new Map([...children, ...external].map((issue) => [issue.number, issue]));
+  if (byNumber.size !== children.length + external.length) throw new Error('duplicate issue number');
+  return {
+    children, byNumber, labels: { ...DEFAULT_LABELS, ...labels }, autoReady, maxLanes, ignoreHotspots,
+    stallBefore: now - stallHours * 3600000, nextTaskMaxAgentCalls,
+    budget: Math.max(0, maxAgentCallsPerTick - agentCallsUsed),
+  };
+}
+
+function dependencyHold(parent, blocked) {
+  if (!parent) return '(unknown)';
+  if (parent.state === 'closed') return null;
+  if (parent.labels.includes(blocked)) return '(blocked)';
+  if (parent.pr?.state === 'open' && parent.pr.aheadBy >= 1) return null;
+  if (parent.pr?.state === 'closed' && !parent.pr.merged) return '(PR closed without merge)';
+  return '(no PR yet)';
+}
+
+function firstDependencyHold(issue, { byNumber, labels }) {
+  for (const number of issue.dependsOn) {
+    const reason = dependencyHold(byNumber.get(number), labels.blocked);
+    if (reason) return `waits for #${number} ${reason}`;
+  }
+  return null;
+}
+
+function readinessHold(issue, { autoReady, labels }) {
+  if (autoReady === 'off') return 'spec.autoReady is off';
+  const body = issue.body.replace(/<!--[\s\S]*?-->/g, '');
+  if (/^[ \t]*Ready:[ \t]*manual[ \t]*\r?$/im.test(body)) return 'Ready: manual';
+  const sections = body.split(/^(?=#{1,2}[ \t]+)/m);
+  for (const section of sections) {
+    const match = /^##[ \t]+Open questions[ \t]*#*[ \t]*\r?\n([\s\S]*)$/i.exec(section);
+    if (match && match[1].trim() && !/^none$/i.test(match[1].trim())) return 'open questions';
+  }
+  if (autoReady === 'low' && !issue.labels.includes(labels.riskLow)) return 'high risk (spec.autoReady: low)';
+  return null;
+}
+
+function classifyChildren(state) {
+  const { labels } = state;
+  const open = state.children.filter((issue) => issue.state === 'open').sort((a, b) => a.number - b.number);
+  const ready = [], running = [], stalled = [], waiting = [], runnable = [];
+  for (const issue of open) {
+    if (issue.labels.includes(labels.inProgress)) {
+      running.push(issue.number);
+      if (Date.parse(issue.lastActivity) < state.stallBefore) stalled.push(issue.number);
+      continue;
+    }
+    // A PR in review waits for its merge; blocked and untriaged children are reported, never silently skipped.
+    if (issue.labels.includes(labels.review)) continue;
+    const held = [labels.blocked, labels.triage].find((label) => issue.labels.includes(label));
+    if (held) {
+      waiting.push({ issue: issue.number, reason: held });
+      continue;
+    }
+    const alreadyReady = issue.labels.includes(labels.ready);
+    const hold = alreadyReady ? null : readinessHold(issue, state);
+    const reason = hold ?? firstDependencyHold(issue, state);
+    if (reason) {
+      waiting.push({ issue: issue.number, reason });
+      continue;
+    }
+    if (!alreadyReady) ready.push(issue.number);
+    if (issue.pr?.state !== 'open') runnable.push(issue);
+  }
+  return { ready, running, stalled, waiting, runnable, done: open.length === 0 };
+}
+
+function planTick(input) {
+  const state = readState(input);
+  const { runnable, running, ...status } = classifyChildren(state);
+  const freeSlots = Math.max(0, state.maxLanes - running.length);
+  const numbers = new Set(runnable.map((issue) => issue.number));
+  const issues = runnable.map(({ number, hotspots, dependsOn }) => ({
+    number, hotspots, dependsOn: dependsOn.filter((parent) => numbers.has(parent)),
+  }));
+  const { lanes, stacked, warnings } = freeSlots
+    ? planLanes({ maxLanes: freeSlots, ignoreHotspots: state.ignoreHotspots, issues })
+    : { lanes: [], stacked: [], warnings: [] };
+  const dispatch = lanes.slice(0, state.budget).map(({ issues }) => ({ issues }));
+  if (dispatch.length < lanes.length) warnings.push('The remaining agent budget limits lane starts this tick.');
+  if (state.nextTaskMaxAgentCalls === 0) warnings.push('nextTask.maxAgentCalls is 0 (unlimited per issue).');
+  return { ...status, running, dispatch, stacked, warnings, budgetLeft: state.budget - dispatch.length };
+}
+
+function parsePlan(body) {
+  if (typeof body !== 'string' || !body.startsWith(PLAN_MARKER)) return null;
+  const block = /^\s*```json[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*(?:\r?\n|$)/.exec(body.slice(PLAN_MARKER.length));
+  if (!block) return null;
+  try {
+    const plan = JSON.parse(block[1]);
+    return isObject(plan) ? plan : null;
+  } catch {
+    return null;
+  }
+}
+
+function renderPlan(plan) {
+  const cell = (value) => String(value).replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ');
+  const rows = [
+    ['Epic', `#${plan.epic}`], ['Sub-issues', plan.children.length],
+    ['Lanes started', Array.isArray(plan.lanesStarted) ? plan.lanesStarted.length : plan.lanesStarted],
+    ['Last tick', plan.lastTick ?? 'Pending'],
+    ...(plan.progress || []).map(({ item, detail }) => [item, detail]),
+  ];
+  return [
+    PLAN_MARKER, '```json', JSON.stringify(plan, null, 2), '```', '',
+    '| Progress | Details |', '| --- | --- |', ...rows.map(([item, detail]) => `| ${cell(item)} | ${cell(detail)} |`),
+  ].join('\n');
+}
+
+if (require.main !== module) {
+  module.exports = { planTick, parsePlan, renderPlan, PLAN_MARKER };
+} else if (process.argv.slice(2).some((arg) => arg === '--help' || arg === '-h')) {
+  console.log(USAGE);
+} else {
+  try {
+    const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+    console.log(JSON.stringify(planTick(input), null, 2));
+  } catch (error) {
+    console.error(`devflow-autopilot: ${error.message}`);
+    process.exitCode = 1;
+  }
+}
