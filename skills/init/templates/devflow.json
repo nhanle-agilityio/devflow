@@ -79,11 +79,13 @@
   "spec": { "testMatrix": true, "qaModel": "opus", "autoReady": "off" },
   // reviewerAgent: the subagent type Review runs as ("" = the default agent).
   // parallelQa: a QA agent writes the acceptance tests from the spec while the dev agent implements (default true).
-  // onQuestion: decide (default) = the run answers a question whose recommended option is reversible and safe (not a criterion,
-  // contract, stored format, risk, check, destructive git, outside the repo, or a risk.highPaths file), records it under
-  // "Decisions" and labels the PR decisionsReview; a review warning left after maxReviewRounds ships the same way. Every
-  // other question blocks. block = every question and leftover warning blocks (3.0.0). trustDecisions: false = the merge
-  // gate leaves decisionsReview PRs to a human.
+  // onQuestion: decide (default) = the run takes the recommended option, records it under "Decisions" and labels the PR
+  // decisionsReview; a review warning left after maxReviewRounds ships the same way. decide-high (a product decision, or a change to
+  // a criterion, contract or stored format, lowered risk, or a risk.highPaths file) is recorded as [needs human review] and the PR
+  // becomes risk:high. block = a question that is not reversible, skips a check, drops a must row, needs destructive git, is outside
+  // the repo or is malformed (secrets, credentials and permission problems also stop the task); onQuestion "block" blocks every
+  // question and leftover warning (3.0.0). trustDecisions: false = the merge gate leaves risk:low decisionsReview PRs to a human;
+  // decide-high PRs are risk:high, so a human merges them either way.
   // reviewModel: Sonnet for low risk and Opus for high or unknown risk. Override either model independently.
   // maxAgentCalls: block an issue when it reaches this many agent calls, with cleanup exempt. Zero disables the limit.
   "nextTask": { "defaultLimit": 3, "maxFixRounds": 2, "maxReviewRounds": 2, "reviewModel": { "low": "sonnet", "high": "opus" }, "maxAgentCalls": 0, "parallelQa": true, "reviewerAgent": "devflow:reviewer", "onQuestion": "decide", "trustDecisions": false },

@@ -36,7 +36,7 @@ Every question needs an answer. If any is missing, list the unanswered questions
 
 `/devflow:answer #n accept` answers every open question with its `Recommended:` option, taken from the questions comment. The form `accept; 2: <answer>` (after the issue number) takes the recommended options for all questions except question 2, which takes the typed answer; several overrides are separated by `;`. Rules:
 
-- `accept` refuses a question whose recommended option changes an acceptance criterion (the questions comment marks it with the suffix `[changes a criterion: typed answer needed]`) and asks for a typed answer for it. A question without a `Recommended:` option is treated the same way. No answer is recorded until all questions are answered: the other answers are not recorded either, and the user re-runs with `accept; <k>: <answer>`.
+- `accept` refuses a question whose recommended option changes an acceptance criterion (the questions comment marks it with the suffix `[changes a criterion: typed answer needed]`) and asks for a typed answer for it. A criterion question is otherwise decided and flagged by the run; only a blocked one reaches `/devflow:answer`, with that suffix. A question without a `Recommended:` option is treated the same way. No answer is recorded until all questions are answered: the other answers are not recorded either, and the user re-runs with `accept; <k>: <answer>`.
 - `accept` with no open questions says so and changes nothing.
 - An override number out of range or repeated refuses the whole answer and changes nothing.
 - A decision taken from a recommended option is recorded like any answer (steps 3 to 5), with the recommended option as the answer text.

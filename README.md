@@ -51,7 +51,7 @@ After a merge, run accept, report, or release as needed.
 
 Eligible `risk:low` issues take a short path with a failing test first, then checks and review. The issue supplies its own criteria and decisions. For shared context, devflow reads the spec path first, then the epic named by `Epic: #<n>` if there is no path.
 
-With `/devflow:dispatch`, fan-out children can start in parallel once their parent has an open PR with commits ahead of its base. Their work stacks on the parent branch, or on an integration commit when several parent PRs are open. Shared hotspots keep work in the same lane.
+With `/devflow:dispatch`, linear dependency links share a lane. Hub children (several children of one parent) and multi-parent children wait in `stacked` and start in parallel once their parents have open PRs with commits ahead of their base. Their work stacks on the parent branch, or on an integration commit when several parent PRs are open. Shared hotspots keep work in the same lane. For readiness, a `Depends on #n` dependency is satisfied when #n is closed, or is open, not `agent:blocked`, and has an open PR whose head is ahead of its base. This is separate from the merge gate's rule below.
 
 After approval, run `/devflow:autopilot #<epic>` to sync PRs, apply collaborator answers and start eligible lanes. The epic's plan comment shows waiting reasons, stalled work and the remaining agent budget. Run the command again after an interruption to resume from that comment.
 
@@ -76,7 +76,7 @@ After approval, run `/devflow:autopilot #<epic>` to sync PRs, apply collaborator
 
 | The run handles | You handle |
 | --- | --- |
-| Safe, reversible recommendations go into `## Decisions` on the issue and the PR gets `decisions:review`. | Type an answer for criteria changes or questions without recommendations. Use `/devflow:answer #<n> accept` to take all eligible recommendations. |
+| Safe, reversible recommendations go into `## Decisions` on the issue and the PR gets `decisions:review`. | Type an answer only for blocked questions (see the block list below) and questions without a recommendation. Changes to contracts, risk or criteria are decided and flagged; you review and merge the `risk:high` PR. Use `/devflow:answer #<n> accept` to take all eligible recommendations. |
 | It resumes matching branches (prefix `<type>/<issue>-`) and handles base conflicts in Integrate when the issue covers the behavior. | Resolve conflicts involving behavior outside the issue and approve changes to contracts or risk. |
 | It pushes its feature branch and opens the PR. | Review and merge `risk:high` PRs and handle protected-branch changes. |
 
@@ -91,19 +91,20 @@ The Next column tells you what to do after each issue. The `devflow-claim` marke
 | `review.github`, `mergeGate.requiredChecks` | Enable GitHub review and name the checks that must pass. Include `devflow/review` when GitHub review is on. |
 | `nextTask.onQuestion`, `nextTask.trustDecisions` | Choose whether runs take safe recommendations and whether the gate can merge those PRs. |
 | `nextTask.reviewModel`, `nextTask.maxAgentCalls` | Choose review models (Sonnet for low risk, Opus for high or unknown risk by default) and cap calls per issue. |
+| `autopilot.maxLanes`, `autopilot.maxAgentCallsPerTick`, `autopilot.stallHours` | Limit `/devflow:autopilot`: lanes (falls back to `dispatch.maxLanes`, then 3), agent calls per tick (default 20) and hours without activity before work counts as stalled (default 12). |
 | `branchPattern` | Name new work branches. |
 | `verify.devServer` | Start the app for verification. Acceptance uses PR evidence when no dev server is configured. |
 | `release.tagPrefix`, `changelog.fragmentsDir` | Set the tag prefix (default `v`) and optionally store one changelog fragment per issue. |
 
 See the full [config schema](skills/init/templates/devflow.schema.json) and [starter config](skills/init/templates/devflow.json).
 
-With the default question policy, `decide` records a recommendation under `## Decisions`, and `decide-high` also flags it for human review, sets `risk:high` and `decisions:review`, and requires a human merge even with `trustDecisions` enabled. The `block` outcome covers hard stops such as irreversible actions and weakened checks. Missing secrets or credentials and permission problems also stop work. If checks stay red after the final fix or a required environment variable or secret is missing, the run files or reuses a triage bug and links it from the blocked issue.
+With the default question policy, `decide` takes the recommended option and records it under `## Decisions`. `decide-high` applies to a product decision, or a change to a criterion, contract or stored format, lowered risk, or a changed file matching `risk.highPaths`: the run still takes the recommendation, records it with `[needs human review]`, labels the PR `decisions:review` and forces `risk:high`, so a human merges it even with `nextTask.trustDecisions: true`. `block` applies to a question that is not reversible, skips a check, drops a must row, needs destructive git, is outside the repo or is malformed (or when `onQuestion` is `block`); secrets, credentials and permission problems also stop that task, and other lanes continue. A blocked question that changes a criterion still needs a typed answer in `/devflow:answer`. If checks stay red after the fix rounds, or output names a missing environment variable or secret, the run files one `needs-triage` bug from the bug template per run error (deduplicated by `<!-- devflow-run-error #n -->`), labels the issue `agent:blocked` and links the bug.
 
 ## Merge gate
 
 - This optional GitHub Action merges at most one eligible `risk:low` PR per run. Start with `mergeGate.enabled` and `mergeGate.dryRun` both true, then review the summary before turning dry run off.
 - Install the workflow on the default branch, add `DEVFLOW_GATE_TOKEN`, enable merge commits, and match workflow triggers to the required checks. Review and mention workflows use `CLAUDE_CODE_OAUTH_TOKEN`. [Gate details](DESIGN.md#risk-and-the-merge-gate)
-- The gate requires a mergeable PR on the base branch, closed dependencies, green required checks on the PR head, and clear review threads. An empty effective check list stops merges.
+- The gate merges a PR only when its linked issues' dependencies are closed and it is not stacked, so stacks merge bottom-up. It also needs a mergeable PR on the base branch, green required checks on the PR head, and clear review threads. An empty effective check list stops merges.
 - Behind PRs queue for an update (`deferred: waits for its turn`). The gate holds `decisions:review` for a human unless `nextTask.trustDecisions` is true.
 - The gate records `devflow-gate-merged` and clears `labels.inProgress`, `labels.review`, and `labels.blocked` from issues linked to its merges.
 

@@ -128,7 +128,10 @@ function classifyChildren(state) {
       continue;
     }
     if (!alreadyReady) ready.push(issue.number);
-    if (issue.pr?.state !== 'open') runnable.push(issue);
+    // An open PR without a running lane (an earlier run stopped after Ship): report it, never drop it silently.
+    if (issue.pr?.state === 'open') {
+      waiting.push({ issue: issue.number, reason: `open PR #${issue.pr.number} and no run (resume with /devflow:next-task #${issue.number})` });
+    } else runnable.push(issue);
   }
   return { ready, running, stalled, waiting, runnable, done: open.length === 0 };
 }

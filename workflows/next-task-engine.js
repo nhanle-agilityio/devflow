@@ -1866,7 +1866,9 @@ async function classifyAll(issue, branch, raw) {
 
 // Takes the decisions: they become answers for the next agent calls and lines of the issue's "## Decisions".
 const decisionReviewSuffix = (needsReview) => needsReview ? ' [needs human review]' : ''
-const needsDecisionReview = (issue) => reviewDecisions.has(issue.number)
+// A decision an earlier run flagged stays flagged: a resumed run reads it from the issue's "## Decisions" section.
+const needsDecisionReview = (issue) =>
+  reviewDecisions.has(issue.number) || /^- .* decided by run: .*\[needs human review\]\s*$/m.test(String(issue.body || ''))
 
 async function recordDecisions(issue, { questions, verdicts }) {
   const date = new Date().toISOString().slice(0, 10)
