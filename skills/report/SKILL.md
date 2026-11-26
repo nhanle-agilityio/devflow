@@ -1,7 +1,7 @@
 ---
 name: report
-description: Build a demo-ready trace page of one spec - ticket, plan, PR, review, tests, merge, acceptance, release - for every issue, from GitHub data, and publish it as an artifact. Read-only on the repository.
-argument-hint: <spec path, slug or #epic>
+description: Publish a trace page for a spec or epic, or print a daily Markdown digest of epic activity. Read-only on the repository.
+argument-hint: "<spec path, slug or #epic> | --daily [#epic]"
 disable-model-invocation: true
 ---
 
@@ -17,10 +17,34 @@ Shows the flow, not slides: for each issue of a spec or epic, the path ticket, p
 
 1. `.claude/devflow.json` exists and parses as JSON; else tell the user to run `/devflow:init`.
 2. The GitHub MCP server is reachable: load its tools with ToolSearch and get the authenticated user.
+   For `--daily [#epic]`, continue directly to Daily mode and finish there. The remaining preflight steps apply to the trace page.
 3. `git fetch <remote> <baseBranch>` succeeds.
 4. `$ARGUMENTS` is `#<n>` (an epic issue, see Epic mode) or names a spec (path under `specDir`, default `docs/specs`, or a slug). If empty, list the specs on the base branch and ask. Read it with `git show <remote>/<baseBranch>:<specDir>/<file>`; if it is not on the base branch, say the spec PR is not merged and stop.
 
 **Epic mode** (`#<n>`): a number is always an issue number. The issues are the union of the epic's native sub-issues and the issues whose body has the line `Epic: #<n>`, as `/devflow:accept` does; an issue with neither stops with `#<n> is not an epic`. There is no spec file and no spec PR: `spec.epic` is `{ "number", "url" }`, `spec.pr` is `null`, `spec.path` and `spec.url` are the epic's, `spec.slug` is the slug from `[<slug>]` in the epic title, else `epic-<n>`, and acceptance is the `<!-- devflow-accept -->` comment on the epic. With a spec path or slug, `spec.epic` is `null`.
+
+## Daily mode (`--daily [#epic]`)
+
+Use GitHub MCP reads in the configured repository. With an epic number, read that epic. Without one, list every open epic carrying `labels.epicApproved` (default `epic:approved`). Paginate the reads and render one digest per epic. If the list is empty, print “No open approved epics.”
+
+Capture the local calendar date as `YYYY-MM-DD` and the instant of midnight at the start of that date in the same time zone. For each epic, gather both open and closed children from native sub-issues and exact `Epic: #<epic>` body lines. Deduplicate children by issue number and their closing PRs by PR number. Build a JSON object with `epic`, `date` and the following fields.
+
+- `waitingPrs` includes every open PR labelled `labels.devflow` that closes a child. Supply its `number`, `title`, web `url`, `risk` (high, low or unknown from its configured risk labels), `decisionsReview` (presence of `labels.decisionsReview`, default `decisions:review`) and `openedAt` (PR creation timestamp).
+- `decisions` contains the lines marked `[needs human review]` in each child's `## Decisions` section. Extract the `question` and chosen `option` from each line and include the child number as `issue` and `needsReview: true`.
+- `bugs` contains issues whose bodies carry the exact marker `<!-- devflow-run-error #n -->` for a child numbered `n`. Search open and closed issues, verify the marker in the body and supply `number`, `title`, web `url` and `forIssue`.
+- `waiting` records each waiting or blocked open child as `{issue, reason}`. Read the trusted `<!-- devflow-autopilot-plan -->` epic comment as in autopilot and use its recorded waiting reasons. Where no plan reason exists, use the child's current blocking or triage labels. Include plan warnings in `warnings`, and include “nextTask.maxAgentCalls is 0 (unlimited per issue).” once when that setting is zero or unset.
+- `doneToday.mergedPrs` lists closing PRs merged since local midnight, with `number`, `title` and `mergedBy`. Use the merged-state and who-merged rules in this skill. Read each PR with `pull_request_read` method `get` for its `merged_at` and compare timestamps as instants. Put the numbers of closed children with `closed_at` since that same midnight in `doneToday.closedIssues`.
+- `cost` contains one `{pr, agentCalls}` per distinct PR in `waitingPrs` or `doneToday.mergedPrs`. Parse the JSON in its PR body's `<!-- devflow-run {...} -->` marker. Keep a recorded zero and use `null` for a missing marker or unavailable count.
+
+Serialize the collected data as JSON and run the renderer with a quoted heredoc.
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/bin/devflow-digest" <<'DEVFLOW_DIGEST_JSON'
+<digest JSON>
+DEVFLOW_DIGEST_JSON
+```
+
+Print the Markdown from stdout. On a failed read or render, report the error for that epic. Daily mode posts nothing and creates no artifact.
 
 ## 1. Collect
 

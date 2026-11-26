@@ -1638,7 +1638,7 @@ test('test_t5_3_ship_verify_values', async () => {
 test('test_t5_4_ship_run_marker', async () => {
   const { calls } = await run({ ...BASE, issues: [1] }, { ...SHORT_OPTS, claimOut: { claims: [{ commentId: 11, claimId: 'C-me', createdAt: '2026-11-17T10:00:00Z' }] } });
   const ship = prompt(calls, 'ship');
-  assert.ok(ship.includes('<!-- devflow-run {"path":"short","reviewRounds":1,"claimedAt":"2026-11-17T10:00:00Z"} -->'));
+  assert.ok(ship.includes('<!-- devflow-run {"path":"short","reviewRounds":1,"claimedAt":"2026-11-17T10:00:00Z","agentCalls":6} -->'));
 });
 
 // T5.5
