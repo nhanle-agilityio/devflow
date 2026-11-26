@@ -57,7 +57,7 @@ test('sharedHotspots lists paths in 2+ issues, sorted', () => {
 });
 
 test('empty input gives no lanes', () => {
-  assert.deepEqual(plan([]), { lanes: [], deferred: [], ignoredHotspots: [], warnings: [] });
+  assert.deepEqual(plan([]), { lanes: [], deferred: [], stacked: [], ignoredHotspots: [], warnings: [] });
 });
 
 test('default ignore list drops README.md and CHANGELOG.md', () => {

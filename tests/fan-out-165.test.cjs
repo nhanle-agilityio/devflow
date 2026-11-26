@@ -110,3 +110,13 @@ test('A2.9 autoReadyAfterMerge still waits for dependencies to close', () => {
   assert.ok(autoReady, 'the merge gate defines autoReadyAfterMerge');
   assert.match(autoReady[0], /if\s*\([^)\n]*\bdependency\.state\s*!==\s*['"]closed['"][^)\n]*\)\s*{\s*waiting\s*=\s*true\b/);
 });
+
+test('A2.10 hub siblings that share a hotspot only with each other still wait for the parent PR', () => {
+  const result = plan([iss(1, ['p.js']), iss(3, ['s.js'], [1]), iss(4, ['s.js'], [1])]);
+
+  assert.deepEqual(laneIssues(result), [[1]]);
+  assert.deepEqual(result.stacked, [
+    { issue: 3, on: [1] },
+    { issue: 4, on: [1] },
+  ]);
+});
