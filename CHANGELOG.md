@@ -4,6 +4,16 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [3.3.1] - 2026-11-26
+
+Claims are released reliably and autopilot recovers an issue that no lane is working on.
+
+### Fixed
+- Claims are released by editing them to a released marker because the GitHub MCP server cannot delete comments; a quoted timestamp no longer lets a stale claim win; autopilot resets an in-progress issue that no lane works on after 15 minutes instead of waiting for the 12-hour stall. (#192)
+
+### Upgrade
+- Update the plugin to 3.3.1 and run `/devflow:doctor --fix` to move the helper rules to 3.3.1; nothing else changes (no template, schema or config key). Claim comments left by earlier runs are released by the next run or by autopilot when it resets an orphaned issue; doctor check 14 lists any that remain. Restart a running `/devflow:autopilot` loop.
+
 ## [3.3.0] - 2026-11-26
 
 Unattended runs no longer stop on flow faults seen in the first autopilot run, checks can share a local service safely, and autopilot wakes within minutes of a lane finishing.
