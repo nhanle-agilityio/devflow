@@ -550,12 +550,24 @@ function specPathFor(issue) {
   return m ? m[0] : ''
 }
 
-// The claim that wins the race: the earliest createdAt (ISO strings sort), ties by the smallest comment id. null when empty.
+// The claim that wins the race: the earliest timestamp (ISO strings sort), ties by the smallest comment id. null when empty.
+// Timestamps are extracted by regex: the claim agent may return them quoted or padded.
 function pickClaimWinner(claims, lastBlockedAt) {
+  const stamp = (value) => {
+    const m = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/.exec(String(value ?? ''))
+    return m ? m[0] : null
+  }
+  const blockedAt = stamp(lastBlockedAt)
   let winner = null
+  let winnerAt = null
   for (const c of Array.isArray(claims) ? claims : []) {
-    if (lastBlockedAt && c.createdAt < lastBlockedAt) continue
-    if (!winner || c.createdAt < winner.createdAt || (c.createdAt === winner.createdAt && c.commentId < winner.commentId)) winner = c
+    // A claim without a readable timestamp still counts (it may be this run's own), after every timestamped claim.
+    const at = stamp(c.createdAt) ?? '9999'
+    if (blockedAt !== null && at < blockedAt) continue
+    if (!winner || at < winnerAt || (at === winnerAt && c.commentId < winner.commentId)) {
+      winner = c
+      winnerAt = at
+    }
   }
   return winner
 }
@@ -1198,7 +1210,7 @@ Claimed by devflow (${claimId}).
 function releasePrompt(issue, removeAssignee) {
   return `Release a lost claim on GitHub issue #${issue.number} in ${gh.owner}/${gh.repo}. ${MCP_NOTE}
 
-Another devflow run claimed the issue first. Delete only the comment(s) on the issue whose body contains "<!-- devflow-claim id=${claimId} -->". Do not touch any other comment or the labels: they belong to the winner. ${removeAssignee ? 'Also remove the authenticated user from the assignees of the issue (this run added them; the winner is a different user). Do not remove any other assignee.' : 'Do not touch the assignee: it belongs to the winner.'} Return ok=true when none of your claim comments remain.`
+Another devflow run claimed the issue first. Release only your claim: edit each comment whose body contains "<!-- devflow-claim id=${claimId} -->" with update_issue_comment so its whole body becomes exactly two lines: \`<!-- devflow-claim-released id=${claimId} -->\` and \`Claim released by devflow (${claimId}).\` (the GitHub MCP server cannot delete comments; a released claim no longer counts). Do not touch any other comment or the labels: they belong to the winner. ${removeAssignee ? 'Also remove the authenticated user from the assignees of the issue (this run added them; the winner is a different user). Do not remove any other assignee.' : 'Do not touch the assignee: it belongs to the winner.'} Return ok=true when none of your claim comments still contain the claim marker.`
 }
 
 function branchTitle(issue) {
@@ -1795,7 +1807,7 @@ Steps, in order:
 1. Do not make any more code changes or commits. Run \`${runCommand('park', ['--issue', issue.number, '--stage', stage])}\` from the repository root: it stashes uncommitted changes (if any) under a named stash so the next issue starts on a clean tree; nothing is discarded. When it reports stashed=true, the blocked comment in step 3 must end with a line naming the stash message it printed and how to restore it: run \`git stash list\` to find that stash, then \`git stash apply <stash>\` on the issue branch${branch ? ` ${branch}` : ''}.
 2. ${branch ? `If \`git log ${parentRefFor(issue)}..${branch} --oneline\` shows commits, push the branch so work is not lost: \`git push -u ${remote} ${branch}\` (never force, never push to ${base}).` : 'No branch to push.'}
 ${questionsStep}
-4. On the issue add the label "${labels.blocked}" and remove "${labels.inProgress}" (keep other labels). Delete the comment(s) whose body contains "<!-- devflow-claim id=${claimId} -->" (this run's claim; a later run claims again).${assignedByRun === true ? ' Also remove the authenticated user from the assignees of the issue (this run added them); do not remove any other assignee.' : ''}
+4. On the issue add the label "${labels.blocked}" and remove "${labels.inProgress}" (keep other labels). Release this run's claim: edit each comment whose body contains "<!-- devflow-claim id=${claimId} -->" with update_issue_comment so its whole body becomes exactly two lines: \`<!-- devflow-claim-released id=${claimId} -->\` and \`Claim released by devflow (${claimId}).\` (the GitHub MCP server cannot delete comments; a released claim no longer counts) (a later run claims again).${assignedByRun === true ? ' Also remove the authenticated user from the assignees of the issue (this run added them); do not remove any other assignee.' : ''}
 5. Leave the checkout as it is. The engine handles checkout restoration.
 Return whether the branch was pushed.`
 }
@@ -2174,8 +2186,8 @@ Return claimPresent=true if a comment body contains "${marker}", or false if non
       ...options, label: budgetExceeded ? `blocked #${issue.number} (release check)` : `release check #${issue.number}`, schema: CLAIM_RELEASE_CHECK_SCHEMA,
     })
     if ((await check())?.claimPresent !== true) return
-    await agent(`Delete only comments on ${target} whose bodies contain "${marker}". ${MCP_NOTE}
-Make no other changes. Return ok=true when those comments are gone.`, {
+    await agent(`Release only comments on ${target} whose bodies contain "${marker}": edit each with update_issue_comment so its whole body becomes exactly two lines: \`<!-- devflow-claim-released id=${claimId} -->\` and \`Claim released by devflow (${claimId}).\` (the GitHub MCP server cannot delete comments). ${MCP_NOTE}
+Make no other changes. Return ok=true when those comments no longer contain the marker.`, {
       ...options, label: budgetExceeded ? `blocked #${issue.number} (release retry)` : `release retry #${issue.number}`, schema: RELEASE_SCHEMA,
     })
     if ((await check())?.claimPresent === true) notes.push('claim not released')

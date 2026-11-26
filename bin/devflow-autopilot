@@ -9,8 +9,9 @@ const USAGE = `Usage: devflow-autopilot < state.json
 Reads planTick input as JSON on stdin. For example:
 {"now":"2026-11-26T10:00:00Z","children":[{"number":1,"state":"open","labels":["agent:ready"],"body":"","hotspots":[],"dependsOn":[],"lastActivity":null,"pr":null}]}
 Optional settings: external, labels, autoReady, maxLanes, ignoreHotspots, stallHours,
-maxAgentCallsPerTick, agentCallsUsed and nextTaskMaxAgentCalls.
-Prints ready issues, running and stalled issues, dispatch lanes, stacked issues, waiting reasons,
+maxAgentCallsPerTick, agentCallsUsed, nextTaskMaxAgentCalls, activeIssues (issues a working lane holds),
+unknownLanes (default true: turns the orphan check off) and orphanMinutes (default 15).
+Prints ready issues, running, stalled and orphaned issues, dispatch lanes, stacked issues, waiting reasons,
 warnings, budgetLeft and done as JSON. Exits 1 on invalid input.`;
 
 const DEFAULT_LABELS = {
@@ -49,6 +50,7 @@ function readState(input) {
   const {
     children, external = [], labels = {}, autoReady = 'off', maxLanes = 3, stallHours = 12,
     maxAgentCallsPerTick = 20, agentCallsUsed = 0, nextTaskMaxAgentCalls = 0, ignoreHotspots,
+    activeIssues = [], unknownLanes = true, orphanMinutes = 15,
   } = input;
   const now = timestamp(input.now, 'now');
   if (!Array.isArray(children) || !Array.isArray(external)) throw new Error('children and external must be arrays');
@@ -60,6 +62,9 @@ function readState(input) {
   if (!isCount(agentCallsUsed) || !isCount(nextTaskMaxAgentCalls))
     throw new Error('agentCallsUsed and nextTaskMaxAgentCalls must be non-negative integers');
   if (!Number.isFinite(stallHours) || stallHours <= 0) throw new Error('stallHours must be positive');
+  if (!Array.isArray(activeIssues) || !activeIssues.every(isPositiveInt)) throw new Error('activeIssues must be a list of issue numbers');
+  if (typeof unknownLanes !== 'boolean') throw new Error('unknownLanes must be a boolean');
+  if (!Number.isFinite(orphanMinutes) || orphanMinutes <= 0) throw new Error('orphanMinutes must be positive');
   if (ignoreHotspots !== undefined && !isStringList(ignoreHotspots)) throw new Error('ignoreHotspots must be a list of paths');
 
   children.forEach((issue) => validateIssue(issue, true));
@@ -69,6 +74,7 @@ function readState(input) {
   return {
     children, byNumber, labels: { ...DEFAULT_LABELS, ...labels }, autoReady, maxLanes, ignoreHotspots,
     stallBefore: now - stallHours * 3600000, nextTaskMaxAgentCalls,
+    activeIssues, unknownLanes, orphanBefore: now - orphanMinutes * 60000,
     budget: Math.max(0, maxAgentCallsPerTick - agentCallsUsed),
   };
 }
@@ -106,9 +112,15 @@ function readinessHold(issue, { autoReady, labels }) {
 function classifyChildren(state) {
   const { labels } = state;
   const open = state.children.filter((issue) => issue.state === 'open').sort((a, b) => a.number - b.number);
-  const ready = [], running = [], stalled = [], waiting = [], runnable = [];
+  const ready = [], running = [], stalled = [], orphaned = [], waiting = [], runnable = [];
   for (const issue of open) {
     if (issue.labels.includes(labels.inProgress)) {
+      // No lane works on it and none of this repository's unknown lanes can: it is orphaned, not running.
+      if (!state.unknownLanes && !state.activeIssues.includes(issue.number)
+        && (issue.lastActivity == null || Date.parse(issue.lastActivity) < state.orphanBefore)) {
+        orphaned.push(issue.number);
+        continue;
+      }
       running.push(issue.number);
       if (Date.parse(issue.lastActivity) < state.stallBefore) stalled.push(issue.number);
       continue;
@@ -138,7 +150,7 @@ function classifyChildren(state) {
       waiting.push({ issue: issue.number, reason: `open PR #${issue.pr.number} and no run (resume with /devflow:next-task #${issue.number})` });
     } else runnable.push(issue);
   }
-  return { ready, running, stalled, waiting, runnable, done: open.length === 0 };
+  return { ready, running, stalled, orphaned, waiting, runnable, done: open.length === 0 };
 }
 
 function planTick(input) {

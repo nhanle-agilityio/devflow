@@ -36,6 +36,7 @@ For a trusted answer to an outstanding question, follow `${CLAUDE_PLUGIN_ROOT}/s
 - Set `now` to the current UTC timestamp, `labels` to the configured label map and `autoReady` to `spec.autoReady` (default `off`). Set `maxLanes` from `autopilot.maxLanes`, then `dispatch.maxLanes`, then 3.
 - Set `maxAgentCallsPerTick` from `autopilot.maxAgentCallsPerTick` (default 20), `agentCallsUsed` to the calls already made **this tick**, and `nextTaskMaxAgentCalls` from `nextTask.maxAgentCalls` (default 0). Count agent calls during sync and comment handling against the tick limit. Each lane start costs one more. Set `stallHours` from `autopilot.stallHours` (default 12) and `ignoreHotspots` from `dispatch.ignoreHotspots` (default `["README.md", "CHANGELOG.md"]`).
 - For each entry in `children`, supply `number`, lowercase `state`, label names, current `body`, `hotspots` from the `## Hotspots` bullets as in dispatch, and all `dependsOn` numbers. Set `lastActivity` to the newest commit or comment timestamp on the issue or its PR, or null if neither exists.
+- Set `activeIssues` to the issues of the `lanesStarted` entries whose session is still alive in `claude agents --json` (any state except `done`, including one waiting for input). Set `unknownLanes` to true when that output shows a live `devflow-lane-*` session in this repository whose id is not in `lanesStarted`, or when the command fails; otherwise false. The helper treats an in-progress child outside `activeIssues` with no activity for 15 minutes (its default) as orphaned.
 - Supply the child's own `pr` as null or `{number, state, merged, aheadBy}`. Prefer a qualifying open PR over a closed one. For an open PR compare its actual `base...head` through MCP and take `ahead_by`. For a closed PR verify `merged_at` with `pull_request_read` method `get`. For dependencies outside the epic, put their `number`, `state`, `labels` and `pr` in `external` using the same rules. Leave unreadable external dependencies out and report the read failure. If a child's state or own PR data cannot be read, report it and retry before planning.
 
 Serialize the input as JSON and run the helper via Bash with a quoted heredoc. Stop the tick on a nonzero exit and show its diagnostic.
@@ -46,6 +47,8 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/devflow-autopilot" <<'JSON'
 JSON
 ```
 
+For each number in `orphaned` (an in-progress issue no lane works on): re-read the issue. If it is still open, still has `labels.inProgress` and still has no working lane, release every claim comment on it by editing it to `<!-- devflow-claim-released id=<id> -->` and `Claim released by devflow (<id>).` (`update_issue_comment`), then replace `labels.inProgress` with `labels.ready` (keep all other labels) and add a plan progress row "Reset orphaned #<n>: no lane was working on it". The next tick dispatches it.
+
 For each number in `ready`, apply step 3 of the approve sweep. Immediately before writing, re-read the epic's approval and the child's state and labels. Stop if approval was withdrawn. Skip a child that closed or gained `labels.ready`, `labels.inProgress`, `labels.review`, `labels.blocked` or `labels.triage`. Preserve every existing label and add only `labels.ready`. After adding it, check all comments and post the following once if its marker is absent.
 
 ```text
@@ -55,7 +58,7 @@ Ready: epic #<epic> approved, all dependencies merged
 
 Report a failed write and continue with the other entries. Use the real epic number in the comment.
 
-**(d) Dispatch.** Start only lanes in `dispatch`. Recheck approval, the ready labels, open PRs and claims before launch. If eligibility or capacity changed, refresh the input and replan with the calls used so far. Check recorded session IDs and `claude agents --json` (it prints the sessions and exits) for still-running sessions, including lanes awaiting their first claim or handling later issues in a chain. Defer a lane if it overlaps an active session or starting it would exceed the concurrency limit. Never touch issues labelled `labels.inProgress` and never restart a stalled lane automatically.
+**(d) Dispatch.** Start only lanes in `dispatch`. Recheck approval, the ready labels, open PRs and claims before launch. If eligibility or capacity changed, refresh the input and replan with the calls used so far. Check recorded session IDs and `claude agents --json` (it prints the sessions and exits) for still-running sessions, including lanes awaiting their first claim or handling later issues in a chain. Defer a lane if it overlaps an active session or starting it would exceed the concurrency limit. Never touch issues labelled `labels.inProgress` that a working lane holds; only orphaned ones are reset as above. Never restart a stalled lane automatically.
 
 Follow step 4 of `${CLAUDE_PLUGIN_ROOT}/skills/dispatch/SKILL.md`. For lane `n` use its actual issue numbers in the helper's order, keeping both flags even for a single issue.
 
