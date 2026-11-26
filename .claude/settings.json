@@ -22,7 +22,13 @@
       "Bash(git worktree:*)",
       "Bash(node --test:*)",
       "Bash(python3 -m unittest:*)",
-      "mcp__claude_ai_github__*"
+      "mcp__claude_ai_github__*",
+      "Bash(claude --bg --name devflow-lane-:*)",
+      "Bash(gh issue view:*)",
+      "Bash(node \"/Users/nhanle/.claude/plugins/cache/nhanle-devflow/devflow/3.2.0/bin/devflow-autopilot\":*)",
+      "Bash(node \"/Users/nhanle/.claude/plugins/cache/nhanle-devflow/devflow/3.2.0/bin/devflow-digest\":*)",
+      "Bash(node \"/Users/nhanle/.claude/plugins/cache/nhanle-devflow/devflow/3.2.0/bin/devflow-lanes\":*)",
+      "Bash(node \"/Users/nhanle/.claude/plugins/cache/nhanle-devflow/devflow/3.2.0/bin/devflow-run\":*)"
     ]
   }
 }
