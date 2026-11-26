@@ -285,7 +285,11 @@ test('A4.9 workflows authorize same-repository merge events and isolate their co
     const root = read(file);
     const triggers = yamlMapping(root.get('on') || '');
     if (triggers.has('pull_request_target')) failures.push(`${file} must omit pull_request_target`);
-    if (file === pinned) {
+    // This repository's own caller gets the trigger only through /devflow:init --upgrade to a release that has
+    // post-merge mode (3.2.0 or later); pinned to an older release it must not have it.
+    const pin = /devflow-merge-gate\.yml@v(\d+)\.(\d+)\.\d+/.exec(readFileSync(join(__dirname, '..', file), 'utf8'));
+    const pinnedBefore320 = file === pinned && (!pin || Number(pin[1]) < 3 || (Number(pin[1]) === 3 && Number(pin[2]) < 2));
+    if (pinnedBefore320) {
       if (triggers.has('pull_request')) failures.push(`${file} must omit the pull_request trigger`);
       continue;
     }
@@ -300,7 +304,7 @@ test('A4.9 workflows authorize same-repository merge events and isolate their co
     if (!/github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository\b/.test(condition)) {
       failures.push(`${file} gate if must require a same-repository head`);
     }
-    if (templates.includes(file)) {
+    if (templates.includes(file) || file === pinned) {
       const types = yamlMapping(triggers.get('pull_request') || '').get('types') || '';
       if (!/^\s*(?:\[\s*closed\s*\]|-\s+closed)\s*$/.test(types)) {
         failures.push(`${file} must trigger on pull_request closed`);
