@@ -1,6 +1,6 @@
 # devflow
 
-A Claude Code plugin (version 3.2.3, see [CHANGELOG.md](CHANGELOG.md)) that takes GitHub work from idea to release.
+A Claude Code plugin (version 3.3.0, see [CHANGELOG.md](CHANGELOG.md)) that takes GitHub work from idea to release.
 
 ## What it does
 

@@ -4,6 +4,19 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-11-26
+
+Unattended runs no longer stop on flow faults seen in the first autopilot run, checks can share a local service safely, and autopilot wakes within minutes of a lane finishing.
+
+### Added
+- `checks[].lock`: a check holds a named lock while it runs (also during the commit red check), so lanes sharing one local service never run it at the same time; autopilot wakes within 1–2 minutes of a lane finishing instead of waiting a fixed interval. (#189)
+
+### Fixed
+- Unattended runs no longer stop on flow faults: absolute paths from agents no longer block the commit step (unlisted changed files go into the code commit and are reported), a blocked issue parks its uncommitted work in a named stash (`devflow-run park`) so the lane continues on a clean tree, re-runs no longer collide with an empty kept branch, and the lane note names the real parent ("stacked on #<p> (PR #<n>)"). (#189)
+
+### Upgrade
+- Update the plugin to 3.3.0, then run `/devflow:init --upgrade` (installs the new `.claude/devflow.schema.json` with `checks[].lock`) and `/devflow:doctor --fix` (moves the helper rules to 3.3.0; `park` uses the existing `devflow-run` rule). Add `"lock": "<name>"` to checks that share a local service, for example a test check that resets one local database. Restart a running `/devflow:autopilot` loop to pick up the faster wake-up. Work left by an issue blocked before 3.3.0 stays uncommitted in its worktree; stash or commit it before re-running.
+
 ## [3.2.3] - 2026-11-26
 
 `/devflow:doctor --fix` no longer leaves an uncommitted settings file that stops the next autopilot run.
