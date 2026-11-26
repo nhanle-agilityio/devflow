@@ -59,7 +59,7 @@ Read the issue body first, then write the full body back (the MCP issue update r
 
 ## 5. Unblock
 
-1. Delete every comment on the issue that contains `<!-- devflow-claim id=`.
+1. Release every claim: edit each comment on the issue that contains `<!-- devflow-claim id=<id> -->` with `update_issue_comment` so its body becomes `<!-- devflow-claim-released id=<id> -->` and `Claim released by devflow (<id>).` (the MCP server cannot delete comments).
 2. Remove the assignee devflow set (the authenticated user, if that is the assignee).
 3. Labels: remove `labels.blocked` and `labels.inProgress`, add `labels.ready`, keep all other labels. The issue update replaces the label list as a whole, so send the full new list.
 4. Post one comment: the answers, where the decisions were recorded (the issue, the epic `#<n>` or its failed append, the spec PR link), and "Ready again: run /devflow:next-task #<n>".

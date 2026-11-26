@@ -19,15 +19,16 @@ test('T20.11 doctor lists closed issues with state labels and removes labels wit
     'doctor must remove the state labels only with --fix after a yes');
 });
 
-test('T20.16 doctor lists stale claims and deletes them with confirmation while protecting in-progress issues', () => {
-  const check = checks.find((text) => /\bdevflow-claim\b/.test(text));
+// #192: the GitHub MCP server cannot delete comments, so stale claims are released by editing them.
+test('T20.16 doctor lists stale claims and releases them with confirmation while protecting in-progress issues', () => {
+  const check = checks.find((text) => /\*\*Stale claims\.\*\*/.test(text));
   assert.ok(check, 'doctor must check for devflow-claim comments');
   assert.match(check, /\bopen issues?\b/i, 'stale claims must be limited to open issues');
   assert.match(check, /\bno open PR\b/i, 'a stale claim must have no open PR');
   assert.match(check, /\bstale claims?\b/i, 'doctor must identify stale claims');
   assert.match(check, /\b(?:list|report)\b/i, 'doctor must list stale claims');
-  assert.match(check, /--fix[\s\S]*\b(?:after a yes|confirm\w*)\b[\s\S]*\bdelete\b[^.]*\bclaim comments?\b/i,
-    'doctor must delete stale claim comments only with --fix after a yes');
+  assert.match(check, /--fix[\s\S]*\b(?:after a yes|confirm\w*)\b[\s\S]*\brelease\b[^.]*\bclaim comments?\b[^.]*\bediting\b/i,
+    'doctor must release stale claim comments by editing, only with --fix after a yes');
   assert.match(check, /\b(?:never|do not)\b[^.]*\b(?:in-progress|labels\.inProgress)\b/i,
     'doctor must explicitly protect in-progress issues from stale-claim cleanup');
   assert.doesNotMatch(check, /\bswap\s+`?labels\.inProgress\b/i,
