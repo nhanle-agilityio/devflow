@@ -135,7 +135,8 @@ test('A1.9 the skill documents the ordered tick, trusted comments and loop lifec
   const header = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(skill);
   assert.ok(header, 'skill has frontmatter');
   assert.match(header[1], /^name: autopilot$/m);
-  assert.match(header[1], /^disable-model-invocation: true$/m);
+  // #183: a /loop prompt runs the skill through the Skill tool, so model invocation stays enabled.
+  assert.doesNotMatch(header[1], /^disable-model-invocation:/m);
   assert.match(header[1], /^argument-hint: .*#<epic>/m);
   const body = skill.slice(header[0].length);
   assert.match(body, /\bsync\b[\s\S]*?\bcomments\b[\s\S]*?\bready\b[\s\S]*?\bdispatch\b[\s\S]*?\breport\b/i);

@@ -20,7 +20,7 @@ Fail fast with a clear message if any check fails; do not start the workflow.
 3. Not isolated: note the current branch (`git branch --show-current`); it is restored after every issue. If HEAD is detached, stop and ask the user to switch to a branch. Isolated (`--isolated`): a detached HEAD is fine and there is no start branch.
 4. `git fetch <remote> <baseBranch>` succeeds (`remote` is `github.remote`, default `origin`).
 5. The GitHub MCP server is reachable: load its tools with ToolSearch and get the authenticated user.
-6. Run `"${CLAUDE_PLUGIN_ROOT}/bin/devflow-gh"` and pass its JSON `gh` value verbatim as `ghCli`. When `ghCli` is false, a GitHub MCP outage stops the run with "GitHub MCP unavailable".
+6. Run `node "${CLAUDE_PLUGIN_ROOT}/bin/devflow-gh"` and pass its JSON `gh` value verbatim as `ghCli`. When `ghCli` is false, a GitHub MCP outage stops the run with "GitHub MCP unavailable".
 
 ## 2. Parse the arguments
 

@@ -193,7 +193,7 @@ Preflight (inline, fail fast with a clear message):
 - Working tree clean. Not isolated: current branch noted (restored after every issue; detached HEAD is refused). Isolated: a detached HEAD is fine, no start branch.
 - `git fetch <remote> <baseBranch>` succeeds.
 - GitHub MCP reachable (get the authenticated user).
-- Run `${CLAUDE_PLUGIN_ROOT}/bin/devflow-gh` and pass its JSON `gh` value as `ghCli`.
+- Run `node "${CLAUDE_PLUGIN_ROOT}/bin/devflow-gh"` and pass its JSON `gh` value as `ghCli`.
 
 Flags: `--isolated` (own worktree) and `--chain` (the explicit issues are a lane: in the given order, each stacked on the previous one; needs explicit issues).
 
@@ -299,6 +299,8 @@ The command reports each sub-issue and its action (`ready`, `waits for #n`, `man
 ## `/devflow:autopilot #<epic>`
 
 Each tick verifies epic approval, syncs the epic's devflow PRs, processes trusted comments, applies the ready sweep and starts background lanes. The pure `bin/devflow-autopilot` helper uses the supplied activity timestamps to detect stalls and calls `planLanes` with the remaining slots. `autopilot.maxLanes` inherits `dispatch.maxLanes` (default 3). Each lane start costs one of `autopilot.maxAgentCallsPerTick` (default 20). Running issues idle longer than `autopilot.stallHours` (default 12) keep their slots and are reported for human attention.
+
+Not `disable-model-invocation`, for the same reason as sync: the `/loop` it schedules sends `/devflow:autopilot #<epic>` as plain text, which only the Skill tool can run. Its description limits model invocation to the user typing it or a `/loop` prompt naming it, and preflight still requires `epic:approved`. The digest step reads `skills/report/SKILL.md` (`--daily`) instead of invoking the user-only `/devflow:report`. A child in review (`agent:review`) is listed as waiting for its PR's merge every tick, so a human merge is never waited on silently. The running-session check uses `claude agents --json`.
 
 The marked epic comment stores the plan, session IDs and comment cursor alongside a progress table. A restarted loop resumes there. Once every sub-issue is closed, autopilot posts the final report and ends the loop.
 

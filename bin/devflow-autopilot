@@ -113,8 +113,13 @@ function classifyChildren(state) {
       if (Date.parse(issue.lastActivity) < state.stallBefore) stalled.push(issue.number);
       continue;
     }
-    // A PR in review waits for its merge; blocked and untriaged children are reported, never silently skipped.
-    if (issue.labels.includes(labels.review)) continue;
+    // A PR in review waits for its merge: reported every tick so a human merge is never waited on silently.
+    if (issue.labels.includes(labels.review)) {
+      const pr = issue.pr && issue.pr.state === 'open' ? `PR #${issue.pr.number} in review` : 'in review';
+      waiting.push({ issue: issue.number, reason: `${pr}: waits for its merge (a human merges risk:high and decisions:review PRs; the gate merges risk:low)` });
+      continue;
+    }
+    // Blocked and untriaged children are reported, never silently skipped.
     const held = [labels.blocked, labels.triage].find((label) => issue.labels.includes(label));
     if (held) {
       waiting.push({ issue: issue.number, reason: held });

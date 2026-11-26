@@ -79,10 +79,10 @@ test('R3 the allow list covers the plugin helpers and lane sessions autopilot ru
   for (const bin of ['devflow-lanes', 'devflow-autopilot', 'devflow-digest']) {
     assert.ok(allow.includes(`Bash(node "${path.join(ROOT, 'bin', bin)}":*)`), bin);
   }
-  assert.ok(allow.includes('Bash(claude --bg --name devflow-lane-:*)'));
+  assert.ok(allow.includes('Bash(claude --bg --name devflow-lane-*)'));
   assert.ok(!allow.includes('Bash(claude:*)') && !allow.includes('Bash(claude --bg:*)'), 'no broad claude rule');
   const withDir = allowRules({ github: { owner: 'o', repo: 'r' }, baseBranch: 'main', checks: [], dispatch: { pluginDir: '/p/devflow' } });
-  assert.ok(withDir.includes('Bash(claude --bg --plugin-dir /p/devflow --name devflow-lane-:*)'));
+  assert.ok(withDir.includes('Bash(claude --bg --plugin-dir /p/devflow --name devflow-lane-*)'));
 });
 
 test('R4 autopilot reports a ready child with an open PR and no run instead of dropping it', () => {

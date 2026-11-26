@@ -122,12 +122,16 @@ function allowPlan(config, opts = {}) {
   const rules = new Set(GIT_RULES.map((g) => `Bash(${g}:*)`));
   const manual = [];
   // Plugin helpers that dispatch and autopilot run unattended.
-  for (const bin of ['devflow-run', 'devflow-lanes', 'devflow-autopilot', 'devflow-digest']) {
+  for (const bin of ['devflow-run', 'devflow-lanes', 'devflow-autopilot', 'devflow-digest', 'devflow-gh', 'devflow-scan']) {
     rules.add(`Bash(node "${path.join(__dirname, bin)}":*)`);
   }
-  // Lane sessions only (dispatch and autopilot name them devflow-lane-<n>); never a broad claude rule.
+  // Lane sessions only (dispatch and autopilot name them devflow-lane-<n>); never a broad claude rule. The glob has no
+  // space before `*` (`:*` would need a word boundary after the hyphen and never match devflow-lane-1).
   const pluginDir = c.dispatch && typeof c.dispatch.pluginDir === 'string' && c.dispatch.pluginDir.trim();
-  rules.add(`Bash(claude --bg${pluginDir ? ` --plugin-dir ${pluginDir}` : ''} --name devflow-lane-:*)`);
+  rules.add(`Bash(claude --bg${pluginDir ? ` --plugin-dir ${pluginDir}` : ''} --name devflow-lane-*)`);
+  // Preflight and the running-session check of dispatch and autopilot.
+  rules.add('Bash(claude --version)');
+  rules.add('Bash(claude agents --json:*)');
   rules.add(`Bash(git push -u ${remote}:*)`);
   rules.add(`Bash(git push ${remote}:*)`);
   // The read-only reviewer reads the issue with this and nothing else from gh.

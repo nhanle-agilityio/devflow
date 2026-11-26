@@ -1,8 +1,7 @@
 ---
 name: autopilot
-description: Run one approved epic in a self-paced loop, sync its PRs, handle collaborator requests and start ready lanes until all sub-issues close. Never merges.
+description: Run one approved epic in a self-paced loop, sync its PRs, handle collaborator requests and start ready lanes until all sub-issues close. Never merges. Invoke only when the user types /devflow:autopilot or a scheduled /loop prompt names /devflow:autopilot; never on your own because an epic or PRs are mentioned.
 argument-hint: "#<epic>"
-disable-model-invocation: true
 ---
 
 # /devflow:autopilot
@@ -56,7 +55,7 @@ Ready: epic #<epic> approved, all dependencies merged
 
 Report a failed write and continue with the other entries. Use the real epic number in the comment.
 
-**(d) Dispatch.** Start only lanes in `dispatch`. Recheck approval, the ready labels, open PRs and claims before launch. If eligibility or capacity changed, refresh the input and replan with the calls used so far. Check recorded session IDs and `claude agents` for still-running sessions, including lanes awaiting their first claim or handling later issues in a chain. Defer a lane if it overlaps an active session or starting it would exceed the concurrency limit. Never touch issues labelled `labels.inProgress` and never restart a stalled lane automatically.
+**(d) Dispatch.** Start only lanes in `dispatch`. Recheck approval, the ready labels, open PRs and claims before launch. If eligibility or capacity changed, refresh the input and replan with the calls used so far. Check recorded session IDs and `claude agents --json` (it prints the sessions and exits) for still-running sessions, including lanes awaiting their first claim or handling later issues in a chain. Defer a lane if it overlaps an active session or starting it would exceed the concurrency limit. Never touch issues labelled `labels.inProgress` and never restart a stalled lane automatically.
 
 Follow step 4 of `${CLAUDE_PLUGIN_ROOT}/skills/dispatch/SKILL.md`. For lane `n` use its actual issue numbers in the helper's order, keeping both flags even for a single issue.
 
@@ -72,7 +71,7 @@ claude -w lane-<n> "/devflow:next-task #a #b --chain --isolated"
 
 **(e) Report.** Update the same comment by ID with `renderPlan(plan)`. Advance `lastTick` to the cutoff after the entire comment window has been processed or its outstanding requests saved. Preserve `lastDigestDate`, the session history and applied or pending requests. Refresh the progress rows for this tick with running and stalled issues, each waiting reason, stacked issues and their parents, actual starts, warnings and the used and remaining agent budget. Reconcile `budgetLeft` for any planned lanes that did not launch. Surface the helper's warning when `nextTask.maxAgentCalls` is 0 (unlimited inside each lane). Report write failures and resume from the last saved checkpoint.
 
-When `lastDigestDate` differs from today's local date or the tick returns `done: true`, gather this epic's data using `/devflow:report --daily #<epic>` and render it with `bin/devflow-digest` as directed there. The completion tick refreshes the digest even if an earlier tick posted today.
+When `lastDigestDate` differs from today's local date or the tick returns `done: true`, read `${CLAUDE_PLUGIN_ROOT}/skills/report/SKILL.md` and follow its `--daily` section for this epic to gather the data and render it with `bin/devflow-digest` (do not invoke `/devflow:report`: it is user-only). The completion tick refreshes the digest even if an earlier tick posted today.
 
 Use the digest's date in the first line of the comment, `<!-- devflow-digest YYYY-MM-DD -->`, followed by the rendered Markdown. Read all pages of the epic's comments and find the matching dated marker from autopilot. If it exists, edit that comment in place. Otherwise post the digest on the epic. After the write succeeds, set `lastDigestDate` to the digest's date and save the plan comment by ID. On a failure, report it and retry from the saved plan, checking the dated marker again before posting.
 
