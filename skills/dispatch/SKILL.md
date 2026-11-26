@@ -27,14 +27,14 @@ Before collecting ready issues, when `spec.autoReady` is `low` or `all`, use Git
 Using the GitHub MCP server (`github.owner` / `github.repo`), list open issues labelled `labels.ready` that are not labelled `labels.inProgress`, `labels.blocked` or `labels.triage` (default `needs-triage`). Lanes are planned by hotspots and dependencies only; inside a lane the issues run parents first, and priority (`labels.priority`) only breaks ties in that order. Apply the same rules as the `/devflow:next-task` engine's Select stage:
 
 - Skip an issue that has an open PR closing it ("Closes"/"Fixes" lines, branch names, search open PRs for `#<n>`). Exception: do not skip it when its only open PR is labelled `labels.devflow` and has a `Closes #<n>` line for it, and the issue is not labelled `labels.review`; the run resumes that PR's branch. Any other open PR referencing the issue still skips it.
-- Read `Depends on #N` lines from the body. Dependencies that are closed do not count.
-- An issue with an open dependency that has no open PR and is not itself in this ready set is not schedulable. List it as "waiting for #N" and leave it out of the plan.
-- An open dependency that has an open PR, or that is in the ready set, is fine.
+- Read `Depends on #N` lines from the body and apply the eligibility sweep's dependency rule. A closed dependency is satisfied. An open dependency without `labels.blocked` is satisfied if it has an open PR with at least one commit ahead of the base, regardless of parent risk. Use the GitHub MCP comparison from the sweep.
+- List an issue as "waiting for #N" with the sweep's reason and leave it out of the plan if the dependency is blocked, its PR closed without merge with no qualifying replacement, or its state is unreadable.
+- For planning, a verified open dependency with no open PR and reason `(no PR yet)` can be included in the same batch if it is itself schedulable in the ready set. Otherwise list the issue as "waiting for #N (no PR yet)" and leave it out.
 
 For each schedulable issue build `{"number": N, "hotspots": [...], "dependsOn": [...]}`:
 
 - `hotspots`: the bullet lines under the issue body's `## Hotspots` heading, backticks stripped, trimmed. Skip empty lines and a bare "None". Hotspots matching `dispatch.ignoreHotspots` are dropped by the planner in step 2.
-- `dependsOn`: every issue number from its `Depends on #N` lines (open or closed; the planner ignores numbers outside the set).
+- `dependsOn`: issue numbers from its `Depends on #N` lines whose parents still need a PR in this batch. Satisfied dependencies remain in the issue body for the engine to read.
 
 ## 2. Plan the lanes
 
@@ -48,17 +48,23 @@ JSON
 
 (A quoted heredoc, so quotes or `$` in hotspot paths cannot break the shell command.)
 
-Input: `{"maxLanes": N, "ignoreHotspots": [...], "issues": [...]}`, with `ignoreHotspots` = `dispatch.ignoreHotspots` from the config (`["README.md", "CHANGELOG.md"]` if unset; exact paths or globs with `*` and `**`). Conflicts in such files are small and are resolved by the merge gate's branch update or `/devflow:sync`, so they do not join lanes. Output: `{"lanes": [{"issues": [...], "sharedHotspots": [...]}], "deferred": [{"issues": [...], "reason": "..."}], "ignoredHotspots": [...], "warnings": [...]}`, where each lane is `{"issues": [...], "sharedHotspots": [...], "ignoredTouched": [...]}`: `ignoredTouched` lists the ignored hotspots (matched by exact path: `docs/a.md` and `docs/b.md` differ) that this lane's issues name and an earlier lane's issues also name, sorted, `[]` when none. If it exits non-zero, show the message and stop. Show any `warnings`.
+Input: `{"maxLanes": N, "ignoreHotspots": [...], "issues": [...]}`, with `ignoreHotspots` = `dispatch.ignoreHotspots` from the config (`["README.md", "CHANGELOG.md"]` if unset; exact paths or globs with `*` and `**`). Conflicts in such files are small and are resolved by the merge gate's branch update or `/devflow:sync`, so they do not join lanes. Output: `{"lanes": [{"issues": [...], "sharedHotspots": [...]}], "deferred": [{"issues": [...], "reason": "..."}], "stacked": [{"issue": N, "on": [...]}], "ignoredHotspots": [...], "warnings": [...]}`, where each lane is `{"issues": [...], "sharedHotspots": [...], "ignoredTouched": [...]}`: `ignoredTouched` lists the ignored hotspots (matched by exact path: `docs/a.md` and `docs/b.md` differ) that this lane's issues name and an earlier lane's issues also name, sorted, `[]` when none. If it exits non-zero, show the message and stop. Show any `warnings`.
 
-If there are no lanes, say "nothing to run" (and list the waiting issues) and stop, with or without `--plan`.
+The `stacked` array is always present, and each entry’s `on` array lists the parent issue numbers. The planner keeps linear dependency links in one lane. Fan-out and multi-parent children go to `stacked` unless a shared hotspot joins them to a lane.
+
+If there are no lanes, say "nothing to run", report the waiting and stacked issues as in step 3, and stop, with or without `--plan`.
 
 ## 3. Show the plan, then start
 
-Print a table: lane, issues in run order, shared hotspots. Below it, list the ignored hotspots (`ignoredHotspots`, "not used for lanes: ..."), deferred lanes with their reason and the "waiting for #N" issues. Print each lane's `ignoredTouched` below its row (when not empty) as the files where `/devflow:sync` may work: both lanes edit them, so the later lane's PR may conflict there. With `--plan`, stop here: start no session, post nothing and change nothing. Otherwise continue straight to step 4; do not ask again.
+Print a table: lane, issues in run order, shared hotspots. Below it, list the ignored hotspots (`ignoredHotspots`, "not used for lanes: ..."), deferred lanes with their reason and the "waiting for #N" issues. Print each lane's `ignoredTouched` below its row (when not empty) as the files where `/devflow:sync` may work: both lanes edit them, so the later lane's PR may conflict there.
+
+Print one line per issue in `stacked`: "#N starts when #<p> has an open PR". For several parents, list every parent on the same line and say that all need open PRs. Start no session for issues in `stacked`.
+
+With `--plan`, stop here: start no session, post nothing and change nothing. Otherwise continue straight to step 4; do not ask again.
 
 ## 4. Start one background session per lane
 
-For lane `n` (1-based) with issues `#a #b ...`, run via Bash:
+A child whose open parents all have qualifying open PRs gets its own lane unless hotspots or another linear link group it with other work. Start sessions only for entries in `lanes`. For lane `n` (1-based) with issues `#a #b ...`, run via Bash:
 
 ```bash
 claude --bg --name devflow-lane-<n> "/devflow:next-task #a #b --chain --isolated"
@@ -79,6 +85,7 @@ claude -w lane-<n> "/devflow:next-task #a #b --chain --isolated"
 Print a table: lane, background session id, issues. For each lane with a non-empty `ignoredTouched`, print the list as the files where `/devflow:sync` may work for that lane. Then explain:
 
 - Follow the sessions with `claude agents`, `claude logs <id>`, `claude attach <id>`.
+- For a child with one open parent PR, the engine stacks the child on the parent branch. With several open parent PRs, the engine stacks the child on the Integrate commit that combines the parent branches.
 - Each session claims its issues first; if an issue in a lane was already claimed elsewhere or gets blocked, the lane continues with the next issue, stacked on the last issue that shipped (or from the base); only issues with a real `Depends on` the failed one are skipped. Each posts a plan on every issue, implements test-first, and opens PRs stacked on the previous issue's PR inside its lane.
 - Who merges: the merge gate merges `risk:low` PRs bottom-up once its checks are green; `risk:high` PRs wait for a human. `/devflow:sync` handles conflicts and retargeting.
 - Background sessions cannot answer permission prompts. If one stalls, check the permissions step of `/devflow:init` (the allow-list snippet) and re-run the lane.

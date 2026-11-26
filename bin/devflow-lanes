@@ -2,17 +2,19 @@
 'use strict';
 // devflow-lanes: group ready issues into lanes that can run in parallel without colliding.
 // Input (stdin JSON): {"maxLanes": N, "ignoreHotspots": [string], "issues": [{"number": int, "hotspots": [string], "dependsOn": [int]}]}
-// Output (stdout JSON): {"lanes": [{"issues": [int], "sharedHotspots": [string], "ignoredTouched": [string]}], "deferred": [...], "ignoredHotspots": [string], "warnings": [...]}
+// Output (stdout JSON): {"lanes": [{"issues": [int], "sharedHotspots": [string], "ignoredTouched": [string]}], "deferred": [...], "stacked": [{"issue": int, "on": [int]}], "ignoredHotspots": [string], "warnings": [...]}
 
 const USAGE = `Usage: devflow-lanes < input.json
 
 Reads {"maxLanes": N, "ignoreHotspots": ["README.md"], "issues": [{"number": 1, "hotspots": ["a.py"], "dependsOn": [2]}]} from stdin.
 Hotspots matching ignoreHotspots (exact path, or glob with * and **; default ["README.md", "CHANGELOG.md"], [] ignores
 none) are dropped before grouping and listed in "ignoredHotspots".
-Issues that share a hotspot (exact path, trimmed) or depend on each other (inside the set) share a lane;
+Issues that share a hotspot (exact path, trimmed) or form a linear dependency link share a lane.
+A linear link has one in-set child per parent and one in-set parent per child.
+Fan-out and multi-parent children go to "stacked" unless joined by a hotspot.
 inside a lane, parents come first, ties by issue number. Lanes are sorted by smallest issue number; lanes
 beyond maxLanes (default 3) go to "deferred". Per lane, "ignoredTouched" lists the ignored hotspots (exact path) that
-the lane's issues name and an earlier lane's issues also name, sorted ([] when none). Prints {"lanes", "deferred", "ignoredHotspots", "warnings"} as JSON.
+the lane's issues name and an earlier lane's issues also name, sorted ([] when none). Prints {"lanes", "deferred", "stacked", "ignoredHotspots", "warnings"} as JSON.
 Exits 1 on invalid input.`;
 
 const DEFAULT_IGNORE = ['README.md', 'CHANGELOG.md'];
@@ -83,7 +85,6 @@ function planLanes(input) {
     });
     return { ...x, hotspots, ignoredNamed };
   });
-  const byNum = new Map(issues.map((x) => [x.number, x]));
   const parent = new Map(issues.map((x) => [x.number, x.number]));
   const find = (a) => {
     while (parent.get(a) !== a) {
@@ -99,16 +100,30 @@ function planLanes(input) {
   };
 
   const firstByHotspot = new Map();
+  const parentsByIssue = new Map();
+  const childCounts = new Map();
   for (const x of issues) {
     for (const h of x.hotspots) {
       if (firstByHotspot.has(h)) union(x.number, firstByHotspot.get(h));
       else firstByHotspot.set(h, x.number);
     }
-    for (const d of x.dependsOn) if (byNum.has(d) && d !== x.number) union(x.number, d);
+    const deps = x.dependsOn.filter((d) => parent.has(d) && d !== x.number).sort((a, b) => a - b);
+    parentsByIssue.set(x.number, deps);
+    for (const d of deps) childCounts.set(d, (childCounts.get(d) || 0) + 1);
+  }
+  // Only a linear link (one in-set child per parent, one in-set parent per child) joins a lane through a dependency.
+  for (const [issue, deps] of parentsByIssue) {
+    if (deps.length === 1 && childCounts.get(deps[0]) === 1) union(issue, deps[0]);
+  }
+  // Any other child waits for its parents' PRs, unless hotspots already put it in the same lane as every in-set parent.
+  const stacked = new Map();
+  for (const [issue, deps] of parentsByIssue) {
+    if (deps.some((d) => find(d) !== find(issue))) stacked.set(issue, deps);
   }
 
   const groups = new Map();
   for (const x of issues) {
+    if (stacked.has(x.number)) continue;
     const r = find(x.number);
     if (!groups.has(r)) groups.set(r, []);
     groups.get(r).push(x);
@@ -155,7 +170,8 @@ function planLanes(input) {
   const deferred = all
     .slice(maxLanes)
     .map(({ issues: i }) => ({ issues: i, reason: `over maxLanes (${maxLanes})` }));
-  return { lanes, deferred, ignoredHotspots: [...ignored].sort(), warnings };
+  const stackedIssues = [...stacked].sort(([a], [b]) => a - b).map(([issue, on]) => ({ issue, on }));
+  return { lanes, deferred, stacked: stackedIssues, ignoredHotspots: [...ignored].sort(), warnings };
 }
 
 if (require.main !== module) {

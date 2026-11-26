@@ -50,6 +50,8 @@ After a merge, run accept, report, or release as needed.
 
 Eligible `risk:low` issues take a short path with a failing test first, then checks and review. The issue supplies its own criteria and decisions. For shared context, devflow reads the spec path first, then the epic named by `Epic: #<n>` if there is no path.
 
+With `/devflow:dispatch`, fan-out children can start in parallel once their parent has an open PR with commits ahead of its base. Their work stacks on the parent branch, or on an integration commit when several parent PRs are open. Shared hotspots keep work in the same lane.
+
 ## Install
 
 1. Connect GitHub MCP. Have Python 3.9+ and Node 18+ available. For browser verification, use Playwright MCP or Claude in Chrome.
