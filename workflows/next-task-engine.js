@@ -1637,7 +1637,7 @@ function shipPrompt(issue, branch, state, risk, trace) {
         ? 'skipped (short path)'
         : 'not needed'
   const pathValue = tr.path === 'short' ? 'short (Plan and Verify skipped)' : 'full'
-  const runMarker = `<!-- devflow-run ${JSON.stringify({ path: tr.path === 'short' ? 'short' : 'full', reviewRounds: tr.reviewRounds, claimedAt: tr.claimedAt })} -->`
+  const runMarker = `<!-- devflow-run ${JSON.stringify({ path: tr.path === 'short' ? 'short' : 'full', reviewRounds: tr.reviewRounds, claimedAt: tr.claimedAt, agentCalls: tr.agentCalls })} -->`
   const prBase = prBaseFor(issue)
   const parents = parentsOf(issue)
   const stacked = parents.length > 0
@@ -2682,7 +2682,7 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
 
     // Ship
     phase('Ship')
-    const ship = await callAgent(shipPrompt(issue, branch, state, risk, { path: pathKind || 'full', reviewRounds, claimedAt }), {
+    const ship = await callAgent(shipPrompt(issue, branch, state, risk, { path: pathKind || 'full', reviewRounds, claimedAt, agentCalls }), {
       label: `ship #${issue.number}`,
       phase: 'Ship',
       schema: SHIP_SCHEMA,

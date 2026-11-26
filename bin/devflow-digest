@@ -1,0 +1,101 @@
+#!/usr/bin/env node
+'use strict';
+
+const USAGE = `Usage: devflow-digest < digest.json
+
+Reads a JSON object with an epic number and local date (YYYY-MM-DD).
+Optional fields: waitingPrs, decisions, bugs, waiting, doneToday, cost, warnings.
+Prints the daily digest as Markdown. Exits 1 on invalid input.`;
+
+const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const isNumber = (value) => Number.isSafeInteger(value) && value > 0;
+const isText = (value) => typeof value === 'string';
+const isDate = (value) => {
+  if (!isText(value) || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const time = Date.parse(value);
+  return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === value;
+};
+const isRow = (fields) => (row) =>
+  isObject(row) && Object.entries(fields).every(([key, valid]) => valid(row[key]));
+
+function list(source, key, valid) {
+  const items = source[key] === undefined ? [] : source[key];
+  if (!Array.isArray(items) || !items.every(valid)) throw new Error(`invalid ${key} list`);
+  return items;
+}
+
+// Keep GitHub text on one Markdown line, including titles copied from a table.
+const oneLine = (value) => value.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ');
+const priority = (pr) => pr.risk === 'high' ? 0 : pr.decisionsReview ? 1 : 2;
+
+function linkedTitle({ number, url, title }) {
+  const destination = url.replace(/[<>\s\\]/g, encodeURIComponent);
+  return `[#${number}](<${destination}>) ${oneLine(title)}`;
+}
+
+function section(title, items) {
+  const body = items.length ? items.map((item) => `- ${item}`).join('\n') : 'None';
+  return `### ${title}\n\n${body}`;
+}
+
+function renderDigest(input) {
+  if (!isObject(input) || !isNumber(input.epic) || !isDate(input.date))
+    throw new Error('expected a positive epic number and a date in YYYY-MM-DD format');
+  const { doneToday = {} } = input;
+  if (!isObject(doneToday)) throw new Error('doneToday must be an object');
+
+  const linked = { number: isNumber, title: isText, url: isText };
+  const waitingPrs = list(input, 'waitingPrs', isRow({
+    ...linked, risk: isText, decisionsReview: (v) => typeof v === 'boolean',
+    openedAt: (v) => isText(v) && Number.isFinite(Date.parse(v)),
+  }));
+  const decisions = list(input, 'decisions', isRow({
+    issue: isNumber, question: isText, option: isText, needsReview: (v) => typeof v === 'boolean',
+  }));
+  const bugs = list(input, 'bugs', isRow({ ...linked, forIssue: isNumber }));
+  const waiting = list(input, 'waiting', isRow({ issue: isNumber, reason: isText }));
+  const merged = list(doneToday, 'mergedPrs', isRow({ number: isNumber, title: isText, mergedBy: isText }));
+  const closed = list(doneToday, 'closedIssues', isNumber);
+  const cost = list(input, 'cost', isRow({
+    pr: isNumber, agentCalls: (v) => v == null || (Number.isSafeInteger(v) && v >= 0),
+  }));
+  const warnings = list(input, 'warnings', isText);
+
+  const ordered = [...waitingPrs].sort((a, b) =>
+    priority(a) - priority(b) || Date.parse(a.openedAt) - Date.parse(b.openedAt) || a.number - b.number);
+  const calls = cost.reduce((sum, row) => sum + (row.agentCalls ?? 0), 0);
+  const unknown = cost.filter((row) => row.agentCalls == null).length;
+  const costLines = cost.length ? [`${calls} agent calls`] : [];
+  if (unknown) costLines.push(`${unknown} ${unknown === 1 ? 'PR' : 'PRs'} unknown`);
+
+  const blocks = [`## Daily digest ${input.date} (epic #${input.epic})`];
+  if (warnings.length) blocks.push(warnings.map((w) => `- ${oneLine(w)}`).join('\n'));
+  return blocks.concat([
+    section('PRs waiting for you', ordered.map((pr) =>
+      `${linkedTitle(pr)} (risk: ${oneLine(pr.risk)}${pr.decisionsReview ? ', decisions:review' : ''}, opened ${oneLine(pr.openedAt)})`)),
+    section('Decisions to review', decisions.filter((d) => d.needsReview)
+      .map((d) => `#${d.issue} ${oneLine(d.question)} → ${oneLine(d.option)}`)),
+    section('Bugs filed', bugs.map((bug) => `${linkedTitle(bug)} (for #${bug.forIssue})`)),
+    section('Waiting or blocked', waiting.map((row) => `#${row.issue} ${oneLine(row.reason)}`)),
+    section('Done today', [
+      ...merged.map((pr) => `Merged PR #${pr.number} ${oneLine(pr.title)} (merged by ${oneLine(pr.mergedBy)})`),
+      ...closed.map((issue) => `Closed issue #${issue}`),
+    ]),
+    section('Cost', costLines),
+  ]).join('\n\n');
+}
+
+if (require.main !== module) {
+  module.exports = { renderDigest };
+} else if (process.argv.length === 3 && ['--help', '-h'].includes(process.argv[2])) {
+  console.log(USAGE);
+} else {
+  try {
+    if (process.argv.length !== 2) throw new Error(USAGE);
+    const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+    console.log(renderDigest(input));
+  } catch (error) {
+    console.error(`devflow-digest: ${error.message}`);
+    process.exitCode = 1;
+  }
+}

@@ -45,7 +45,7 @@ After a merge, run accept, report, or release as needed.
 | `/devflow:sync` | Update PR branches, retarget stacked PRs, and address review threads. |
 | `/devflow:answer` | Record answers under `## Decisions` and set a blocked issue ready again. |
 | `/devflow:accept` | Check merged work against its criteria. Use `/devflow:accept #<n>` for an epic. |
-| `/devflow:report` | Publish a trace with metrics. Use `/devflow:report #<n>` for an epic. |
+| `/devflow:report` | Publish a trace with metrics. Use `/devflow:report #<n>` for an epic. Use `--daily [#epic]` to print a daily digest for one epic or every open approved epic. |
 | `/devflow:doctor` | Check setup, stale claims, and merged branches. Use `--fix` for confirmed repairs. |
 | `/devflow:release` | Draft a GitHub release from a spec, everything since a tag, or all merged work. |
 

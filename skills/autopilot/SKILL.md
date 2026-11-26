@@ -72,6 +72,10 @@ claude -w lane-<n> "/devflow:next-task #a #b --chain --isolated"
 
 **(e) Report.** Update the same comment by ID with `renderPlan(plan)`. Advance `lastTick` to the cutoff after the entire comment window has been processed or its outstanding requests saved. Preserve `lastDigestDate`, the session history and applied or pending requests. Refresh the progress rows for this tick with running and stalled issues, each waiting reason, stacked issues and their parents, actual starts, warnings and the used and remaining agent budget. Reconcile `budgetLeft` for any planned lanes that did not launch. Surface the helper's warning when `nextTask.maxAgentCalls` is 0 (unlimited inside each lane). Report write failures and resume from the last saved checkpoint.
 
+When `lastDigestDate` differs from today's local date or the tick returns `done: true`, gather this epic's data using `/devflow:report --daily #<epic>` and render it with `bin/devflow-digest` as directed there. The completion tick refreshes the digest even if an earlier tick posted today.
+
+Use the digest's date in the first line of the comment, `<!-- devflow-digest YYYY-MM-DD -->`, followed by the rendered Markdown. Read all pages of the epic's comments and find the matching dated marker from autopilot. If it exists, edit that comment in place. Otherwise post the digest on the epic. After the write succeeds, set `lastDigestDate` to the digest's date and save the plan comment by ID. On a failure, report it and retry from the saved plan, checking the dated marker again before posting.
+
 ## 3. Loop
 
 If the helper returned `done: true`, go straight to Finish. Otherwise, when outside a loop, invoke the loop skill with `/loop /devflow:autopilot #<epic>`, substituting the number. Each later invocation runs one tick. Keep one loop per epic. Choose the next wake-up from the work pending. Allow about 20–30 minutes for running lanes or PRs awaiting checks or review, and a longer interval when only human action is pending.
