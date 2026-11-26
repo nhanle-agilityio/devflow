@@ -4,6 +4,32 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-11-26
+
+Wave 5, autopilot: one command runs an approved epic to the end; people review `risk:high` PRs and read a daily digest.
+
+### Added
+- The merge gate now readies eligible dependent issues and retargets stacked devflow PRs after human merges. (#163)
+- `/devflow:autopilot` runs an approved epic in a self-paced loop and records lane progress on the epic until every sub-issue closes. (#166)
+- `/devflow:report --daily` prints an epic's daily digest, and autopilot posts it on the epic each day and refreshes it at completion. (#167)
+
+### Changed
+- Record high-risk decisions for human review and file deduplicated triage bugs for exhausted check fixes and missing run requirements. (#164)
+- Dispatch can start fan-out children in parallel on open parent PRs before their dependencies merge. (#165)
+- `/devflow:spec` now extracts shared groundwork into foundation tasks, records dependencies only on code or files a task uses, and warns when a task has 3 or more dependents. (#168)
+
+### Fixed
+- Keep a decision flagged for human review when a run resumes an issue, report a ready issue whose open PR has no run, and allow the plugin helpers and lane sessions that dispatch and autopilot run unattended. (#162)
+
+### Upgrade
+- Question handling changed under `nextTask.onQuestion: decide`: product, criterion, contract, stored-format and lower-risk questions, and questions on a branch touching `risk.highPaths`, are now decided instead of blocking. They are recorded with `[needs human review]`, and the PR gets `decisions:review` and `risk:high`, so a human always merges it. Set `"onQuestion": "block"` to keep every question blocking.
+- Readiness changed: with `spec.autoReady`, a child becomes ready as soon as each dependency is closed or has an open PR ahead of the base (any risk), and `/devflow:dispatch` stacks it on the parent branch. Hub children and multi-parent children are listed as `stacked` instead of sharing the parent's lane.
+- The merge gate script and workflows changed. The gate now has a post-merge mode on `pull_request: closed` and a per-PR concurrency group. Copy-mode projects run `/devflow:init --upgrade`. Reusable-mode callers move their pin from `v3.1.0` to `v3.2.0`, also with `/devflow:init --upgrade`; the caller gains the `pull_request: closed` trigger. No new secret or token permission is needed.
+- Run `/devflow:init --upgrade` (or `/devflow:doctor --fix`) to add the new allow rules: the plugin helpers `devflow-lanes`, `devflow-autopilot` and `devflow-digest`, and `claude --bg --name devflow-lane-`. Without them an unattended `/devflow:autopilot` loop stops at permission prompts.
+- Before the first `/devflow:autopilot` run, set `nextTask.maxAgentCalls` to a non-zero value; with 0 there is no per-issue ceiling, and autopilot only warns. The optional `autopilot.*` keys keep their defaults: `maxLanes` from `dispatch.maxLanes`, then 3; `maxAgentCallsPerTick` 20; `stallHours` 12.
+- PR bodies now carry `agentCalls` in the `devflow-run` marker; PRs opened earlier count as unknown cost in the digest.
+- Release smoke: not run for 3.2.0, for the same reason as 3.1.0: `bin/devflow-smoke` needs the `gh` CLI, which the release machine does not have. Autopilot has not run on a live epic yet; the first tick on a sandbox epic is the smoke test.
+
 ## [3.1.0] - 2026-11-25
 
 ### Added
