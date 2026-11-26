@@ -2121,8 +2121,8 @@ test('a safe plan question is decided, recorded and shipped with decisions:revie
   assert.match(prompt(calls, 'ship'), /decisions:review/);
 });
 
-test('a question that changes a criterion blocks with its recommended option and the suffix', async () => {
-  const { rep, calls } = await run({ ...BASE, issues: [1] }, { planBlocked: true, planOut: () => ({ questions: [{ ...Q105, changesCriterion: true }] }) });
+test('a hard-stop question that changes a criterion blocks with its recommended option and the suffix', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { planBlocked: true, planOut: () => ({ questions: [{ ...Q105, changesCriterion: true, skipsCheck: true }] }) });
   assert.equal(rep[0].status, 'blocked');
   assert.match(prompt(calls, 'blocked'), /Recommended: A \(r\) \[changes a criterion: typed answer needed\]/);
 });
@@ -2202,8 +2202,8 @@ test('T7.7b no base conflict, no Integrate call', async () => {
   assert.ok(!has(calls, 'integrate'));
 });
 
-test('T7.8 a base conflict in behaviour the issue does not cover blocks with a questions comment', async () => {
-  const { rep, calls } = await run({ ...BASE, issues: [12] }, { ...T7_LABELS, branch: { resumed: true, commits: ['abc x'], baseConflict: true, conflictFiles: ['src/x.py'] }, integrateOut: { ok: false, integrationSha: '', merged: [], problem: 'conflict', questions: [Q112] } });
+test('T7.8 a base conflict with a hard stop blocks with a questions comment', async () => {
+  const { rep, calls } = await run({ ...BASE, issues: [12] }, { ...T7_LABELS, branch: { resumed: true, commits: ['abc x'], baseConflict: true, conflictFiles: ['src/x.py'] }, integrateOut: { ok: false, integrationSha: '', merged: [], problem: 'conflict', questions: [{ ...Q112, skipsCheck: true }] } });
   assert.equal(rep[0].status, 'blocked');
   assert.match(rep[0].reason, /^Integrate/);
   assert.match(prompt(calls, 'blocked'), /devflow-questions/);

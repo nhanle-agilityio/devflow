@@ -124,7 +124,7 @@ class SessionStartRules(unittest.TestCase):
             "failing test first",
             "Stage files by name",
             "acceptance criteria",
-            "ask",
+            "flag it for human review",
             "Never merge",
             "develop",
             "main",
