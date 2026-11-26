@@ -113,16 +113,18 @@ test('M3.2 separates docs from code and keeps skill and agent files with code', 
   ]);
 });
 
-test('M3.3 reports leftover paths and leaves history and the index alone', (t) => {
+// #189: an unlisted non-QA file no longer blocks the commit; it goes into the code commit and is reported.
+test('M3.3 reports unlisted paths and commits them with the code', (t) => {
   const r = repo(t);
   changes(r);
   r.write('extra file.txt', 'out of scope\n');
   r.git('add', '--', 'extra file.txt');
-  const before = r.git('status', '--porcelain');
   const result = r.commit();
-  assert.deepEqual(result.leftover, ['extra file.txt'], result.error);
-  assert.equal(r.git('rev-parse', 'HEAD'), r.initialHead);
-  assert.equal(r.git('status', '--porcelain'), before);
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(result.leftover, []);
+  assert.deepEqual(result.unlisted, ['extra file.txt']);
+  assert.ok(result.commits.at(-1).files.includes('extra file.txt'), 'in the code commit');
+  assert.equal(r.git('status', '--porcelain'), '');
 });
 
 test('M3.4 confirms red at the test commit and cleans up the worktree without changing the stash', (t) => {

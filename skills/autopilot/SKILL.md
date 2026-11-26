@@ -77,7 +77,7 @@ Use the digest's date in the first line of the comment, `<!-- devflow-digest YYY
 
 ## 3. Loop
 
-If the helper returned `done: true`, go straight to Finish. Otherwise, when outside a loop, invoke the loop skill with `/loop /devflow:autopilot #<epic>`, substituting the number. Each later invocation runs one tick. Keep one loop per epic. Choose the next wake-up from the work pending. Allow about 20–30 minutes for running lanes or PRs awaiting checks or review, and a longer interval when only human action is pending.
+If the helper returned `done: true`, go straight to Finish. Otherwise, when outside a loop, invoke the loop skill with `/loop /devflow:autopilot #<epic>`, substituting the number. Each later invocation runs one tick. Keep one loop per epic. Pace the next tick from the work pending. When lanes are running, arm a Monitor (load it with ToolSearch `select:Monitor` if it is deferred) whose until-loop runs `claude agents --json` every 60–120 seconds and ends as soon as any `devflow-lane-*` session started for this epic leaves `working` (done, blocked, idle or gone) or a new lane appears; that wakes the loop and the next tick runs at once. Keep a `ScheduleWakeup` fallback of 1200–1800 seconds in case the Monitor never fires. When no lane is running and only human action is pending (PRs waiting for a merge), use only `ScheduleWakeup` at 1200–1800 seconds.
 
 ## 4. Finish
 
