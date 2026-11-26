@@ -4,6 +4,16 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [3.2.1] - 2026-11-26
+
+Fixes a crash that blocked a lane whenever a run decided a question.
+
+### Fixed
+- A run that decides a question no longer crashes with "Date.now() / new Date() are unavailable in workflow scripts" and blocks its lane: the engine dates `## Decisions` lines from the new `runDate` arg (or the `claimId` prefix) instead of the clock. (#180)
+
+### Upgrade
+- Update the plugin to 3.2.1. Reusable-mode callers may move their pin from `v3.2.0` to `v3.2.1` with `/devflow:init --upgrade`; the gate script did not change. Issues blocked with `Stage: Error` and "Date.now() / new Date() are unavailable in workflow scripts" can be retried: remove `agent:blocked` after updating.
+
 ## [3.2.0] - 2026-11-26
 
 Wave 5, autopilot: one command runs an approved epic to the end; people review `risk:high` PRs and read a daily digest.
