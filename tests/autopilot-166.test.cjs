@@ -262,3 +262,20 @@ test('A1.15 unsatisfied dependencies have specific wait reasons and prevent disp
   assert.deepEqual(result.ready, [17]);
   assert.deepEqual(result.dispatch, [{ issues: [17] }]);
 });
+
+test('A1.16 blocked and untriaged children are reported as waiting, not skipped silently', () => {
+  const result = tick([
+    child(1, { labels: ['agent:blocked'] }),
+    child(2, { labels: ['needs-triage'] }),
+  ], { autoReady: 'all' });
+
+  assert.deepEqual(result.waiting, [
+    { issue: 1, reason: 'agent:blocked' },
+    { issue: 2, reason: 'needs-triage' },
+  ]);
+  assert.deepEqual(result.dispatch, []);
+});
+
+test('A1.17 the skill never cancels its own loop during preflight while the epic is approved', () => {
+  assert.doesNotMatch(readSkill(), /Cancel any active autopilot loop/);
+});

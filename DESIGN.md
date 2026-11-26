@@ -1,6 +1,6 @@
 # devflow — design
 
-A Claude Code plugin (3.1.0; `version` in `plugin.json` and `marketplace.json`, history in `CHANGELOG.md`) with ten project-agnostic commands, plus `/devflow:init` (and `init --upgrade`) for setup:
+A Claude Code plugin (3.1.0; `version` in `plugin.json` and `marketplace.json`, history in `CHANGELOG.md`) with eleven project-agnostic commands, plus `/devflow:init` (and `init --upgrade`) for setup:
 
 1. **`/devflow:spec`** — idea → analyse → grill-me → QA matrix → epic issue + one sub-issue per task (risk per task; the human sets readiness or approves the epic). With `--file`: spec PR (risk per task) → Gate 1 (human merges; this approves the risk levels) → GitHub issues labelled ready and `risk:low|high`.
 2. **`/devflow:next-task`** — pick up to N ready issues → claim → branch → plan on the issue → implement (QA and dev agents in parallel when the plan allows it, else test first) → checks → verify → review → open PR labelled with its risk, stacked on a parent PR when needed. Runs in the user's checkout, or in its own worktree with `--isolated`; `--chain` runs a lane.
@@ -12,6 +12,7 @@ A Claude Code plugin (3.1.0; `version` in `plugin.json` and `marketplace.json`, 
 8. **`/devflow:report`** — demo-ready trace page of one spec or epic, from GitHub data.
 9. **`/devflow:doctor`** — health check of the setup; `--fix` repairs what the user confirms.
 10. **`/devflow:approve`** — approve an epic and ready its eligible sub-issues.
+11. **`/devflow:autopilot`** — run an approved epic to completion in a self-paced loop.
 
 Merging is done by a human, or for `risk:low` PRs by the merge gate GitHub Action (`devflow-merge-gate.yml`). Claude never merges.
 
@@ -52,6 +53,7 @@ skills/spec/templates/issue.md      issue body template
 skills/next-task/SKILL.md           /devflow:next-task  (thin entry: preflight, then calls the workflow)
 skills/next-task/templates/pr.md    PR body template
 skills/dispatch/SKILL.md            /devflow:dispatch (thin entry: collect issues, run bin/devflow-lanes, start background sessions)
+skills/autopilot/SKILL.md           /devflow:autopilot (one approved epic per loop)
 skills/sync/SKILL.md                /devflow:sync (replaces /devflow:address-reviews)
 skills/answer/SKILL.md              /devflow:answer
 skills/accept/SKILL.md              /devflow:accept
@@ -59,6 +61,7 @@ skills/release/SKILL.md             /devflow:release
 skills/report/SKILL.md              /devflow:report (+ templates/trace.html, data in <script type="application/json" id="data">)
 skills/doctor/SKILL.md              /devflow:doctor
 bin/devflow-lanes                   node, stdlib only: lane planner (JSON on stdin and stdout); called as ${CLAUDE_PLUGIN_ROOT}/bin/devflow-lanes
+bin/devflow-autopilot               node, stdlib only: tick decisions and plan comment formatting
 bin/devflow-changelog               node, stdlib only: changelog fragments (has | preview | assemble); reads changelog.fragmentsDir and changelog.file from .claude/devflow.json
 bin/devflow-smoke                   node, stdlib only: read-only release smoke checker for one sandbox issue (gh api GET)
 docs/smoke/low.md, docs/smoke/high.md  release smoke fixture issue bodies (risk:low, risk:high)
@@ -290,6 +293,12 @@ An explicit human command. It uses GitHub MCP to add `labels.epicApproved` (defa
 The sweep considers open native sub-issues and issues with an exact `Epic: #<epic>` body line in the configured repository. It skips issues already ready, in progress, in review, blocked or in triage. Every `Depends on #n` issue must be closed or have an open PR at least one commit ahead of its base and carry no blocked label. Parent risk does not affect eligibility. The child must have no `Ready: manual` line, and its `## Open questions` section must be absent, empty or `None`. Approval is checked before writes. Removing it stops future sweeps and leaves existing ready labels in place.
 
 The command reports each sub-issue and its action (`ready`, `waits for #n`, `manual`, `high risk` or `open questions`). Dispatch applies the same sweep before collecting ready issues. `--plan` previews eligibility and lanes without posting a label or comment.
+
+## `/devflow:autopilot #<epic>`
+
+Each tick verifies epic approval, syncs the epic's devflow PRs, processes trusted comments, applies the ready sweep and starts background lanes. The pure `bin/devflow-autopilot` helper uses the supplied activity timestamps to detect stalls and calls `planLanes` with the remaining slots. `autopilot.maxLanes` inherits `dispatch.maxLanes` (default 3). Each lane start costs one of `autopilot.maxAgentCallsPerTick` (default 20). Running issues idle longer than `autopilot.stallHours` (default 12) keep their slots and are reported for human attention.
+
+The marked epic comment stores the plan, session IDs and comment cursor alongside a progress table. A restarted loop resumes there. Once every sub-issue is closed, autopilot posts the final report and ends the loop.
 
 ## `/devflow:answer #issue [1: answer; 2: answer ...]`
 

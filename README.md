@@ -39,6 +39,7 @@ After a merge, run accept, report, or release as needed.
 | `/devflow:init` | Set up a project and optionally install GitHub workflows. |
 | `/devflow:spec` | Create an epic and tasks, or use `--file` for a spec PR. |
 | `/devflow:approve` | Approve an epic so eligible tasks can become ready. |
+| `/devflow:autopilot #<epic>` | Run an approved epic in a self-paced loop until all its sub-issues close. |
 | `/devflow:next-task` | Test, implement, review, and open PRs for ready issues. |
 | `/devflow:dispatch` | Run independent lanes in separate worktrees. Use `/devflow:dispatch --plan` to preview. |
 | `/devflow:sync` | Update PR branches, retarget stacked PRs, and address review threads. |
@@ -51,6 +52,8 @@ After a merge, run accept, report, or release as needed.
 Eligible `risk:low` issues take a short path with a failing test first, then checks and review. The issue supplies its own criteria and decisions. For shared context, devflow reads the spec path first, then the epic named by `Epic: #<n>` if there is no path.
 
 With `/devflow:dispatch`, fan-out children can start in parallel once their parent has an open PR with commits ahead of its base. Their work stacks on the parent branch, or on an integration commit when several parent PRs are open. Shared hotspots keep work in the same lane.
+
+After approval, run `/devflow:autopilot #<epic>` to sync PRs, apply collaborator answers and start eligible lanes. The epic's plan comment shows waiting reasons, stalled work and the remaining agent budget. Run the command again after an interruption to resume from that comment.
 
 ## Install
 

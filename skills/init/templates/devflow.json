@@ -95,6 +95,9 @@
   // resolved by the merge gate's branch update or /devflow:sync. With changelog.fragmentsDir set,
   // the fragment directory never needs a lane: list `<fragmentsDir>/**` here (one file per issue).
   "dispatch": { "maxLanes": 3, "ignoreHotspots": ["README.md", "CHANGELOG.md"] },
+  // Omit autopilot.maxLanes to inherit dispatch.maxLanes (default 3). Each lane start costs one agent call.
+  // Running issues with no commit or comment for longer than stallHours appear in the epic's progress table.
+  "autopilot": { "maxLanes": 3, "maxAgentCallsPerTick": 20, "stallHours": 12 },
   // Weakened-checks scan: files matching these globs (** * ?) are skipped entirely, e.g. a test file whose fixture data
   // holds the scanned patterns. .claude/devflow.json is never ignored, so editing this list is itself a scan hit.
   "scan": { "ignore": [] },

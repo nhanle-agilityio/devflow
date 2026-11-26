@@ -244,6 +244,16 @@
         }
       }
     },
+    "autopilot": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Limits for /devflow:autopilot on an approved epic.",
+      "properties": {
+        "maxLanes": { "type": "integer", "minimum": 1, "description": "Concurrent lanes for the epic. Defaults to dispatch.maxLanes, or 3 when unset." },
+        "maxAgentCallsPerTick": { "type": "integer", "minimum": 1, "default": 20, "description": "Agent call budget per tick. Each lane start costs one call." },
+        "stallHours": { "type": "number", "exclusiveMinimum": 0, "default": 12, "description": "Report a running issue as stalled after this many hours without a commit or comment." }
+      }
+    },
     "scan": {
       "type": "object",
       "additionalProperties": false,
