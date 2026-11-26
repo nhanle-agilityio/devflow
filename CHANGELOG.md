@@ -4,6 +4,16 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [3.2.2] - 2026-11-26
+
+Autopilot runs unattended to the end: every loop tick runs, no permission prompt stops a lane, and PRs waiting for a merge are reported.
+
+### Fixed
+- `/devflow:autopilot` now runs every `/loop` tick (it no longer sets `disable-model-invocation`), lists each PR in review as waiting for its merge instead of dropping it, and the generated allow list matches numbered lane sessions (`devflow-lane-*`) and covers `claude --version`, `claude agents --json`, `devflow-gh` and `devflow-scan`, so an unattended run no longer stops at a permission prompt. (#183)
+
+### Upgrade
+- Update the plugin to 3.2.2, then run `/devflow:doctor --fix` (check 8) to add the new allow rules: `claude --bg --name devflow-lane-*` (the old `devflow-lane-:*` rule never matched a lane and can be removed), `claude --version`, `claude agents --json` and the `devflow-gh` and `devflow-scan` helpers. Reusable-mode callers may move their pin to `v3.2.2` with `/devflow:init --upgrade`; the gate did not change. Restart a running `/devflow:autopilot` loop after updating: it resumes from the epic's plan comment.
+
 ## [3.2.1] - 2026-11-26
 
 Fixes a crash that blocked a lane whenever a run decided a question.

@@ -1,6 +1,6 @@
 # devflow — design
 
-A Claude Code plugin (3.2.1; `version` in `plugin.json` and `marketplace.json`, history in `CHANGELOG.md`) with eleven project-agnostic commands, plus `/devflow:init` (and `init --upgrade`) for setup:
+A Claude Code plugin (3.2.2; `version` in `plugin.json` and `marketplace.json`, history in `CHANGELOG.md`) with eleven project-agnostic commands, plus `/devflow:init` (and `init --upgrade`) for setup:
 
 1. **`/devflow:spec`** — idea → analyse → grill-me → QA matrix → epic issue + one sub-issue per task (risk per task; the human sets readiness or approves the epic). With `--file`: spec PR (risk per task) → Gate 1 (human merges; this approves the risk levels) → GitHub issues labelled ready and `risk:low|high`.
 2. **`/devflow:next-task`** — pick up to N ready issues → claim → branch → plan on the issue → implement (QA and dev agents in parallel when the plan allows it, else test first) → checks → verify → review → open PR labelled with its risk, stacked on a parent PR when needed. Runs in the user's checkout, or in its own worktree with `--isolated`; `--chain` runs a lane.
@@ -138,7 +138,7 @@ Skills reference bundled files with `${CLAUDE_SKILL_DIR}/templates/...` or `${CL
   "worktree": { "dir": ".claude/worktrees", "setup": [] },  // isolated runs: dir holds the worktrees (keep it in .gitignore); setup commands run once in a fresh worktree
   "dispatch": { "maxLanes": 3, "ignoreHotspots": ["README.md", "CHANGELOG.md"] },  // /devflow:dispatch; optional pluginDir is passed as --plugin-dir to background sessions; ignoreHotspots (paths or * / ** globs) do not join lanes; the fragment directory never needs a lane, so list `<fragmentsDir>/**` there when `changelog.fragmentsDir` is set
   "changelog": { "fragmentsDir": "changelog.d", "file": "CHANGELOG.md" },  // optional; fragmentsDir has no default (unset = off, devflow-changelog exits 2); file defaults to CHANGELOG.md
-  "devflowVersion": "3.2.1",                     // plugin version the templates came from (init writes it, init --upgrade updates it)
+  "devflowVersion": "3.2.2",                     // plugin version the templates came from (init writes it, init --upgrade updates it)
   "notify": { "push": true, "onDone": true, "onBlocked": true, "onHighRisk": true },  // push notification at the end of a next-task run
   "release": { "tagPrefix": "v", "draft": true, "deploy": "", "notesFrom": "prs" },   // /devflow:release
   "accept": { "model": "sonnet", "labels": ["type:gap"] },  // /devflow:accept; labels go on the gap issues
