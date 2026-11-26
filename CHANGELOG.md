@@ -4,6 +4,16 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [3.2.3] - 2026-11-26
+
+`/devflow:doctor --fix` no longer leaves an uncommitted settings file that stops the next autopilot run.
+
+### Fixed
+- `/devflow:doctor --fix` no longer leaves `.claude/settings.json` uncommitted (which stopped autopilot, accept, next-task and dispatch at preflight): check 8 writes the allow rules on `chore/devflow-allow-rules-<version>`, opens a PR and switches back, removes stale devflow rules of older plugin versions and the old `devflow-lane-:*` rule, and lists the current rule set. Check 6 uses `claude agents --json`. (#186)
+
+### Upgrade
+- Update the plugin to 3.2.3. The next `/devflow:doctor --fix` proposes the allow rules on a `chore/devflow-allow-rules-3.2.3` PR (it removes the 3.2.2 helper paths); merge it and `git pull` before the next autopilot or dispatch run. Reusable-mode callers may move their pin to `v3.2.3` with `/devflow:init --upgrade`; the gate did not change.
+
 ## [3.2.2] - 2026-11-26
 
 Autopilot runs unattended to the end: every loop tick runs, no permission prompt stops a lane, and PRs waiting for a merge are reported.
