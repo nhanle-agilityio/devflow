@@ -125,7 +125,7 @@ function commitPayload(run) {
 test('S1 full low- and high-risk runs use explicit stage models', async () => {
   const mismatches = [];
   const stageModels = {
-    'select issues': 'haiku', claim: 'haiku', branch: 'haiku', integrate: 'haiku',
+    'select issues': 'haiku', claim: 'haiku', branch: 'haiku', integrate: 'sonnet', // integrate resolves merge conflicts
     commit: 'haiku', check: 'haiku', scan: 'haiku', 'claim check': 'haiku',
     plan: 'sonnet', qa: 'sonnet', implement: 'sonnet', fix: 'sonnet',
   };

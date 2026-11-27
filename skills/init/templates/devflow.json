@@ -57,6 +57,7 @@
   "testing": { "e2eFramework": false },
   // Run in order; all must pass before review. Use the project's own commands.
   // Optional timeoutSeconds sets a per-command limit in seconds (default 600).
+  // The test check can set redRun for the QA commit's red check, with {files} for the shell-quoted QA paths.
   "checks": [
     { "name": "test", "run": "npm test" },
     { "name": "lint", "run": "npm run lint" }

@@ -1497,15 +1497,16 @@ function guideBlock(guide) {
 
 function commitPrompt(issue, branch, qa, dev, guide) {
   const testCheck = cfg.checks.find((c) => /test/i.test(c.name)) || cfg.checks[0]
+  const qaFiles = qa.filesChanged || []
   const payload = {
     issue: issue.number,
     scope: scopeFor(issue),
     type: (issue.labels || []).find((name) => /^type:(fix|chore|refactor)$/.test(name))?.slice(5) || 'feat',
     title: branchTitle(issue),
-    qaFiles: qa.filesChanged || [],
+    qaFiles,
     devFiles: dev.filesChanged || [],
     separate: !!(guide && guide.separate),
-    testCommand: testCheck.run,
+    testCommand: testCheck.redRun?.replace(/\{files\}/g, () => qaFiles.map(shellWord).join(' ')) ?? testCheck.run,
     setup: cfg.worktree?.setup || [],
   }
   if (testCheck.lock) payload.testLock = testCheck.lock
@@ -1547,8 +1548,11 @@ Instructions:
 Return the same structure as the implement stage; "commits" lists only the commits you made now. ${src.kind === 'epic' ? `In "specRead" put "epic #${src.n}" and in "epicRead" whether you read it: ${epicStep(src.n, EPIC_MCP)}` : `In "specRead" put the spec path if you read the spec, otherwise "none".`}${lockNote()}${qEnd(issue)}`
 }
 
-function checkPrompt() {
-  return `From the repository root, run exactly: \`node "${pluginRoot}/bin/devflow-run" check\`
+function checkPrompt(positions) {
+  const options = positions ? ['--only', positions.join(',')] : []
+  const command = runCommand('check', options).trimEnd()
+  const selected = positions ? `\nSelected check commands for reference: ${JSON.stringify(positions.map((n) => cfg.checks[n - 1].run))}` : ''
+  return `From the repository root, run exactly: \`${command}\`${selected}
 Return its JSON and do nothing else. You may annotate a failed result with files inferred from its outputTail.`
 }
 
@@ -1983,7 +1987,6 @@ function devQuestions(r, tag) {
   return [/^\[(BA|QA|Dev)\] /.test(reason) ? reason : `[${tag}] ${reason}`]
 }
 
-// Run all checks; on failure ask for a fix and re-check, up to maxFixRounds fix attempts.
 function missingRunRequirement(output) {
   return String(output).split('\n').some((line) => {
     if (/\b(?:permission denied|access denied|insufficient permissions?|requires? .* permissions?|resource not accessible by integration|EACCES|EPERM)\b/i.test(line)) return true
@@ -1997,40 +2000,57 @@ function noteProblem(issue, stage, result) {
   if (result.problem) issue.notes.push(`${stage}: ${result.problem.slice(0, 160)}`)
 }
 
-// Returns {ok, reason, runErrorOutput?}. Mutates state with the fix results.
+async function runChecks(issue, state, round, positions) {
+  phase('Check')
+  const check = await callAgent(checkPrompt(positions), {
+    label: `check #${issue.number}${round ? ` (after fix ${round})` : ''}`,
+    phase: 'Check',
+    schema: CHECK_SCHEMA,
+    model: 'haiku',
+  })
+  if (!check) return { ok: false, reason: 'The check agent died before reporting.' }
+  if (down(check)) return { ok: false, reason: check.problem }
+  // Older workflow callers report passed without ok.
+  if (check.ok !== true && !(check.ok === undefined && typeof check.passed === 'boolean')) {
+    return { ok: false, reason: check.error || check.problem || 'The check command could not run.' }
+  }
+  if (check.passed === true) {
+    noteProblem(issue, 'Check', check)
+    return { ok: true }
+  }
+  // Older workflow callers can still return already-mapped failures.
+  const failures = Array.isArray(check.checks)
+    ? check.checks.flatMap((entry, index) => entry.timedOut || entry.exitCode !== 0 ? [{
+      check: entry.name,
+      output: entry.outputTail,
+      files: entry.files || state.qaFiles.filter((file) => entry.outputTail.includes(file)),
+      position: positions ? positions[index] : index + 1,
+    }] : [])
+    : check.failures
+  if (!failures?.length) return { ok: false, reason: 'The check command returned no failure details.' }
+  return { failures }
+}
+
+// A fix invalidates all earlier passes. Retry the failures first, then run the rest on success.
 async function checkLoop(issue, branch, state) {
+  let retry
   for (let round = 0; round <= nt.maxFixRounds; round++) {
-    phase('Check')
-    const check = await callAgent(checkPrompt(), {
-      label: `check #${issue.number}${round ? ` (after fix ${round})` : ''}`,
-      phase: 'Check',
-      schema: CHECK_SCHEMA,
-      model: 'haiku',
-    })
-    if (!check) return { ok: false, reason: 'The check agent died before reporting.' }
-    if (down(check)) return { ok: false, reason: check.problem }
-    // Older workflow callers report passed without ok.
-    if (check.ok !== true && !(check.ok === undefined && typeof check.passed === 'boolean')) {
-      return { ok: false, reason: check.error || check.problem || 'The check command could not run.' }
+    let result = await runChecks(issue, state, round, retry)
+    if (retry && result.ok) {
+      const remaining = cfg.checks.map((_, index) => index + 1).filter((position) => !retry.includes(position))
+      if (remaining.length) result = await runChecks(issue, state, round, remaining)
     }
-    if (check.passed === true) {
-      noteProblem(issue, 'Check', check)
-      return { ok: true }
-    }
-    // Older workflow callers can still return already-mapped failures.
-    const failures = Array.isArray(check.checks)
-      ? check.checks.filter((entry) => entry.timedOut || entry.exitCode !== 0).map((entry) => ({
-        check: entry.name,
-        output: entry.outputTail,
-        files: entry.files || state.qaFiles.filter((file) => entry.outputTail.includes(file)),
-      }))
-      : check.failures
-    if (!failures?.length) return { ok: false, reason: 'The check command returned no failure details.' }
+    const { failures } = result
+    if (!failures) return result
     const details = failures.map((f) => `[${f.check}]\n${f.output}`).join('\n\n')
     if (missingRunRequirement(details)) return { ok: false, reason: details, runErrorOutput: details }
     if (round === nt.maxFixRounds) {
       return { ok: false, reason: `Checks still failing after ${nt.maxFixRounds} fix round(s):\n${details}`, runErrorOutput: details }
     }
+    retry = cfg.checks.map((_, index) => index + 1).filter((position) => failures.some((failure) =>
+      failure.position === position || (failure.position === undefined && failure.check === cfg.checks[position - 1].name),
+    ))
+    if (!retry.length) return { ok: false, reason: 'The check command did not identify a configured failing check.' }
     // A failure attributed to a QA file goes to the QA fix agent; one that also names other files goes to the dev fix agent too.
     const items = []
     failures.forEach((f, i) => {
@@ -2434,7 +2454,7 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
       const integAsked = await withQuestions(
         issue,
         branch,
-        () => callAgent(integratePrompt(issue, branch, baseConflict), { label: `integrate #${issue.number}`, phase: 'Implement', schema: INTEGRATE_SCHEMA, model: 'sonnet' }),
+        () => callAgent(integratePrompt(issue, branch, baseConflict), { label: `integrate #${issue.number}`, phase: 'Implement', schema: INTEGRATE_SCHEMA, model: 'sonnet' /* resolves merge conflicts: not mechanical */ }),
         (r) => (r.ok !== true && Array.isArray(r.questions) ? r.questions : []),
       )
       const integ = integAsked.result
@@ -2682,7 +2702,7 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
           label: `verify #${issue.number}${round ? ' (again)' : ''}`,
           phase: 'Verify',
           schema: VERIFY_SCHEMA,
-          model: 'sonnet',
+          model: issueRisk(issue) === 'low' ? 'haiku' : 'sonnet',
         })
         if (!v) return retreat('Verify', 'The verify agent died.')
         if (down(v)) return retreat('Verify', v.problem)
@@ -2861,7 +2881,7 @@ Return claimPresent=true only if a comment still contains "<!-- devflow-claim id
         return done({ issue: issue.number, status: 'skipped', reason: 'claim released while this run was waiting; another lane owns the issue' })
       }
       ship = await callOnce(shipPrompt(issue, branch, state, risk, { path: pathKind || 'full', reviewRounds, claimedAt, agentCalls }), {
-        label: `ship #${issue.number}`, phase: 'Ship', schema: SHIP_SCHEMA, model: 'sonnet',
+        label: `ship #${issue.number}`, phase: 'Ship', schema: SHIP_SCHEMA, model: issueRisk(issue) === 'low' ? 'haiku' : 'sonnet',
       })
     }
     if (down(ship) || ship?.ok !== true || !ship.prNumber || !ship.url) {

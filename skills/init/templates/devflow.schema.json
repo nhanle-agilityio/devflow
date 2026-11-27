@@ -135,6 +135,7 @@
         "properties": {
           "name": { "type": "string", "minLength": 1 },
           "run": { "type": "string", "minLength": 1 },
+          "redRun": { "type": "string", "minLength": 1, "description": "Optional command for the QA commit's red check. {files} expands to the shell-quoted QA test paths, separated by spaces." },
           "timeoutSeconds": { "type": "integer", "minimum": 1, "default": 600 },
           "lock": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$", "description": "Optional lock name. devflow-run check holds this lock while the check runs, so lanes sharing a resource (for example one local database) never run it at the same time." }
         }
