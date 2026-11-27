@@ -261,3 +261,20 @@ test('P12 the report maps a retry skip to nothing (autopilot retries)', () => {
   assert.match(mapping, /skipped/i);
   assert.match(mapping, /retry:/);
 });
+
+// P13 several branches match the issue: the run picks one deterministically, records it and continues (never asks).
+test('P13 several matching branches continue on one picked branch with a decision note', async () => {
+  let n = 0;
+  const replies = {
+    get branch() {
+      return n++ === 0
+        ? { ok: false, candidates: ['feat/7-health-old', 'feat/7-health-two'] }
+        : { ok: true, branch: 'feat/7-health-old', action: 'resumed', commits: [] };
+    },
+  };
+  const run = await runIssue({ replies });
+  noBlock(run);
+  assert.equal(stageCalls(run, 'branch').length, 2, 'the branch stage runs again on the picked branch');
+  assert.equal(run.entry.status, 'pr', run.entry.reason);
+  assert.match(promptFor(run, 'ship'), /decisions:review/);
+});
