@@ -4,6 +4,16 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [3.3.2] - 2026-11-27
+
+The last fixes from a full lifecycle audit of unattended autopilot runs: no stalls on finished lanes, no overlapping ticks, backoff for failed launches, resumed PRs, closed merged children and a claim check before Ship.
+
+### Fixed
+- Autopilot locks each tick, wakes on lane changes or timeout, tracks working sessions with bounded history, backs off failed launches, resumes open PRs and closes merged children, while next-task parks idle worktrees, orders claims at millisecond precision, rechecks ownership before Ship and releases the claim afterward. (#195)
+
+### Upgrade
+- Update the plugin to 3.3.2 and run `/devflow:doctor --fix` to move the helper rules to 3.3.2; nothing else changes (no template, schema or config key). Stop old background lane sessions that already finished (`claude agents`), then restart `/devflow:autopilot`: plans written by earlier versions with short session ids are matched by prefix.
+
 ## [3.3.1] - 2026-11-26
 
 Claims are released reliably and autopilot recovers an issue that no lane is working on.

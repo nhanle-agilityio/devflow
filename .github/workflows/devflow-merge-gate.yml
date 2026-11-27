@@ -15,7 +15,7 @@ on:
   workflow_call:
     inputs:
       devflow-ref:
-        description: "The devflow tag the caller is pinned to (e.g. v3.3.1); the gate script is read at this ref"
+        description: "The devflow tag the caller is pinned to (e.g. v3.3.2); the gate script is read at this ref"
         required: true
         type: string
     secrets:
