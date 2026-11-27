@@ -4,6 +4,16 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-11-27
+
+Only problems that cannot be undone block an issue; everything else retries, proceeds with a recorded decision, or ships flagged for a human.
+
+### Changed
+- Only problems that cannot be undone block an issue: transient failures get up to three attempts, self-consistency checks proceed with a recorded decision, unresolved review findings ship as `risk:high` for a human, and the engine normalizes agent outputs. (#198)
+
+### Upgrade
+- Update the plugin to 3.4.0 and run `/devflow:doctor --fix` to move the helper rules to 3.4.0; no template, schema or config key changed. Behaviour change: transient failures no longer block (the issue returns to `agent:ready` with a `<!-- devflow-retry count=n -->` comment and blocks only on the third attempt), self-consistency checks proceed with `decisions:review`, and review findings left after the rounds ship as `risk:high`. Issues blocked by earlier versions for one of these reasons can be unblocked by removing `agent:blocked`. `nextTask.onQuestion: "block"` keeps the old blocking for questions and read fallbacks. Restart a running `/devflow:autopilot` loop.
+
 ## [3.3.2] - 2026-11-27
 
 The last fixes from a full lifecycle audit of unattended autopilot runs: no stalls on finished lanes, no overlapping ticks, backoff for failed launches, resumed PRs, closed merged children and a claim check before Ship.
