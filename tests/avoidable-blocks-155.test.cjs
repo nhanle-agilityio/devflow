@@ -61,6 +61,7 @@ async function run({ body = '', sourceRead = 'none', plan = {}, review = {}, nex
         return { ok: true, prNumber: 1155, url: 'https://example.test/pull/1155' };
       case 'decisions':
         return { ok: true };
+      case 'retreat':
       case 'blocked':
       case 'release':
       case 'restore':
@@ -133,10 +134,11 @@ test('B4 onQuestion block preserves the unreadable epic Plan block', async () =>
   assertBlocked(result, 'Plan: epic #42 could not be read');
 });
 
-test('B5 a missing spec file read still blocks at Plan', async () => {
+test('B5 a missing spec file read is a Plan decision', async () => {
   const specPath = 'docs/specs/save.md';
-  const result = await run({ body: `Spec: ${specPath}`, plan: { specRead: 'none' } });
-  assertBlocked(result, `Plan: Plan did not read the spec ${specPath}`);
+  const result = await run({ body: `Spec: ${specPath}`, sourceRead: specPath, plan: { specRead: 'none' } });
+  assertShipped(result);
+  assert.ok(result.result.notes.includes(`Plan did not read the spec ${specPath}`));
 });
 
 test('B6 one empty Implement result retries with the same prompt and options and ships', async () => {
@@ -146,10 +148,13 @@ test('B6 one empty Implement result retries with the same prompt and options and
   assert.deepEqual(result.implementCalls[1], result.implementCalls[0]);
 });
 
-test('B7 two empty Implement results block with the original reason', async () => {
+test('B7 two empty Implement results retreat with the stage and original reason', async () => {
   const result = await run({ emptyImplements: 2 });
-  assertBlocked(result, 'Implement: The implement agent died.');
-  assert.equal(result.implementCalls.length, 2, 'Expected two Implement calls before blocking');
+  assert.equal(result.result.status, 'skipped');
+  assert.equal(result.result.reason, 'retry: Implement: The implement agent died.');
+  assert.ok(result.calls.some(({ stage }) => stage === 'retreat'));
+  assert.ok(result.calls.every(({ stage }) => stage !== 'ship'));
+  assert.equal(result.implementCalls.length, 2, 'Expected two Implement calls before retreat');
 });
 
 test('B8 the Implement retry respects and consumes the agent budget', async () => {
