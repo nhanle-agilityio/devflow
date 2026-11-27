@@ -115,6 +115,7 @@ async function run({ question, redOutput, missingEnv = false, chain = false, nex
         skipped: [],
       };
     }
+    if (label.startsWith('claim check')) return { claimPresent: true };
     if (stage === 'claim') {
       const claim = { commentId: 10 + n, claimId: args.claimId, createdAt: new Date().toISOString() };
       return { taken: false, claims: claimMissing ? [] : [claim], labels, specPath: '', introducedBy: false };

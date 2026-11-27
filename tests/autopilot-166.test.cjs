@@ -54,12 +54,12 @@ test('A1.2 two running children leave one free lane and cannot be dispatched aga
   assert.deepEqual(tick(children, { maxLanes: 1 }).dispatch, []);
 });
 
-test('A1.3 a ready child starts its own lane once the parent PR is ahead', () => {
+test('A1.3 a ready parent with an open PR resumes in a lane with its ready child', () => {
   const result = tick([
     child(11, { labels: ['agent:ready'], pr: openPR(30) }),
     child(12, { labels: ['agent:ready'], dependsOn: [11] }),
   ]);
-  assert.deepEqual(result.dispatch, [{ issues: [12] }]);
+  assert.deepEqual(result.dispatch, [{ issues: [11, 12] }]);
   assert.deepEqual(result.stacked, []);
 });
 

@@ -554,8 +554,8 @@ function specPathFor(issue) {
 // Timestamps are extracted by regex: the claim agent may return them quoted or padded.
 function pickClaimWinner(claims, lastBlockedAt) {
   const stamp = (value) => {
-    const m = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/.exec(String(value ?? ''))
-    return m ? m[0] : null
+    const m = /(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?Z/.exec(String(value ?? ''))
+    return m ? `${m[1]}.${((m[2] || '') + '000').slice(0, 3)}Z` : null
   }
   const blockedAt = stamp(lastBlockedAt)
   let winner = null
@@ -1779,6 +1779,7 @@ If rendering exits 1, return ok=false with its error. Use the returned title and
 4. On issue #${issue.number} add the label "${labels.review}" and remove "${labels.inProgress}" (keep other labels).${risk.escalation ? ` Also add "${labels.riskHigh}" to the issue and remove "${labels.riskLow}" (the change was escalated to high).` : ''}
 5. Stay on the branch. ${isolated ? 'This checkout is a dedicated worktree.' : 'The engine handles checkout restoration.'}
 5b. Read the PR once more with pull_request_read (get, then get_status or get_check_runs): return mergeState = "conflict" when it has merge conflicts (mergeable false or mergeable_state dirty), "behind" when mergeable_state is behind, "clean" otherwise and "unknown" when GitHub has not computed it yet; return checksFailing = true only when a check run or status of the head has already failed (pending or missing is not failing). Read-only; do not wait.
+6. Release this run's claim on issue #${issue.number}. Edit each comment containing "<!-- devflow-claim id=${claimId} -->" with update_issue_comment. Replace its whole body with exactly two lines: \`<!-- devflow-claim-released id=${claimId} -->\` and \`Claim released by devflow (${claimId}).\`
 Return the PR number and URL. If any step fails, return ok=false with the problem.`
 }
 
@@ -2122,20 +2123,23 @@ class AgentBudgetExceeded extends Error {
 let agentCalls = 0
 const budgetReached = () => nt.maxAgentCalls > 0 && agentCalls >= nt.maxAgentCalls
 
-async function callAgent(prompt, options, receive, opts) {
+async function callOnce(prompt, options) {
+  // Reserve each attempt before awaiting so parallel QA and Dev share the same limit.
+  if (budgetReached()) throw new AgentBudgetExceeded(agentCalls)
+  agentCalls++
+  return agent(prompt, options)
+}
+
+async function callAgent(prompt, options, receive) {
   for (let attempt = 0; attempt < 2; attempt++) {
-    // Reserve each attempt before awaiting so parallel QA and Dev share the same limit.
-    if (budgetReached()) throw new AgentBudgetExceeded(agentCalls)
-    agentCalls++
     try {
-      const result = await agent(prompt, options)
+      const result = await callOnce(prompt, options)
       if (result != null || attempt === 1) {
         if (receive) receive(result)
         return result
       }
     } finally {
-      // Ship is the last call: once it has opened the PR, never turn the issue into a block.
-      if (!(opts && opts.last) && budgetReached()) throw new AgentBudgetExceeded(agentCalls)
+      if (budgetReached()) throw new AgentBudgetExceeded(agentCalls)
     }
   }
 }
@@ -2734,12 +2738,21 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
 
     // Ship
     phase('Ship')
-    const ship = await callAgent(shipPrompt(issue, branch, state, risk, { path: pathKind || 'full', reviewRounds, claimedAt, agentCalls }), {
-      label: `ship #${issue.number}`,
-      phase: 'Ship',
-      schema: SHIP_SCHEMA,
-      model: 'sonnet', // writes the PR body reviewers read; worth more than haiku
-    }, undefined, { last: true })
+    // An empty Ship result can be retried once. Check ownership before each attempt.
+    let ship
+    for (let attempt = 0; attempt < 2 && ship == null; attempt++) {
+      const ownership = await callOnce(`Re-read issue #${issue.number} in ${gh.owner}/${gh.repo} and all pages of its comments. ${MCP_NOTE}
+Return claimPresent=true only if a comment still contains "<!-- devflow-claim id=${claimId} -->". Make no changes.`, {
+        label: `claim check #${issue.number}`, phase: 'Ship', model: 'haiku', schema: CLAIM_RELEASE_CHECK_SCHEMA,
+      }).catch((error) => { notes.push(`claim check failed: ${error.message || error}`) })
+      // Only a confirmed loss stops Ship; a failed check ships (the work is done and the claim was ours).
+      if (ownership?.claimPresent === false) {
+        return done({ issue: issue.number, status: 'skipped', reason: 'claim released while this run was waiting; another lane owns the issue' })
+      }
+      ship = await callOnce(shipPrompt(issue, branch, state, risk, { path: pathKind || 'full', reviewRounds, claimedAt, agentCalls }), {
+        label: `ship #${issue.number}`, phase: 'Ship', schema: SHIP_SCHEMA, model: 'sonnet',
+      })
+    }
     if (!ship || !ship.ok) return block('Ship', (ship && ship.problem) || 'The ship agent died.')
     if (ship.reused === true) notes.push(`reused open PR #${ship.prNumber}`)
     if (ship.unstacked) {

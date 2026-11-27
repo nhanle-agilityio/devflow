@@ -65,6 +65,7 @@ async function run(args, opts = {}) {
         skipped: [],
       };
     }
+    if (l.startsWith('claim check')) return { claimPresent: true };
     if (l.startsWith('claim')) return { taken: false, claims: [{ commentId: 10 + n, claimId: args.claimId, createdAt: '2026-01-01T00:00:05Z' }], labels: opts.labels || ['risk:high'], specPath: '', introducedBy: false };
     if (l.startsWith('release')) return { ok: true };
     if (l.startsWith('integrate')) return { ok: true, integrationSha: 'abc1234def', merged: ['a', 'b'] };

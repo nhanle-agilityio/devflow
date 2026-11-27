@@ -10,9 +10,10 @@ Reads planTick input as JSON on stdin. For example:
 {"now":"2026-11-26T10:00:00Z","children":[{"number":1,"state":"open","labels":["agent:ready"],"body":"","hotspots":[],"dependsOn":[],"lastActivity":null,"pr":null}]}
 Optional settings: external, labels, autoReady, maxLanes, ignoreHotspots, stallHours,
 maxAgentCallsPerTick, agentCallsUsed, nextTaskMaxAgentCalls, activeIssues (issues a working lane holds),
-unknownLanes (default true: turns the orphan check off) and orphanMinutes (default 15).
-Prints ready issues, running, stalled and orphaned issues, dispatch lanes, stacked issues, waiting reasons,
-warnings, budgetLeft and done as JSON. Exits 1 on invalid input.`;
+unknownLanes (default true: turns the orphan check off), orphanMinutes (default 15),
+recentFailures ([{issue, at}]), retryMinutes (default 30) and baseBranch (compared with each PR's optional base).
+Prints ready issues, running, stalled and orphaned issues, close (issues merged into baseBranch),
+dispatch lanes, stacked issues, waiting reasons, warnings, budgetLeft and done as JSON. Exits 1 on invalid input.`;
 
 const DEFAULT_LABELS = {
   ready: 'agent:ready', inProgress: 'agent:in-progress', review: 'agent:review',
@@ -36,7 +37,8 @@ function validateIssue(issue, child) {
   if (!['open', 'closed'].includes(state) || !isStringList(issue.labels))
     throw new Error(`#${number} needs an open or closed state and a list of labels`);
   if (pr !== null && (!isObject(pr) || !isPositiveInt(pr.number) || !['open', 'closed'].includes(pr.state)
-    || typeof pr.merged !== 'boolean' || (pr.state === 'open' && !isCount(pr.aheadBy))))
+    || typeof pr.merged !== 'boolean' || (pr.base !== undefined && typeof pr.base !== 'string')
+    || (pr.state === 'open' && !isCount(pr.aheadBy))))
     throw new Error(`#${number} has invalid PR data`);
   if (!child) return;
   if (typeof issue.body !== 'string' || !isStringList(issue.hotspots)
@@ -50,7 +52,7 @@ function readState(input) {
   const {
     children, external = [], labels = {}, autoReady = 'off', maxLanes = 3, stallHours = 12,
     maxAgentCallsPerTick = 20, agentCallsUsed = 0, nextTaskMaxAgentCalls = 0, ignoreHotspots,
-    activeIssues = [], unknownLanes = true, orphanMinutes = 15,
+    activeIssues = [], unknownLanes = true, orphanMinutes = 15, recentFailures = [], retryMinutes = 30, baseBranch,
   } = input;
   const now = timestamp(input.now, 'now');
   if (!Array.isArray(children) || !Array.isArray(external)) throw new Error('children and external must be arrays');
@@ -65,6 +67,17 @@ function readState(input) {
   if (!Array.isArray(activeIssues) || !activeIssues.every(isPositiveInt)) throw new Error('activeIssues must be a list of issue numbers');
   if (typeof unknownLanes !== 'boolean') throw new Error('unknownLanes must be a boolean');
   if (!Number.isFinite(orphanMinutes) || orphanMinutes <= 0) throw new Error('orphanMinutes must be positive');
+  if (baseBranch !== undefined && typeof baseBranch !== 'string') throw new Error('baseBranch must be a string');
+  if (!Number.isFinite(retryMinutes) || retryMinutes < 0) throw new Error('retryMinutes must be non-negative');
+  if (!Array.isArray(recentFailures)) throw new Error('recentFailures must be an array');
+  const failures = new Map();
+  for (const failure of recentFailures) {
+    if (!isObject(failure) || !isPositiveInt(failure.issue)) throw new Error('recentFailures needs positive issue numbers');
+    const time = timestamp(failure.at, 'recentFailures.at');
+    if (!failures.has(failure.issue) || time > failures.get(failure.issue).time) {
+      failures.set(failure.issue, { at: failure.at, time });
+    }
+  }
   if (ignoreHotspots !== undefined && !isStringList(ignoreHotspots)) throw new Error('ignoreHotspots must be a list of paths');
 
   children.forEach((issue) => validateIssue(issue, true));
@@ -74,7 +87,7 @@ function readState(input) {
   return {
     children, byNumber, labels: { ...DEFAULT_LABELS, ...labels }, autoReady, maxLanes, ignoreHotspots,
     stallBefore: now - stallHours * 3600000, nextTaskMaxAgentCalls,
-    activeIssues, unknownLanes, orphanBefore: now - orphanMinutes * 60000,
+    activeIssues, unknownLanes, orphanBefore: now - orphanMinutes * 60000, failures, retryMinutes, now, baseBranch,
     budget: Math.max(0, maxAgentCallsPerTick - agentCallsUsed),
   };
 }
@@ -112,9 +125,19 @@ function readinessHold(issue, { autoReady, labels }) {
 function classifyChildren(state) {
   const { labels } = state;
   const open = state.children.filter((issue) => issue.state === 'open').sort((a, b) => a.number - b.number);
-  const ready = [], running = [], stalled = [], orphaned = [], waiting = [], runnable = [];
+  const ready = [], running = [], stalled = [], orphaned = [], close = [], waiting = [], runnable = [], warnings = [];
   for (const issue of open) {
-    if (issue.labels.includes(labels.inProgress)) {
+    if (issue.pr?.merged && state.baseBranch && issue.pr.base === state.baseBranch) {
+      close.push(issue.number);
+      continue;
+    }
+    const failure = state.failures.get(issue.number);
+    const retryAt = failure && failure.time + state.retryMinutes * 60000;
+    const backingOff = failure && state.now < retryAt;
+    if (backingOff) {
+      warnings.push(`lane for #${issue.number} exited before claiming at ${failure.at}; retrying after ${new Date(retryAt).toISOString()}`);
+    }
+    if (issue.labels.includes(labels.inProgress) || state.activeIssues.includes(issue.number)) {
       // No lane works on it and none of this repository's unknown lanes can: it is orphaned, not running.
       if (!state.unknownLanes && !state.activeIssues.includes(issue.number)
         && (issue.lastActivity == null || Date.parse(issue.lastActivity) < state.orphanBefore)) {
@@ -145,26 +168,24 @@ function classifyChildren(state) {
       continue;
     }
     if (!alreadyReady) ready.push(issue.number);
-    // An open PR without a running lane (an earlier run stopped after Ship): report it, never drop it silently.
-    if (issue.pr?.state === 'open') {
-      waiting.push({ issue: issue.number, reason: `open PR #${issue.pr.number} and no run (resume with /devflow:next-task #${issue.number})` });
-    } else runnable.push(issue);
+    if (!backingOff) runnable.push(issue);
   }
-  return { ready, running, stalled, orphaned, waiting, runnable, done: open.length === 0 };
+  return { ready, running, stalled, orphaned, close, waiting, runnable, warnings, done: open.length === 0 };
 }
 
 function planTick(input) {
   const state = readState(input);
-  const { runnable, running, ...status } = classifyChildren(state);
+  const { runnable, running, warnings, ...status } = classifyChildren(state);
   const freeSlots = Math.max(0, state.maxLanes - running.length);
   const numbers = new Set(runnable.map((issue) => issue.number));
   const issues = runnable.map(({ number, hotspots, dependsOn }) => ({
     number, hotspots, dependsOn: dependsOn.filter((parent) => numbers.has(parent)),
   }));
-  const { lanes, stacked, warnings } = freeSlots
+  const { lanes, stacked, warnings: laneWarnings } = freeSlots
     ? planLanes({ maxLanes: freeSlots, ignoreHotspots: state.ignoreHotspots, issues })
     : { lanes: [], stacked: [], warnings: [] };
   const dispatch = lanes.slice(0, state.budget).map(({ issues }) => ({ issues }));
+  warnings.push(...laneWarnings);
   if (dispatch.length < lanes.length) warnings.push('The remaining agent budget limits lane starts this tick.');
   if (state.nextTaskMaxAgentCalls === 0) warnings.push('nextTask.maxAgentCalls is 0 (unlimited per issue).');
   return { ...status, running, dispatch, stacked, warnings, budgetLeft: state.budget - dispatch.length };
@@ -183,6 +204,17 @@ function parsePlan(body) {
 }
 
 function renderPlan(plan) {
+  if (Array.isArray(plan.lanesStarted) && plan.lanesStarted.length > 20) {
+    // Undated legacy starts keep their append order. Older starts also stay if they hold a running issue.
+    const running = new Set(plan.running);
+    const started = (lane) => {
+      const time = Date.parse(lane.startedAt);
+      return Number.isFinite(time) ? time : -Infinity;
+    };
+    const newest = new Set([...plan.lanesStarted].sort((a, b) => started(a) - started(b)).slice(-20));
+    const lanesStarted = plan.lanesStarted.filter((lane) => newest.has(lane) || lane.issues.some((issue) => running.has(issue)));
+    plan = { ...plan, lanesStarted };
+  }
   const cell = (value) => String(value).replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ');
   const rows = [
     ['Epic', `#${plan.epic}`], ['Sub-issues', plan.children.length],

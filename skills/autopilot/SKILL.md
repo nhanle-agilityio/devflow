@@ -17,6 +17,10 @@ Run one tick in this order — **sync, comments, ready, dispatch, report**. The 
 3. Check that `claude --version` succeeds and `git status --porcelain` is empty. Stop on a failed check.
 4. Read the epic with `issue_read`. Verify it is an issue and confirm the epic by its `type:epic` label or its sub-issues as in `/devflow:approve`. Require `labels.epicApproved` (default `epic:approved`). If approval is missing, stop with “approve it with /devflow:approve #<epic>”, substituting the issue number, and stop the autopilot loop for this epic if one is running.
 
+Outside a loop, start `/loop /devflow:autopilot #<epic>` now with the actual number and return. Let the loop run the first tick.
+
+Inside the loop, before reading the plan, run `node "${CLAUDE_PLUGIN_ROOT}/bin/devflow-run" lock acquire --name autopilot-<epic> --wait 0` with the actual epic number. If `acquired` is false, end this tick without changes. On every tick exit after preflight, including lock contention and errors, schedule the next tick with `ScheduleWakeup` (1200–1800 seconds). Release the lock on every exit that owns it, including after an error, with `node "${CLAUDE_PLUGIN_ROOT}/bin/devflow-run" lock release --name autopilot-<epic>`. Finish stops the completed loop.
+
 ## 1. Load or create the plan
 
 Read all pages of comments on the epic. Find the plan comment starting with `<!-- devflow-autopilot-plan -->` from the authenticated user or a trusted collaborator. Ignore markers from other authors. Load the helper with `require(process.env.CLAUDE_PLUGIN_ROOT + '/bin/devflow-autopilot')` in Node. Pass the comment body to `parsePlan` and retain its comment ID. On a restart, resume with the saved children, dependencies, sessions, progress and `lastTick`. If the marked plan is unreadable, ambiguous or belongs to another epic, report the problem and stop.
@@ -36,8 +40,9 @@ For a trusted answer to an outstanding question, follow `${CLAUDE_PLUGIN_ROOT}/s
 - Set `now` to the current UTC timestamp, `labels` to the configured label map and `autoReady` to `spec.autoReady` (default `off`). Set `maxLanes` from `autopilot.maxLanes`, then `dispatch.maxLanes`, then 3.
 - Set `maxAgentCallsPerTick` from `autopilot.maxAgentCallsPerTick` (default 20), `agentCallsUsed` to the calls already made **this tick**, and `nextTaskMaxAgentCalls` from `nextTask.maxAgentCalls` (default 0). Count agent calls during sync and comment handling against the tick limit. Each lane start costs one more. Set `stallHours` from `autopilot.stallHours` (default 12) and `ignoreHotspots` from `dispatch.ignoreHotspots` (default `["README.md", "CHANGELOG.md"]`).
 - For each entry in `children`, supply `number`, lowercase `state`, label names, current `body`, `hotspots` from the `## Hotspots` bullets as in dispatch, and all `dependsOn` numbers. Set `lastActivity` to the newest commit or comment timestamp on the issue or its PR, or null if neither exists.
-- Set `activeIssues` to the issues of the `lanesStarted` entries whose session is still alive in `claude agents --json` (any state except `done`, including one waiting for input). Set `unknownLanes` to true when that output shows a live `devflow-lane-*` session in this repository whose id is not in `lanesStarted`, or when the command fails; otherwise false. The helper treats an in-progress child outside `activeIssues` with no activity for 15 minutes (its default) as orphaned.
-- Supply the child's own `pr` as null or `{number, state, merged, aheadBy}`. Prefer a qualifying open PR over a closed one. For an open PR compare its actual `base...head` through MCP and take `ahead_by`. For a closed PR verify `merged_at` with `pull_request_read` method `get`. For dependencies outside the epic, put their `number`, `state`, `labels` and `pr` in `external` using the same rules. Leave unreadable external dependencies out and report the read failure. If a child's state or own PR data cannot be read, report it and retry before planning.
+- Read `claude agents --json`. Match plan entries to either the session's short `id` or full `sessionId`. A legacy short plan id can match a prefix of the full id. Set `activeIssues` to the issues of matched entries with `state: working`. Set `unknownLanes` to true for an unmatched working `devflow-lane-*` session in this repository, or if the command fails. Otherwise set it to false. The helper treats an in-progress child outside `activeIssues` with no activity for 15 minutes as orphaned when all working lanes are known.
+- Build `recentFailures` from `lanesStarted`. For each entry with a known `startedAt` whose session is absent or in any state other than working, check all pages of comments on all its issues. If none has a claim (including a released claim) created after `startedAt`, add `{issue, at: startedAt}` for each issue in that lane. A failed session listing or comment read cannot establish a failed launch. The default retry window is 30 minutes.
+- Pass the configured `baseBranch`. Supply the child's own `pr` as null or `{number, state, merged, aheadBy, base}`, using the PR's actual `base.ref` for `pr.base`. For an open child, prefer its PR merged into the configured base. Otherwise prefer a qualifying open PR over a closed one. For an open PR compare its actual `base...head` through MCP and take `ahead_by`. For a closed PR verify `merged_at` with `pull_request_read` method `get`. For dependencies outside the epic, put their `number`, `state`, `labels` and `pr` in `external` using the same rules. Leave unreadable external dependencies out and report the read failure. If a child's state or own PR data cannot be read, report it and retry before planning.
 
 Serialize the input as JSON and run the helper via Bash with a quoted heredoc. Stop the tick on a nonzero exit and show its diagnostic.
 
@@ -46,6 +51,10 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/devflow-autopilot" <<'JSON'
 <state JSON>
 JSON
 ```
+
+Set `plan.running` to the union of the helper's `running` and the session listing's `activeIssues` before checkpointing. If the listing failed, also retain previously recorded running issues until liveness can be refreshed.
+
+For each issue in `close`, confirm it is still open and its own PR merged into `baseBranch`. Post `Closed: PR #<n> merged into <base>.` with the actual PR number and base unless already posted, then close the issue.
 
 For each number in `orphaned` (an in-progress issue no lane works on): re-read the issue. If it is still open, still has `labels.inProgress` and still has no working lane, release every claim comment on it by editing it to `<!-- devflow-claim-released id=<id> -->` and `Claim released by devflow (<id>).` (`update_issue_comment`), then replace `labels.inProgress` with `labels.ready` (keep all other labels) and add a plan progress row "Reset orphaned #<n>: no lane was working on it". The next tick dispatches it.
 
@@ -58,7 +67,7 @@ Ready: epic #<epic> approved, all dependencies merged
 
 Report a failed write and continue with the other entries. Use the real epic number in the comment.
 
-**(d) Dispatch.** Start only lanes in `dispatch`. Recheck approval, the ready labels, open PRs and claims before launch. If eligibility or capacity changed, refresh the input and replan with the calls used so far. Check recorded session IDs and `claude agents --json` (it prints the sessions and exits) for still-running sessions, including lanes awaiting their first claim or handling later issues in a chain. Defer a lane if it overlaps an active session or starting it would exceed the concurrency limit. Never touch issues labelled `labels.inProgress` that a working lane holds; only orphaned ones are reset as above. Never restart a stalled lane automatically.
+**(d) Dispatch.** Start only lanes in `dispatch`. Recheck approval, the ready labels, PRs and claims before launch. A ready child with its own open PR resumes that branch and PR in its lane. If eligibility or capacity changed, refresh the input and replan with the calls used so far. Check recorded session IDs and `claude agents --json` (it prints the sessions and exits) for still-running sessions, including lanes awaiting their first claim or handling later issues in a chain. Defer a lane if it overlaps an active session or starting it would exceed the concurrency limit. Never touch issues labelled `labels.inProgress` that a working lane holds; only orphaned ones are reset as above. Never restart a stalled lane automatically.
 
 Follow step 4 of `${CLAUDE_PLUGIN_ROOT}/skills/dispatch/SKILL.md`. For lane `n` use its actual issue numbers in the helper's order, keeping both flags even for a single issue.
 
@@ -66,7 +75,7 @@ Follow step 4 of `${CLAUDE_PLUGIN_ROOT}/skills/dispatch/SKILL.md`. For lane `n` 
 claude --bg --name devflow-lane-<n> "/devflow:next-task #a #b --chain --isolated"
 ```
 
-When set, add `--plugin-dir <dispatch.pluginDir>` immediately after `--bg`. After each successful launch, append its issues and returned session ID to `lanesStarted` and checkpoint the plan comment in place. If a launch fails, stop starting lanes and print the exact manual command for the failed lane and each remaining lane, with the configured plugin directory when set.
+When set, add `--plugin-dir <dispatch.pluginDir>` immediately after `--bg`. Capture the UTC `startedAt` immediately before launch. After each successful launch, append `{issues, sessionId, startedAt}` to `lanesStarted` using the full session id (resolve a short launch id from the session listing). Add the issues to `plan.running` and checkpoint the plan comment in place. If a launch fails, stop starting lanes and print the exact manual command for the failed lane and each remaining lane, with the configured plugin directory when set.
 
 ```bash
 claude -w lane-<n> "/devflow:next-task #a #b --chain --isolated"
@@ -80,7 +89,7 @@ Use the digest's date in the first line of the comment, `<!-- devflow-digest YYY
 
 ## 3. Loop
 
-If the helper returned `done: true`, go straight to Finish. Otherwise, when outside a loop, invoke the loop skill with `/loop /devflow:autopilot #<epic>`, substituting the number. Each later invocation runs one tick. Keep one loop per epic. Pace the next tick from the work pending. When lanes are running, arm a Monitor (load it with ToolSearch `select:Monitor` if it is deferred) whose until-loop runs `claude agents --json` every 60–120 seconds and ends as soon as any `devflow-lane-*` session started for this epic leaves `working` (done, blocked, idle or gone) or a new lane appears; that wakes the loop and the next tick runs at once. Keep a `ScheduleWakeup` fallback of 1200–1800 seconds in case the Monitor never fires. When no lane is running and only human action is pending (PRs waiting for a merge), use only `ScheduleWakeup` at 1200–1800 seconds.
+If the helper returned `done: true`, go straight to Finish. When lanes are working, arm a Monitor (load it with ToolSearch `select:Monitor` if deferred). At arm time, snapshot the ids of this epic's working sessions and the ids of all existing `devflow-lane-*` sessions in this repository. Poll `claude agents --json` every 60–120 seconds. On a successful poll, wake the loop as soon as one of those working ids is no longer working or a new `devflow-lane-*` session appears relative to the snapshot. Keep the `ScheduleWakeup` fallback of 1200–1800 seconds even when the Monitor is armed.
 
 ## 4. Finish
 

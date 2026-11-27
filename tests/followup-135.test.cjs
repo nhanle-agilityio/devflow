@@ -27,6 +27,7 @@ async function run({ diff = '', plannedFile = 'src/x.js', ghCli = false, review 
   const calls = [];
   const agent = async (prompt, { label, agentType }) => {
     calls.push({ label, agentType, prompt });
+    if (label.startsWith('claim check')) return { claimPresent: true };
     switch (label.split(' ')[0]) {
       case 'select':
         return { issues: [{ number: 135, title: 'Regression', labels: [], body: '', dependsOn: [] }], skipped: [] };
