@@ -83,6 +83,7 @@ const cfgJson = JSON.stringify(cfg, null, 2)
 // The marker a stage reports when GitHub cannot be reached; the run stops instead of blocking issue after issue.
 const MCP_DOWN = 'GitHub MCP unavailable'
 const mcpDown = (text) => String(text || '').indexOf(MCP_DOWN) !== -1
+const down = (result) => mcpDown(result?.problem)
 
 const MCP_NOTE =
   'Use the GitHub MCP server for every GitHub operation (issues, labels, PRs, comments); load its tools with ToolSearch first ' +
@@ -333,12 +334,14 @@ const COMMIT_SCHEMA = {
 
 function commitResult(result) {
   if (!result) return result
+  if (down(result)) return { ok: false, problem: result.problem }
   if (result.leftover?.length) {
     return { ok: false, problem: `Unlisted changed files: ${result.leftover.join(', ')}` }
   }
-  if (!result.ok || result.problem) return { ok: false, problem: result.problem || result.error }
+  if (result.ok !== true || !Array.isArray(result.commits)) return { ok: false, problem: result.problem || result.error }
   return {
     ok: true,
+    problem: result.problem,
     commits: result.commits.map((commit) => typeof commit === 'string' ? commit : `${commit.sha} ${commit.message}`),
     failedFirst: result.redConfirmed ?? result.failedFirst,
     failureNote: result.redOutput ?? result.failureNote,
@@ -1949,7 +1952,8 @@ async function recordDecisions(issue, { questions, verdicts }) {
     `Record decisions on GitHub issue #${issue.number} in ${gh.owner}/${gh.repo}. ${MCP_NOTE}\n\nRead the issue with issue_read (method get). Append each line below to the "## Decisions" section of the issue body, one line per decision, in this order, exactly as written. Create the section at the end of the body when it is missing. Skip a line that is identical to a line already in the section. Change nothing else in the body, and keep the labels as they are. Write the body with issue_write.\n\nLines:\n${fresh.added.join('\n')}\n\nReturn ok=true and appended = the lines you really appended (not the skipped ones). On failure return ok=false with the problem.`,
     { label: `decisions #${issue.number}`, phase: 'Implement', schema: DECISIONS_SCHEMA, model: 'haiku' },
   )
-  if (!r || !r.ok || r.problem) return { ok: false, problem: (r && r.problem) || 'The agent that records decisions on the issue failed.' }
+  if (down(r) || r?.ok !== true) return { ok: false, problem: r?.problem || 'The agent that records decisions on the issue failed.' }
+  noteProblem(issue, 'Decisions', r)
   if ((Array.isArray(r.appended) ? r.appended : fresh.added).length) decidedNew[issue.number] = true
   return { ok: true }
 }
@@ -1959,7 +1963,7 @@ async function recordDecisions(issue, { questions, verdicts }) {
 async function withQuestions(issue, branch, step, getQs) {
   let r = await step()
   for (let attempt = 0; ; attempt++) {
-    const raw = r && !mcpDown(r.problem) ? getQs(r) : []
+    const raw = r && !down(r) ? getQs(r) : []
     if (!raw.length) return { result: r }
     const c = await classifyAll(issue, branch, raw)
     if (!c.allDecide) return { result: r, blocked: { reason: c.reason, questions: c.lines } }
@@ -1989,6 +1993,10 @@ function missingRunRequirement(output) {
   })
 }
 
+function noteProblem(issue, stage, result) {
+  if (result.problem) issue.notes.push(`${stage}: ${result.problem.slice(0, 160)}`)
+}
+
 // Returns {ok, reason, runErrorOutput?}. Mutates state with the fix results.
 async function checkLoop(issue, branch, state) {
   for (let round = 0; round <= nt.maxFixRounds; round++) {
@@ -2000,9 +2008,15 @@ async function checkLoop(issue, branch, state) {
       model: 'haiku',
     })
     if (!check) return { ok: false, reason: 'The check agent died before reporting.' }
-    if (check.problem) return { ok: false, reason: check.problem }
-    if (check.ok === false) return { ok: false, reason: check.error || 'The check command could not run.' }
-    if (check.passed) return { ok: true }
+    if (down(check)) return { ok: false, reason: check.problem }
+    // Older workflow callers report passed without ok.
+    if (check.ok !== true && !(check.ok === undefined && typeof check.passed === 'boolean')) {
+      return { ok: false, reason: check.error || check.problem || 'The check command could not run.' }
+    }
+    if (check.passed === true) {
+      noteProblem(issue, 'Check', check)
+      return { ok: true }
+    }
     // Older workflow callers can still return already-mapped failures.
     const failures = Array.isArray(check.checks)
       ? check.checks.filter((entry) => entry.timedOut || entry.exitCode !== 0).map((entry) => ({
@@ -2043,12 +2057,13 @@ async function runFix(issue, branch, state, why, details, disputed) {
   )
   const fix = asked.result
   if (!fix) return { ok: false, reason: `The fix agent died (${why}).` }
-  if (fix.problem) return { ok: false, problem: true, reason: fix.problem }
+  if (down(fix)) return { ok: false, reason: fix.problem }
   const src = sourceFor(issue)
   const epicBlock = epicUnread(fix, src) && epicFallback(issue, 'Implement', src)
   if (epicBlock) return { ok: false, configBlock: true, reason: epicBlock }
   if (asked.blocked) return Object.assign({ ok: false }, asked.blocked)
-  if (fix.status === 'blocked') return { ok: false, reason: fix.blockedReason || `The fix agent reported blocked (${why}).` }
+  if (fix.status === 'blocked') return { ok: false, reason: fix.blockedReason || fix.problem || `The fix agent reported blocked (${why}).` }
+  noteProblem(issue, 'Fix', fix)
   merge(state, fix)
   const touched = overlap(fix.filesChanged, state.qaFiles)
   if (touched.length) proceed(issue, 'Implement', `The fix changed QA test files ${touched.join(', ')}.`)
@@ -2066,12 +2081,13 @@ async function runQaFix(issue, branch, state, why, details) {
   )
   const fix = asked.result
   if (!fix) return { ok: false, reason: `The QA fix agent died (${why}).` }
-  if (fix.problem) return { ok: false, problem: true, reason: fix.problem }
+  if (down(fix)) return { ok: false, reason: fix.problem }
   const src = sourceFor(issue)
   const epicBlock = epicUnread(fix, src) && epicFallback(issue, 'Implement', src)
   if (epicBlock) return { ok: false, configBlock: true, reason: epicBlock }
   if (asked.blocked) return Object.assign({ ok: false }, asked.blocked)
-  if (fix.status === 'blocked') return { ok: false, reason: fix.blockedReason || `The QA fix agent reported blocked (${why}).` }
+  if (fix.status === 'blocked') return { ok: false, reason: fix.blockedReason || fix.problem || `The QA fix agent reported blocked (${why}).` }
+  noteProblem(issue, 'QA fix', fix)
   merge(state, fix)
   const out = outside(fix.filesChanged, state.qaFiles)
   if (out.length) proceed(issue, 'Implement', `The QA fix agent changed files outside the QA test files: ${out.join(', ')}.`)
@@ -2109,10 +2125,12 @@ async function fixRound(issue, branch, state, why, items) {
   return { ok: true }
 }
 
-// The implement summary stays the PR's "what"; fix summaries are kept separately.
+// Use the latest summary for the PR and keep a record of the follow-up fixes.
 function merge(state, result) {
-  if (!state.summary) state.summary = result.summary
-  else if (result.summary) state.fixes.push(result.summary)
+  if (result.summary) {
+    if (state.summary) state.fixes.push(result.summary)
+    state.summary = result.summary
+  }
   state.commits = state.commits.concat(result.commits)
   state.filesChanged = Array.from(new Set(state.filesChanged.concat(result.filesChanged)))
   state.assumptions = state.assumptions.concat(result.assumptions)
@@ -2212,8 +2230,6 @@ async function runIssue(issue) {
   let reviewRounds = 0
   let claimedAt = null
   const done = (r) => Object.assign(r, pathKind ? { path: pathKind } : {}, reviewRounds > 0 ? { reviewRounds } : {}, { notes })
-  // A stage that could not reach GitHub reports it in `problem`; the run stops as at Claim.
-  const down = (r) => !!(r && r.problem && mcpDown(r.problem))
 
   async function verifyClaimRelease(stage, budgetExceeded = false) {
     const target = `GitHub issue #${issue.number} in ${gh.owner}/${gh.repo}`
@@ -2314,7 +2330,7 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
   }
   if (!claim) return retreat('Claim', 'The claim agent failed.')
   assignedByRun = claim.assignedByRun === true
-  if (claim.problem) return retreat('Claim', claim.problem)
+  if (down(claim)) return retreat('Claim', claim.problem)
   if (claim.taken) {
     const by = claim.takenBy || 'assignee or label'
     log(`Skipped #${issue.number}: already claimed (${by}).`)
@@ -2343,6 +2359,7 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
   }
 
   issue.claimWon = true
+  noteProblem(issue, 'Claim', claim)
   if (budgetReached()) return block('Claim', new AgentBudgetExceeded(agentCalls).message, undefined, true) // block: budget
   claimedAt = winner && typeof winner.createdAt === 'string' && winner.createdAt ? winner.createdAt : null
   // Claim read the issue from GitHub: its labels, spec path and Introduced by heading win over the Select copy.
@@ -2370,23 +2387,24 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
       issue,
       '',
       () => callAgent(branchPrompt(issue, computed), { label: `branch #${issue.number}`, phase: 'Implement', schema: BRANCH_SCHEMA, model: 'haiku' }, (result) => {
-        if (result && result.ok && result.branch) branch = result.branch
+        if (result?.ok === true && result.branch) branch = result.branch
       }),
-      (r) => (!r.ok && Array.isArray(r.questions) ? r.questions : []),
+      (r) => (r.ok !== true && Array.isArray(r.questions) ? r.questions : []),
     )
     let made = mapBranchResult(madeAsked.result, computed)
-    if (made?.candidates?.length > 1) {
+    if (!down(made) && made?.candidates?.length > 1) {
       // Reversible: continue on the computed name when it is a candidate, else the first by name, and record it.
       const pick = made.candidates.includes(computed) ? computed : made.candidates.slice().sort()[0]
       proceed(issue, 'Branch', `several branches match #${issue.number} (${made.candidates.join(', ')}); continued on ${pick}`)
       made = mapBranchResult(await callAgent(branchPrompt(issue, pick), { label: `branch #${issue.number}`, phase: 'Implement', schema: BRANCH_SCHEMA, model: 'haiku' }, (result) => {
-        if (result && result.ok && result.branch) branch = result.branch
+        if (result?.ok === true && result.branch) branch = result.branch
       }), pick)
     }
     if (madeAsked.blocked) return stageFailure('Branch', madeAsked.blocked)
-    if (!made || made.problem || !made.ok || !made.branch) {
+    if (down(made) || made?.ok !== true || !made.branch) {
       return retreat('Branch', (made && (made.problem || made.error)) || 'The branch agent failed or could not create the branch.')
     }
+    noteProblem(issue, 'Branch', made)
     branch = made.branch
     // The parent PR merged (and its branch was deleted) before this issue started: its changes are in the base.
     if (made.parentMerged && parentsOf(issue).length === 1) {
@@ -2417,14 +2435,14 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
         issue,
         branch,
         () => callAgent(integratePrompt(issue, branch, baseConflict), { label: `integrate #${issue.number}`, phase: 'Implement', schema: INTEGRATE_SCHEMA, model: 'sonnet' }),
-        (r) => (!r.ok && Array.isArray(r.questions) ? r.questions : []),
+        (r) => (r.ok !== true && Array.isArray(r.questions) ? r.questions : []),
       )
       const integ = integAsked.result
       if (integAsked.blocked) return stageFailure('Integrate', integAsked.blocked)
-      if (integ?.problem) return retreat('Integrate', integ.problem)
-      if (!integ || !integ.ok || !integ.integrationSha) {
+      if (down(integ) || integ?.ok !== true || !integ.integrationSha) {
         return retreat('Integrate', (integ && integ.problem) || 'The integrate agent failed or did not report an integration commit.')
       }
+      noteProblem(issue, 'Integrate', integ)
       if (parentsOf(issue).length > 1) integration[issue.number] = integ.integrationSha
       log(`#${issue.number}: merged ${(integ.merged || []).join(', ') || baseRef} at ${integ.integrationSha.slice(0, 7)}.`)
     }
@@ -2445,7 +2463,7 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
       )
       plan = planAsked.result
       if (!plan) return retreat('Plan', 'The plan agent died.')
-      if (plan.problem) return retreat('Plan', plan.problem)
+      if (down(plan)) return retreat('Plan', plan.problem)
       const planEpicBlock = epicUnread(plan, srcPlan) && epicFallback(issue, 'Plan', srcPlan)
       if (planEpicBlock) return block('Plan', planEpicBlock) // block: config-block
       // The plan read the acceptance criteria from GitHub; the Select copy's count is a cross-check only.
@@ -2461,8 +2479,9 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
       state.httpOrE2eRows = plan.httpOrE2eRows === true
       if (planAsked.blocked) return stageFailure('Plan', planAsked.blocked)
       if (plan.status === 'blocked') {
-        return retreat('Plan', 'The plan agent reported blocked without questions.')
+        return retreat('Plan', plan.problem || 'The plan agent reported blocked without questions.')
       }
+      if (!plan.plan) return retreat('Plan', 'The plan agent did not report a plan.')
       if (specPathForPlan && !readSpec(plan, specPathForPlan)) {
         const reason = `Plan did not read the spec ${specPathForPlan}`
         if (nt.onQuestion === 'block') return block('Plan', reason) // block: config-block
@@ -2470,6 +2489,7 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
       }
       const planReadBlock = srcPlan.kind === 'epic' && !readSource(plan, srcPlan) && epicFallback(issue, 'Plan', srcPlan, `Plan did not read epic #${srcPlan.n}`)
       if (planReadBlock) return block('Plan', planReadBlock) // block: config-block
+      noteProblem(issue, 'Plan', plan)
     }
 
     state.guide = guideFor(plan)
@@ -2506,6 +2526,7 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
     }
     // Every open question, from both roles, is classified together.
     const pairQuestions = (r) => {
+      if (down(r.qa) || down(r.dev)) return []
       const out = []
       if (r.qa) {
         const qq = Array.isArray(r.qa.questions) ? r.qa.questions : []
@@ -2516,17 +2537,18 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
     }
     const pairAsked = await withQuestions(issue, branch, runPair, pairQuestions)
     const { qa, dev } = pairAsked.result
+    if (down(qa)) return retreat('Implement', qa.problem)
+    if (down(dev)) return retreat('Implement', dev.problem)
     if (!qa) return retreat('Implement', 'The QA agent died.')
-      if (!dev) return retreat('Implement', 'The implement agent died.')
-      if (qa.problem) return retreat('Implement', qa.problem)
-      if (dev.problem) return retreat('Implement', dev.problem)
+    if (!dev) return retreat('Implement', 'The implement agent died.')
       const qaEpicBlock = epicUnread(qa, srcPlan) && epicFallback(issue, 'Implement', srcPlan)
       if (qaEpicBlock) return block('Implement', qaEpicBlock) // block: config-block
       const devEpicBlock = epicUnread(dev, srcPlan) && epicFallback(issue, 'Implement', srcPlan)
       if (devEpicBlock) return block('Implement', devEpicBlock) // block: config-block
       if (pairAsked.blocked) return stageFailure('Implement', pairAsked.blocked)
       if (qa.status === 'blocked' || dev.status === 'blocked') {
-        return retreat('Implement', qa.blockedReason || dev.blockedReason || 'An agent reported blocked without a question.')
+        const blocked = qa.status === 'blocked' ? qa : dev
+        return retreat('Implement', qa.blockedReason || dev.blockedReason || blocked.problem || 'An agent reported blocked without a question.')
       }
       const qaOut = outside(qa.filesChanged, own.qaFiles)
       if (qaOut.length) {
@@ -2547,6 +2569,8 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
       }
       const qaReadBlock = srcPlan.kind === 'epic' && !readSource(qa, srcPlan) && epicFallback(issue, 'Implement', srcPlan, `The QA agent did not read epic #${srcPlan.n}`)
       if (qaReadBlock) return block('Implement', qaReadBlock) // block: config-block
+      noteProblem(issue, 'QA', qa)
+      noteProblem(issue, 'Implement', dev)
 
       const committed = commitResult(await callAgent(commitPrompt(issue, branch, qa, dev, state.guide), {
         label: `commit #${issue.number}`,
@@ -2554,7 +2578,8 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
         schema: COMMIT_SCHEMA,
         model: 'haiku',
       }))
-      if (!committed || committed.problem || !committed.ok) return retreat('Implement', (committed && committed.problem) || 'The commit agent failed.')
+      if (committed?.ok !== true) return retreat('Implement', committed?.problem || 'The commit agent failed.')
+      noteProblem(issue, 'Commit', committed)
       if (!committed.failedFirst) {
         log(`#${issue.number}: the QA tests did not fail without the change (${committed.failureNote || 'no note'}).`)
         dev.assumptions = (dev.assumptions || []).concat([`QA tests did not fail before the implementation: ${committed.failureNote || 'no note'}`])
@@ -2579,15 +2604,16 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
       )
       impl = implAsked.result
       if (!impl) return retreat('Implement', 'The implement agent died.')
-      if (impl.problem) return retreat('Implement', impl.problem)
+      if (down(impl)) return retreat('Implement', impl.problem)
       const implEpicBlock = epicUnread(impl, srcAll) && epicFallback(issue, 'Implement', srcAll)
       if (implEpicBlock) return block('Implement', implEpicBlock) // block: config-block
-      merge(state, impl)
       if (implAsked.blocked) return stageFailure('Implement', implAsked.blocked)
       if (impl.status === 'blocked') {
-        const reason = impl.blockedReason || 'The implement agent reported blocked without a reason.'
+        const reason = impl.blockedReason || impl.problem || 'The implement agent reported blocked without a reason.'
         return retreat('Implement', reason)
       }
+      noteProblem(issue, 'Implement', impl)
+      merge(state, impl)
     }
 
     // Give an unconfirmed source read one corrective fix before handling the miss.
@@ -2632,7 +2658,7 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
         'Find the root cause of the bug this issue fixes and return rootCause (cause, introducedBy, whyMissed). Use `git log -S`, `git blame` on the lines the fix changed and the issue text. Change code only if the cause shows the fix is incomplete.',
       )
       // An optional root-cause lookup can still ship with "unknown".
-      if (!fix.ok && (fix.problem || fix.configBlock || fix.questions || missingRunRequirement(fix.reason))) return stageFailure('Implement', fix)
+      if (!fix.ok && (mcpDown(fix.reason) || fix.configBlock || fix.questions || missingRunRequirement(fix.reason))) return stageFailure('Implement', fix)
       if (!fix.ok) {
         log(`#${issue.number}: root cause round failed (${fix.reason.split('\n')[0]}); shipping with "unknown".`)
         notes.push(`root cause round failed (${fix.reason.split('\n')[0]}); the PR says "unknown"`)
@@ -2659,7 +2685,8 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
           model: 'sonnet',
         })
         if (!v) return retreat('Verify', 'The verify agent died.')
-        if (v.problem) return retreat('Verify', v.problem)
+        if (down(v)) return retreat('Verify', v.problem)
+        if (typeof v.ran !== 'boolean' || (v.ran && !Array.isArray(v.steps))) return retreat('Verify', 'The verify agent did not report a verification result.')
         state.verification = v
         if (!v.ran) {
           const why = String(v.notes || '').split('\n')[0].trim() || 'no reason given'
@@ -2669,7 +2696,10 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
         }
         state.verifyProblem = ''
         const bad = failedSteps(v)
-        if (bad.length === 0) break
+        if (bad.length === 0) {
+          noteProblem(issue, 'Verify', v)
+          break
+        }
         const details = bad.map((s) => `- ${s.action}: expected ${s.expected}; actual ${s.actual}`).join('\n')
         if (round === 1) return block('Verify', `Verification still failing after one fix round:\n${details}`, undefined, false, details) // block: verify-failed
         const fix = await runFix(issue, branch, state, 'verification against the running app failed', details)
@@ -2727,16 +2757,18 @@ ${output}`, { label: `run error #${issue.number}`, phase: stage, model: 'haiku',
         review = await callAgent(reviewPrompt(issue, branch, state, round, hits, false), reviewOpts)
       }
       if (!review) return retreat('Review', 'The review agent died.')
-      if (review.problem) return retreat('Review', review.problem)
+      if (down(review)) return retreat('Review', review.problem)
       const reviewEpicBlock = epicUnread(review, srcAll) && epicFallback(issue, 'Review', srcAll)
       if (reviewEpicBlock) return block('Review', reviewEpicBlock) // block: config-block
       if (review.issueRead === false) return retreat('Review', 'the review could not read the issue')
+      if (!Array.isArray(review.findings)) return retreat('Review', 'The review agent did not report findings.')
       if (Array.isArray(review.questions) && review.questions.length) {
         const c = await classifyAll(issue, branch, review.questions)
         if (!c.allDecide) return block('Review', c.reason, c.lines) // block: owner-question
         const rec = await recordDecisions(issue, c)
         if (!rec.ok) return retreat('Review', rec.problem)
       }
+      noteProblem(issue, 'Review', review)
       // Every hit is critical unless the reviewer accepted it; an accepted hit makes the PR risk:high at Ship.
       const accepted = Array.isArray(review.acceptedWeakenings) ? review.acceptedWeakenings : []
       let injected = 0
@@ -2832,7 +2864,10 @@ Return claimPresent=true only if a comment still contains "<!-- devflow-claim id
         label: `ship #${issue.number}`, phase: 'Ship', schema: SHIP_SCHEMA, model: 'sonnet',
       })
     }
-    if (!ship || ship.problem || !ship.ok) return retreat('Ship', (ship && ship.problem) || 'The ship agent died.')
+    if (down(ship) || ship?.ok !== true || !ship.prNumber || !ship.url) {
+      return retreat('Ship', ship?.problem || 'The ship agent failed or did not report a PR number and URL.')
+    }
+    noteProblem(issue, 'Ship', ship)
     if (ship.reused === true) notes.push(`reused open PR #${ship.prNumber}`)
     if (ship.unstacked) {
       log(`#${issue.number}: parent PR merged while this issue was built; PR #${ship.prNumber} targets ${base}, not stacked.`)
