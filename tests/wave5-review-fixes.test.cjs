@@ -33,6 +33,7 @@ async function resumedRun(body) {
     if (label === 'select issues') {
       return { issues: [{ number: 1, title: 'Issue 1', labels, dependsOn: [], parents: [], body }], skipped: [] };
     }
+    if (label.startsWith('claim check')) return { claimPresent: true };
     if (stage === 'claim') {
       return { taken: false, claims: [{ commentId: 11, claimId: 'C-me', createdAt: new Date().toISOString() }], labels, specPath: '', introducedBy: false };
     }
@@ -85,16 +86,13 @@ test('R3 the allow list covers the plugin helpers and lane sessions autopilot ru
   assert.ok(withDir.includes('Bash(claude --bg --plugin-dir /p/devflow --name devflow-lane-*)'));
 });
 
-test('R4 autopilot reports a ready child with an open PR and no run instead of dropping it', () => {
+test('R4 autopilot dispatches a ready child with an open PR and no run', () => {
   const { planTick } = require('../bin/devflow-autopilot');
   const result = planTick({
     now: '2026-11-26T10:00:00Z', autoReady: 'all',
     children: [{ number: 7, state: 'open', labels: ['agent:ready'], body: '', hotspots: [], dependsOn: [], lastActivity: null,
       pr: { number: 70, state: 'open', merged: false, aheadBy: 2 } }],
   });
-  assert.deepEqual(result.dispatch, []);
-  assert.equal(result.waiting.length, 1);
-  assert.equal(result.waiting[0].issue, 7);
-  assert.match(result.waiting[0].reason, /open PR #70/);
-  assert.match(result.waiting[0].reason, /\/devflow:next-task #7/);
+  assert.deepEqual(result.dispatch, [{ issues: [7] }]);
+  assert.deepEqual(result.waiting, []);
 });

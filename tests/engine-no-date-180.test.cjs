@@ -43,6 +43,7 @@ async function run(args, q) {
     calls.push({ l, prompt });
     const n = Number((/#(\d+)/.exec(l) || [])[1]);
     if (l === 'select issues') return { issues: args.issues.map((i) => ({ number: i, title: 't' + i, labels: ['risk:high'], body: 'spec docs/specs/a.md', dependsOn: [], parents: [] })), skipped: [] };
+    if (l.startsWith('claim check')) return { claimPresent: true };
     if (l.startsWith('claim')) return { taken: false, claims: [{ commentId: 10 + n, claimId: String(args.claimId || 'run'), createdAt: '2026-01-01T00:00:05Z', author: 'me' }], labels: ['risk:high'], specPath: '', introducedBy: false };
     if (l.startsWith('branch')) return { ok: true, branch: 'feat/' + n + '-x' };
     if (l.startsWith('plan')) {

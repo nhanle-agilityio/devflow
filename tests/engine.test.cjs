@@ -37,6 +37,7 @@ async function run(args, opts = {}) {
         skipped: [],
       };
     }
+    if (l.startsWith('claim check')) return { claimPresent: true };
     if (l.startsWith('claim')) {
       if (pick(opts.claimProblem, n)) return { taken: false, claims: [], problem: pick(opts.claimProblem, n) };
       if (pick(opts.taken, n)) return { taken: true, takenBy: 'agent:in-progress', claims: [] };
@@ -133,7 +134,7 @@ test('runs without args stops with a message', async () => {
 test('one issue goes through every stage in order', async () => {
   const { rep, calls } = await run({ ...BASE, issues: [1] });
   assert.equal(rep[0].status, 'pr');
-  assert.deepEqual(labels(calls), ['select', 'claim', 'branch', 'plan', 'implement', 'check', 'scan', 'review', 'ship', 'restore']);
+  assert.deepEqual(labels(calls), ['select', 'claim', 'branch', 'plan', 'implement', 'check', 'scan', 'review', 'claim', 'ship', 'restore']);
   assert.match(prompt(calls, 'implement'), /PLAN1/);
   assert.equal(calls.find((c) => c.l.startsWith('review')).model, 'opus');
 });
@@ -1638,7 +1639,7 @@ test('test_t5_3_ship_verify_values', async () => {
 test('test_t5_4_ship_run_marker', async () => {
   const { calls } = await run({ ...BASE, issues: [1] }, { ...SHORT_OPTS, claimOut: { claims: [{ commentId: 11, claimId: 'C-me', createdAt: '2026-11-17T10:00:00Z' }] } });
   const ship = prompt(calls, 'ship');
-  assert.ok(ship.includes('<!-- devflow-run {"path":"short","reviewRounds":1,"claimedAt":"2026-11-17T10:00:00Z","agentCalls":6} -->'));
+  assert.ok(ship.includes('<!-- devflow-run {"path":"short","reviewRounds":1,"claimedAt":"2026-11-17T10:00:00Z","agentCalls":7} -->'));
 });
 
 // T5.5

@@ -27,6 +27,7 @@ async function run({ body = '', sourceRead = 'none', plan = {}, review = {}, nex
   const agent = async (prompt, options) => {
     const stage = options.label.split(' ')[0];
     calls.push({ stage, prompt });
+    if (options.label.startsWith('claim check')) return { claimPresent: true };
     switch (stage) {
       case 'select':
         return { issues: [issue], skipped: [] };

@@ -18,6 +18,7 @@ async function run(body, specRead) {
   const agent = async (prompt, o) => {
     const l = o.label.split(' ')[0];
     if (!(l in prompts)) prompts[l] = prompt;
+    if (o.label.startsWith('claim check')) return { claimPresent: true };
     switch (l) {
       case 'select': return { issues: [{ number: 1, title: 't', labels: [], body, dependsOn: [], parents: [] }], skipped: [] };
       case 'claim': return { taken: false, claims: [{ commentId: 11, claimId: 'C-me', createdAt: '2026-01-01T00:00:05Z' }], labels: [], specPath: '', introducedBy: false };

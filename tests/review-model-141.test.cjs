@@ -31,6 +31,7 @@ async function run({ risks = [undefined], nextTask = {} } = {}) {
     calls.push(options);
     const { label } = options;
     const number = Number(/#(\d+)/.exec(label)?.[1]);
+    if (label.startsWith('claim check')) return { claimPresent: true };
     switch (label.split(' ')[0]) {
       case 'select':
         return { issues, skipped: [] };
