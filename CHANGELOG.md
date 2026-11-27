@@ -4,6 +4,22 @@ All notable changes to devflow. Format follows [Keep a Changelog](https://keepac
 
 ## [Unreleased]
 
+## [3.5.0] - 2026-11-27
+
+Fixes a 3.4.0 regression that retreated successful stages, and makes low-risk runs faster.
+
+### Added
+- `checks[].redRun` can run a focused red check using the QA test files. (#203)
+
+### Changed
+- The next-task engine sets explicit models for every agent call, uses Haiku for Verify and Ship on low-risk issues, and reruns failed checks first after a fix. (#203)
+
+### Fixed
+- A note in a stage's `problem` field no longer causes a successful stage to retreat (a 3.4.0 regression), and the PR summary reflects the last fix round. (#201)
+
+### Upgrade
+- Update the plugin to 3.5.0, then run `/devflow:init --upgrade` (installs the new `.claude/devflow.schema.json` with `checks[].redRun`) and `/devflow:doctor --fix` (moves the helper rules to 3.5.0). Optional: set `checks[].redRun` on the test check to a command that runs only the given files, with `{files}` for the QA test files (for example `"uv run pytest -q {files}"` or `"npx jest {files}"`). Issues retreated or blocked by 3.4.0 only because a stage wrote a note in `problem` can be released: remove `agent:blocked` and set their `<!-- devflow-retry count=… -->` comment to `count=0`. Known limits, tracked for the next release: low-risk Verify runs on Haiku even for browser verification, models cannot be overridden per project, and autopilot has no fallback when the Monitor tool is missing. Restart a running `/devflow:autopilot` loop.
+
 ## [3.4.0] - 2026-11-27
 
 Only problems that cannot be undone block an issue; everything else retries, proceeds with a recorded decision, or ships flagged for a human.
