@@ -136,7 +136,8 @@ test('P1 every block call names an allowed category', () => {
     'mcp-down', 'retries-exhausted', 'missing-requirement']);
   const invalid = [];
   SRC.split('\n').forEach((line, i) => {
-    if (!/\bblock\((?:'|stage)/.test(line.replace(/async function block\(/, ''))) return;
+    // Any call of block( (whatever its first argument), except the definition itself.
+    if (!/(?<![\w.$])block\(/.test(line.replace(/(?:async\s+)?function\s+block\(/, ''))) return;
     const annotation = /\/\/ block: (\S+)/.exec(line);
     if (!annotation || !allowed.has(annotation[1])) invalid.push(i + 1);
   });
