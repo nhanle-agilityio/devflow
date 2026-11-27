@@ -11,11 +11,11 @@ const root = path.join(__dirname, '..');
 const bin = path.join(root, 'bin/devflow-run');
 const config = { github: { owner: 'o', repo: 'r' }, baseBranch: 'main', devflowVersion: '3.0.0' };
 
-function invoke(t, checks, raw = JSON.stringify({ ...config, checks })) {
+function invoke(t, checks, raw = JSON.stringify({ ...config, checks }), args = []) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'devflow-check-'));
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   if (raw !== null) fs.writeFileSync(path.join(cwd, 'config.json'), raw);
-  const result = spawnSync(process.execPath, [bin, 'check', '--config', 'config.json'], { cwd, encoding: 'utf8', timeout: 10000 });
+  const result = spawnSync(process.execPath, [bin, 'check', '--config', 'config.json', ...args], { cwd, encoding: 'utf8', timeout: 10000 });
   assert.ok(result.stdout, result.stderr || String(result.error));
   return { status: result.status, ...JSON.parse(result.stdout) };
 }
@@ -34,6 +34,31 @@ test('M1.2 failures preserve exit status and output and later checks run', (t) =
   assert.equal(result.checks[0].exitCode, 7);
   assert.equal(result.checks[0].outputTail, 'out\nerr');
   assert.equal(result.checks[1].outputTail, 'done');
+});
+
+test('#203 --only selects check positions and preserves config order', (t) => {
+  const checks = [
+    { name: 'test', run: 'touch marker' },
+    { name: 'test', run: 'exit 7' },
+    { name: 'lint', run: 'test -f marker' },
+  ];
+  const result = invoke(t, checks, undefined, ['--only', '3,1']);
+  assert.equal(result.status, 0);
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.checks.map(({ name }) => name), ['test', 'lint']);
+});
+
+test('#203 rejects invalid check positions and redRun values', (t) => {
+  for (const only of ['', '0', '2', '1,1', 'test']) {
+    const result = invoke(t, [{ name: 'test', run: 'true' }], undefined, ['--only', only]);
+    assert.equal(result.status, 1);
+    assert.match(result.error, /--only/);
+  }
+  for (const redRun of [false, ' ']) {
+    const result = invoke(t, [{ name: 'test', run: 'true', redRun }]);
+    assert.equal(result.status, 1);
+    assert.match(result.error, /redRun/);
+  }
 });
 
 test('M1.3 a one-second timeout stops sleep', (t) => {

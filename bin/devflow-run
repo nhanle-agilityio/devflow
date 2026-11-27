@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 // devflow-run: deterministic steps for the next-task engine. Node, no dependencies.
-// Usage: devflow-run check [--config .claude/devflow.json]
+// Usage: devflow-run check [--config .claude/devflow.json] [--only <position,...>]
 //        devflow-run branch --issue <n> --name <branch> --from <ref> [--parents <ref,...>] [--remote origin]
 //        devflow-run restore --to <branch>
 //        devflow-run commit < payload.json   (paths may be absolute under the repository root; optional testLock
@@ -509,21 +509,29 @@ async function main([subcommand, ...options]) {
   if (subcommand === 'push') return runPush(options);
   if (subcommand === 'pr-body') return runPrBody(options);
   if (subcommand === 'park') return runPark(options);
-  if (subcommand !== 'check' || (options.length && (options.length !== 2 || options[0] !== '--config' || !options[1]))) {
-    throw new Error('Usage: devflow-run check [--config .claude/devflow.json]');
+  if (subcommand !== 'check') {
+    throw new Error('Usage: devflow-run check [--config .claude/devflow.json] [--only <position,...>]');
   }
-  const { checks } = readConfig(options[1] ?? CONFIG_PATH);
+  const { config = CONFIG_PATH, only } = optionsFor(options, ['config', 'only']);
+  const { checks } = readConfig(config);
   if (!Array.isArray(checks) || !checks.length || checks.some((check) =>
     !check || typeof check.name !== 'string' || !check.name.trim() || typeof check.run !== 'string' || !check.run.trim() ||
+    (check.redRun !== undefined && (typeof check.redRun !== 'string' || !check.redRun.trim())) ||
     (check.timeoutSeconds !== undefined && (!Number.isInteger(check.timeoutSeconds) || check.timeoutSeconds < 1)) ||
     (check.lock !== undefined && (typeof check.lock !== 'string' || !LOCK_NAME.test(check.lock)))
   )) {
-    throw new Error('Invalid config: expected checks with a name, command, optional positive integer timeoutSeconds and ' +
+    throw new Error('Invalid config: expected checks with a name, command, optional non-empty redRun command, optional positive integer timeoutSeconds and ' +
       'optional lock name (letters, digits, _ and -)');
   }
 
+  const positions = only === undefined ? [] : only.split(',');
+  if (positions.some((position) => !/^[1-9]\d*$/.test(position) || Number(position) > checks.length) ||
+      new Set(positions).size !== positions.length) {
+    throw new Error('Expected --only as a comma-separated list of distinct 1-based check positions from the config');
+  }
+  const selected = positions.length ? checks.filter((_, index) => positions.includes(String(index + 1))) : checks;
   const results = [];
-  for (const check of checks) results.push(await runLockedCheck(check));
+  for (const check of selected) results.push(await runLockedCheck(check));
   return { ok: true, passed: results.every(({ exitCode, timedOut }) => exitCode === 0 && !timedOut), checks: results };
 }
 
