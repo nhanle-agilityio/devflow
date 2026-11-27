@@ -108,6 +108,7 @@ async function run(args, opts = {}) {
     if (l.startsWith('changed-files')) return opts.changedFiles !== undefined ? pick(opts.changedFiles, n) : { ok: true, files: ['src/x.py'] };
     if (l.startsWith('decisions')) return { ok: true, appended: ['- line'] };
     if (l.startsWith('ship')) return Object.assign({ ok: true, prNumber: 100 + n, url: 'u' + n }, pick(opts.ship, n) || {});
+    if (l.startsWith('retreat')) return { ok: true };
     if (l.startsWith('blocked')) return { ok: true, pushed: false };
     if (l.startsWith('restore')) return { ok: true };
     throw new Error('unexpected agent ' + l);
@@ -201,17 +202,20 @@ test('questions from QA and dev are merged into one block', async () => {
   assert.ok(!has(calls, 'commit'));
 });
 
-test('a file owned by both QA and dev blocks at Plan', async () => {
+test('a file owned by both QA and dev is assigned to QA', async () => {
   const { rep, calls } = await run({ ...BASE, issues: [1] }, { qaFiles: ['tests/a.py'], devFiles: ['./tests/a.py', 'src/x.py'] });
-  assert.match(rep[0].reason, /Ownership overlap/);
-  assert.ok(!has(calls, 'qa'));
+  assert.match(rep[0].notes.join(), /Ownership overlap/);
+  assert.equal(rep[0].status, 'pr');
+  assert.ok(has(calls, 'qa'));
 });
 
-test('dev changing a QA file, or QA a dev file, blocks before the commit', async () => {
+test('dev changing a QA file, or QA a dev file, ships with a decision', async () => {
   let r = await run({ ...BASE, issues: [1] }, { ...QA, devOut: { filesChanged: ['src/x.py', 'tests/test_a.py'] } });
-  assert.match(r.rep[0].reason, /dev agent changed QA test files/);
+  assert.equal(r.rep[0].status, 'pr');
+  assert.match(r.rep[0].notes.join(), /dev agent changed QA test files/);
   r = await run({ ...BASE, issues: [1] }, { ...QA, qaOut: { filesChanged: ['tests/test_a.py', 'src/x.py'] } });
-  assert.match(r.rep[0].reason, /outside its own/);
+  assert.equal(r.rep[0].status, 'pr');
+  assert.match(r.rep[0].notes.join(), /outside its own/);
 });
 
 test('QA tests that pass without the change ship with an assumption and a note', async () => {
@@ -370,8 +374,8 @@ test('scan hits reach review and become critical findings that a fix round must 
   assert.ok(has(calls, 'fix'));
   assert.match(prompt(calls, 'fix'), /\[critical\] src\/x\.py:1: Weakened check \(noqa\)/);
   // the stub keeps returning the same diff, so the review never passes
-  assert.equal(rep[0].status, 'blocked');
-  assert.match(rep[0].reason, /^Review:/);
+  assert.equal(rep[0].status, 'pr');
+  assert.equal(rep[0].risk, 'high');
 });
 
 test('a hit gone after the fix ships with the issue risk', async () => {
@@ -657,10 +661,10 @@ test('a failed root-cause round never blocks: died or blocked ships with unknown
   }
 });
 
-test('a root-cause round that edits a QA file still blocks', async () => {
+test('a root-cause round that edits a QA file ships with a decision', async () => {
   const { rep } = await run({ ...BASE, issues: [1] }, { ...QA, selectLabels: () => ['type:fix'], fixOut: { filesChanged: ['tests/test_a.py'] } });
-  assert.equal(rep[0].status, 'blocked');
-  assert.match(rep[0].reason, /QA test files/);
+  assert.equal(rep[0].status, 'pr');
+  assert.match(rep[0].notes.join(), /QA test files/);
 });
 
 // --- scan coverage: config globs, more skip/suppress forms, prose files ---
@@ -844,7 +848,7 @@ test('test_t1_5_assigned_by_run_true_plan_block_removes_self', async () => {
 });
 
 test('test_t1_6_assigned_by_run_true_review_block_removes_self', async () => {
-  const review = { verdict: 'changes', findings: [{ severity: 'warning', file: 'src/x.py', line: 1, problem: 'p', fix: 'f' }] };
+  const review = { verdict: 'changes', findings: [], questions: ['[Dev] Which contract should remain?'] };
   const { rep, calls } = await run({ ...BASE, config: { ...CFG, nextTask: { onQuestion: 'block' } }, issues: [1] }, { assignedByRun: true, review });
   assert.equal(rep[0].status, 'blocked');
   assert.match(rep[0].reason, /^Review:/);
@@ -893,29 +897,29 @@ const throwOn = (label, make, only) => (l, n) => {
 
 test('test_t2_1_stage_throw_after_claim_runs_cleanup_with_error', async () => {
   const { rep, calls } = await run({ ...BASE, issues: [1] }, { onCall: throwOn('implement', () => new Error('boom')) });
-  assert.equal(count(calls, 'blocked'), 1);
-  assert.match(prompt(calls, 'blocked'), /stage "Error"/);
-  assert.match(prompt(calls, 'blocked'), /boom/);
-  assert.equal(rep[0].status, 'blocked');
-  assert.match(rep[0].reason, /^Error: boom/);
+  assert.equal(count(calls, 'retreat'), 1);
+  assert.match(prompt(calls, 'retreat'), /stage "Error"/);
+  assert.match(prompt(calls, 'retreat'), /boom/);
+  assert.equal(rep[0].status, 'skipped');
+  assert.match(rep[0].reason, /^retry: Error: boom/);
 });
 
 test('test_t2_2_error_reason_uses_first_line', async () => {
   const { rep } = await run({ ...BASE, issues: [1] }, { onCall: throwOn('plan', () => new Error('line1\nline2')) });
-  assert.match(rep[0].reason, /^Error: line1/);
+  assert.match(rep[0].reason, /^retry: Error: line1/);
   assert.doesNotMatch(rep[0].reason, /line2/);
 });
 
 test('test_t2_3_throw_cleanup_removes_assignee_when_assigned_by_run', async () => {
   const { calls } = await run({ ...BASE, issues: [1] }, { ...QA, assignedByRun: true, onCall: throwOn('qa', () => new Error('x')) });
-  assert.equal(count(calls, 'blocked'), 1);
-  assert.match(prompt(calls, 'blocked'), REMOVE_ASSIGNEE);
+  assert.equal(count(calls, 'retreat'), 1);
+  assert.match(prompt(calls, 'retreat'), REMOVE_ASSIGNEE);
 });
 
 test('test_t2_4_throw_cleanup_keeps_assignee_when_not_assigned_by_run', async () => {
   const { calls } = await run({ ...BASE, issues: [1] }, { ...QA, assignedByRun: false, onCall: throwOn('qa', () => new Error('x')) });
-  assert.equal(count(calls, 'blocked'), 1);
-  assert.doesNotMatch(prompt(calls, 'blocked'), REMOVE_ASSIGNEE);
+  assert.equal(count(calls, 'retreat'), 1);
+  assert.doesNotMatch(prompt(calls, 'retreat'), REMOVE_ASSIGNEE);
 });
 
 test('test_t2_5_claim_throw_no_cleanup_partial_claim_note', async () => {
@@ -938,10 +942,10 @@ test('test_t2_6_release_throw_after_lost_claim_partial_claim_note', async () => 
 test('test_t2_7_cleanup_throws_after_stage_throw', async () => {
   const onCall = (l, n) => {
     throwOn('implement', () => new Error('boom'))(l, n);
-    throwOn('blocked', () => new Error('cleanup boom'))(l, n);
+    throwOn('retreat', () => new Error('cleanup boom'))(l, n);
   };
   const { rep, calls } = await run({ ...BASE, issues: [1] }, { onCall });
-  assert.equal(count(calls, 'blocked'), 1);
+  assert.equal(count(calls, 'retreat'), 1);
   assert.equal(rep[0].status, 'blocked');
   assert.match(rep[0].reason, /^Workflow error:/);
   assert.match(rep[0].notes.join('\n'), new RegExp(CLEANUP_FAILED));
@@ -955,10 +959,10 @@ test('test_t2_8_cleanup_throws_after_normal_block', async () => {
   assert.match(rep[0].notes.join('\n'), new RegExp(CLEANUP_FAILED));
 });
 
-test('test_t2_8_cleanup_throws_after_normal_block_before_claim_won', async () => {
-  // Our claim comment is missing, so the issue is blocked at Claim before the claim is won.
-  const { rep, calls } = await run({ ...BASE, issues: [1] }, { claimProblem: 'claim comment not read back', onCall: throwOn('blocked', () => new Error('cleanup boom')) });
-  assert.equal(count(calls, 'blocked'), 1);
+test('test_t2_8_cleanup_throws_during_retreat_before_claim_won', async () => {
+  // Our claim comment is missing, so the issue retreats at Claim before the claim is won.
+  const { rep, calls } = await run({ ...BASE, issues: [1] }, { claimProblem: 'claim comment not read back', onCall: throwOn('retreat', () => new Error('cleanup boom')) });
+  assert.equal(count(calls, 'retreat'), 1);
   assert.equal(rep[0].status, 'blocked');
   assert.match(rep[0].reason, /^Workflow error:/);
   assert.match(rep[0].notes.join('\n'), new RegExp(CLEANUP_FAILED));
@@ -982,27 +986,27 @@ test('test_t2_10_normal_block_is_not_cleaned_up_twice', async () => {
 
 test('test_t2_11_parallel_throw_waits_for_both_agents', async () => {
   let implSettled = false;
-  let settledAtBlocked = null;
+  let settledAtRetreat = null;
   const onCall = async (l, n) => {
     if (l.startsWith('qa')) throw new Error('qa boom');
     if (l.startsWith('implement')) {
       await new Promise((r) => setTimeout(r, 50));
       implSettled = true;
     }
-    if (l.startsWith('blocked')) settledAtBlocked = implSettled;
+    if (l.startsWith('retreat')) settledAtRetreat = implSettled;
   };
   const { rep, calls } = await run({ ...BASE, issues: [1] }, { ...QA, onCall });
-  assert.equal(count(calls, 'blocked'), 1);
-  assert.equal(settledAtBlocked, true);
-  assert.match(prompt(calls, 'blocked'), /stage "Error"/);
-  assert.match(rep[0].reason, /^Error:/);
+  assert.equal(count(calls, 'retreat'), 1);
+  assert.equal(settledAtRetreat, true);
+  assert.match(prompt(calls, 'retreat'), /stage "Error"/);
+  assert.match(rep[0].reason, /^retry: Error:/);
 });
 
 test('test_t2_12_non_error_or_empty_throw_is_unknown', async () => {
   let r = await run({ ...BASE, issues: [1] }, { onCall: (l) => { if (l.startsWith('plan')) throw undefined; } });
-  assert.match(r.rep[0].reason, /^Error: unknown/);
+  assert.match(r.rep[0].reason, /^retry: Error: unknown/);
   r = await run({ ...BASE, issues: [1] }, { onCall: throwOn('plan', () => new Error('')) });
-  assert.match(r.rep[0].reason, /^Error: unknown/);
+  assert.match(r.rep[0].reason, /^retry: Error: unknown/);
 });
 
 test('test_t2_15_notes_survive_a_throw', async () => {
@@ -1087,12 +1091,13 @@ test('test_t7_8_unknown_severity_blocks_fail_closed', async () => {
   }
 });
 
-test('test_t7_9_warning_left_after_max_review_rounds_blocks_with_same_reason', async () => {
+test('test_t7_9_warning_left_after_max_review_rounds_ships_for_human_review', async () => {
   const cfg = { ...CFG, nextTask: { maxReviewRounds: 2, onQuestion: 'block' } };
   const review = { verdict: 'pass', findings: [finding('warning')] };
   const { rep } = await run({ ...BASE, config: cfg, issues: [1] }, { review });
-  assert.equal(rep[0].status, 'blocked');
-  assert.ok(rep[0].reason.startsWith('Review: Review still has critical/warning findings after 2 fix round(s)'), rep[0].reason);
+  assert.equal(rep[0].status, 'pr');
+  assert.equal(rep[0].risk, 'high');
+  assert.match(rep[0].notes.join(), /open findings after 2 fix round/);
 });
 
 test('test_t7_10_unaccepted_scan_hit_with_pass_verdict_starts_a_fix_round', async () => {
@@ -1458,7 +1463,7 @@ test('test_t6_20_claims_spec_path_wins_over_a_cut_select_copy', async () => {
 });
 
 // T6.21
-test('test_t6_21_default_agent_fallback_sticks_and_fails_closed', async () => {
+test('test_t6_21_default_agent_fallback_sticks_and_retreats_if_unread', async () => {
   let r = await run({ ...BASE, issues: [1] }, { review: blindThenFinding() });
   // Round 1: reviewer (blind) then default agent with a finding; the fix runs; round 2 goes straight to the default agent.
   let reviews = r.calls.filter((c) => c.l.startsWith('review'));
@@ -1466,9 +1471,9 @@ test('test_t6_21_default_agent_fallback_sticks_and_fails_closed', async () => {
   assert.ok(reviews.length >= 3 && reviews.slice(1).every((c) => !c.agentType));
   assert.match(reviews[reviews.length - 1].l, /round 2/);
   r = await run({ ...BASE, issues: [1] }, { review: () => ({ verdict: 'pass', findings: [], issueRead: false }) });
-  assert.equal(r.rep[0].status, 'blocked');
-  assert.match(r.rep[0].reason, /Review: the review could not read the issue/);
-  assert.ok(has(r.calls, 'blocked'));
+  assert.equal(r.rep[0].status, 'skipped');
+  assert.match(r.rep[0].reason, /^retry: Review: the review could not read the issue/);
+  assert.ok(has(r.calls, 'retreat'));
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -1527,10 +1532,10 @@ test('test_t4_4_short_path_keeps_check_review_risk_ship', async () => {
 test('test_t4_5_short_path_review_round_limit', async () => {
   const review = { verdict: 'changes', findings: [{ severity: 'critical', file: 'src/x.py', line: 1, problem: 'p', fix: 'f' }] };
   const { rep, calls } = await run({ ...BASE, config: { ...CFG, nextTask: { maxReviewRounds: 2 } }, issues: [1] }, { ...SHORT_OPTS, review, diff: '' });
-  assert.equal(rep[0].status, 'blocked');
-  assert.match(rep[0].reason, /^Review:/);
-  assert.ok(!has(calls, 'ship'));
-  assert.match(rep[0].reason, /after 2 fix round/);
+  assert.equal(rep[0].status, 'pr');
+  assert.equal(rep[0].risk, 'high');
+  assert.match(prompt(calls, 'ship'), /Open review findings/);
+  assert.match(rep[0].notes.join(), /after 2 fix round/);
 });
 
 // T4.6
@@ -1674,7 +1679,7 @@ test('test_t5_7_one_blocked_marker_per_block', async () => {
   assert.equal(count(b), 1, 'exactly one marker with questions');
   assert.ok(b.includes('<!-- devflow-questions -->\n' + MARK + '\n'), 'marker is line 2 after the questions marker');
   // without questions: the reason comment carries it, no questions marker body
-  r = await run({ ...BASE, config: { ...CFG, nextTask: { maxReviewRounds: 1 } }, issues: [1] }, { review: CHANGES, diff: '' });
+  r = await run({ ...BASE, config: { ...CFG, nextTask: { maxFixRounds: 0 } }, issues: [1] }, { checkFirstFails: true });
   assert.equal(r.rep[0].status, 'blocked');
   b = prompt(r.calls, 'blocked');
   assert.equal(count(b), 1, 'exactly one marker without questions');
@@ -1766,8 +1771,8 @@ test('test_t6_7_spec_path_wins_over_epic', async () => {
   }
   // specRead is checked against the path, not the epic number.
   const r = await run({ ...BASE, issues: [1] }, { ...specOpts, planOut: { specRead: 'epic #42' } });
-  assert.equal(r.rep[0].status, 'blocked');
-  assert.match(r.rep[0].reason, /^Plan/);
+  assert.equal(r.rep[0].status, 'pr');
+  assert.match(r.rep[0].notes.join(), /Plan did not read the spec docs\/specs\/2026-11-17-x.md/);
 });
 
 // T6.8
@@ -1865,10 +1870,10 @@ test('T1.1 a review finding in qaFiles goes to the QA fix agent, not the dev fix
   assert.equal(count93(calls, 'fix'), 0);
 });
 
-test('T1.2 the QA fix agent changing a file outside qaFiles blocks', async () => {
+test('T1.2 the QA fix agent changing a file outside qaFiles ships with a decision', async () => {
   const { rep } = await run({ ...BASE, issues: [1] }, { ...Q93, review: once93([f93('tests/a.test.cjs')]), qaFixOut: { filesChanged: ['src/x.js'] } });
-  assert.equal(rep[0].status, 'blocked');
-  assert.match(rep[0].reason, /QA fix agent changed .*src\/x\.js/);
+  assert.equal(rep[0].status, 'pr');
+  assert.match(rep[0].notes.join(), /QA fix agent changed .*src\/x\.js/);
 });
 
 test('T1.3 a critical finding in qaFiles runs the QA fix agent', async () => {
@@ -1891,10 +1896,10 @@ test('T1.5 a failing check attributed to a non-QA file starts the dev fix agent'
   assert.equal(count93(calls, 'qa-fix'), 0);
 });
 
-test('T1.6 the dev fix agent changing a qaFile blocks', async () => {
+test('T1.6 the dev fix agent changing a qaFile ships with a decision', async () => {
   const { rep } = await run({ ...BASE, issues: [1] }, { ...Q93, review: once93([f93('src/x.js')]), fixOut: { filesChanged: ['tests/a.test.cjs'] } });
-  assert.equal(rep[0].status, 'blocked');
-  assert.match(rep[0].reason, /QA test files tests\/a\.test\.cjs/);
+  assert.equal(rep[0].status, 'pr');
+  assert.match(rep[0].notes.join(), /QA test files tests\/a\.test\.cjs/);
 });
 
 test('T1.7 QA and dev fix rounds share maxFixRounds in the check loop', async () => {
@@ -1908,8 +1913,8 @@ test('T1.7 QA and dev fix rounds share maxFixRounds in the check loop', async ()
 
 test('T1.8 a QA-file finding that stays open gets exactly maxReviewRounds rounds', async () => {
   const { rep, calls } = await run(cfg93({ maxReviewRounds: 1, onQuestion: 'block' }), { ...Q93, review: always93([f93('tests/a.test.cjs')]) });
-  assert.equal(rep[0].status, 'blocked');
-  assert.match(rep[0].reason, /^Review:/);
+  assert.equal(rep[0].status, 'pr');
+  assert.equal(rep[0].risk, 'high');
   assert.equal(count93(calls, 'qa-fix'), 1);
   assert.equal(count93(calls, 'fix'), 0);
   assert.equal(count93(calls, 'review'), 2);
@@ -1917,7 +1922,7 @@ test('T1.8 a QA-file finding that stays open gets exactly maxReviewRounds rounds
 
 test('T1.9 a mixed round runs the QA fix agent, then the dev fix agent, and counts once', async () => {
   const { rep, calls } = await run(cfg93({ maxReviewRounds: 1, onQuestion: 'block' }), { ...Q93, review: always93([f93('tests/a.test.cjs'), f93('src/x.js')]) });
-  assert.equal(rep[0].status, 'blocked');
+  assert.equal(rep[0].status, 'pr');
   const order = labels(calls).filter((l) => l === 'qa-fix' || l === 'fix');
   assert.deepEqual(order, ['qa-fix', 'fix']);
   assert.equal(count93(calls, 'review'), 2);
@@ -1925,7 +1930,7 @@ test('T1.9 a mixed round runs the QA fix agent, then the dev fix agent, and coun
 
 test('T1.10 a QA fix round that changes nothing still counts and the dev fix agent still runs', async () => {
   const { rep, calls } = await run(cfg93({ maxReviewRounds: 1, onQuestion: 'block' }), { ...Q93, review: always93([f93('tests/a.test.cjs'), f93('src/x.js')]), qaFixOut: { filesChanged: [] } });
-  assert.equal(rep[0].status, 'blocked');
+  assert.equal(rep[0].status, 'pr');
   assert.equal(count93(calls, 'fix'), 1);
   assert.equal(count93(calls, 'review'), 2);
 });
@@ -1997,8 +2002,8 @@ test('T1.17 reviewer.md and the review prompt name category commit-structure for
 
 test('T1.18 "test is right" without a dev position leaves the finding open, no block', async () => {
   const { rep, calls } = await run({ ...BASE, config: { ...CFG, nextTask: { onQuestion: 'block' } }, issues: [1] }, { ...Q93, ...right93, review: always93([f93('tests/a.test.cjs')]) });
-  assert.equal(rep[0].status, 'blocked');
-  assert.match(rep[0].reason, /^Review: Review still has/);
+  assert.equal(rep[0].status, 'pr');
+  assert.match(prompt(calls, 'ship'), /Open review findings/);
   assert.equal(count93(calls, 'qa-fix'), 2);
   assert.equal(count93(calls, 'fix'), 2);
 });
@@ -2158,14 +2163,14 @@ test('T7.3 a branch with another type prefix does not match and a new branch is 
   assert.match(p, /does not match/);
 });
 
-test('T7.4 and T7.5 several scoped matches block and list the candidates', async () => {
+// #198: several scoped matches no longer block; the run continues on the first by name and records the candidates.
+test('T7.4 and T7.5 several scoped matches continue on one and list the candidates', async () => {
   const { rep, calls } = await run({ ...BASE, issues: [12] }, {
     ...T7_LABELS,
     branch: { ok: false, error: 'Multiple matching branches', candidates: ['feat/12-a', 'feat/12-b'] },
   });
-  assert.equal(rep[0].status, 'blocked');
-  assert.equal(rep[0].questionCount, 1);
-  assert.match(prompt(calls, 'blocked'), /feat\/12-a.*feat\/12-b/);
+  assert.ok(!calls.some((c) => c.l.startsWith('blocked') && /Which existing branch/.test(c.prompt)), 'no branch question');
+  assert.ok(rep[0].notes.some((n) => /several branches match #12 \(feat\/12-a, feat\/12-b\); continued on feat\/12-a/.test(n)), JSON.stringify(rep[0]));
 });
 
 test('T7.6 the prefix ends with the hyphen after the issue number', async () => {
@@ -2286,10 +2291,11 @@ test('T23.7 a risk:high PR in conflict has next sync, not merge', async () => {
   assert.equal(rep[0].next, 'sync');
 });
 
-test('T23.8 a failed run has next check by hand', async () => {
+// #198: a fix agent that returns nothing is a transient failure: the issue is retreated for an autopilot retry.
+test('T23.8 a run whose fix agent died retries', async () => {
   const { rep } = await run({ ...BASE, issues: [1] }, { fixOut: null, checkFail: () => [{ check: 'test', output: 'x' }] });
   assert.notEqual(rep[0].status, 'pr');
-  assert.equal(rep[0].next, 'check by hand');
+  assert.equal(rep[0].next, 'retry');
 });
 
 test('T23.9 a skipped issue has next check by hand', async () => {
@@ -2298,10 +2304,12 @@ test('T23.9 a skipped issue has next check by hand', async () => {
   assert.equal(rep[0].next, 'check by hand');
 });
 
-test('T23.10 a block with an empty questions list has next check by hand, not answer', async () => {
+// #198: a plan that reports blocked without a question is retreated for an autopilot retry, never answered.
+test('T23.10 a plan blocked with an empty questions list retries, not answer', async () => {
   const { rep } = await run({ ...BASE, issues: [1] }, { planOut: () => ({ status: 'blocked', questions: [] }) });
-  assert.equal(rep[0].status, 'blocked');
-  assert.equal(rep[0].next, 'check by hand');
+  assert.equal(rep[0].status, 'skipped');
+  assert.match(rep[0].reason, /^retry: Plan/);
+  assert.equal(rep[0].next, 'retry');
 });
 
 test('T23.11 a PR with failing checks has next check by hand', async () => {

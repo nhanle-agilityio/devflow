@@ -123,7 +123,7 @@ async function engine(args, opts = {}) {
     if (l.startsWith('claim')) return { taken: false, assignedByRun: false, claims: [{ commentId: 10 + n, claimId: args.claimId, createdAt: '2026-01-01T00:00:05Z', author: 'me' }], labels: ['risk:high'], specPath: '', introducedBy: false, lastBlockedAt: null };
     if (l.startsWith('branch')) return { ok: true, branch: 'feat/' + n + '-x' };
     if (l.startsWith('plan')) {
-      if (opts.blockPlan && opts.blockPlan.includes(n)) return { status: 'blocked', plan: 'P', questions: [], qaFiles: [], devFiles: [], specRead: '#5', epicRead: true, acceptanceCriteria: 0, httpOrE2eRows: false };
+      if (opts.blockPlan && opts.blockPlan.includes(n)) return { status: 'blocked', plan: 'P', questions: ['[BA] Which behavior does the owner require?'], qaFiles: [], devFiles: [], specRead: '#5', epicRead: true, acceptanceCriteria: 0, httpOrE2eRows: false };
       return { status: 'ready', plan: 'PLAN', questions: [], qaFiles: ['tests/t.py'], devFiles: ['src/x.py'], specRead: '#5', epicRead: true, acceptanceCriteria: 0, httpOrE2eRows: false };
     }
     if (l.startsWith('qa')) return { status: 'done', tests: [{ rowId: 'T1.1', test: 't' }], filesChanged: ['tests/t.py'], questions: [], specRead: '#5', epicRead: true };

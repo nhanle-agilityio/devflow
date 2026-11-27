@@ -337,10 +337,11 @@ test('T4.19 a leftover warning with a changed high-path file ships for human rev
 });
 
 // T4.20
-test('T4.20 a leftover critical finding blocks even with decide', async () => {
+test('T4.20 a leftover critical finding ships for human review', async () => {
   const { rep, calls } = await run(withNt({ onQuestion: 'decide', maxReviewRounds: 1 }), { review: always(finding('critical')) });
-  assert.equal(rep[0].status, 'blocked');
-  assert.ok(!calls.some((c) => labelOf(c) === 'ship'));
+  assert.equal(rep[0].status, 'pr');
+  assert.equal(rep[0].risk, 'high');
+  assert.match(prompt(calls, 'ship'), /LEFTOVER-PROBLEM/);
 });
 
 // ---- T4.21-T4.23: decision text, resume, label ----------------------------------------------------------------
@@ -372,12 +373,13 @@ test('T4.23 decisions:review is added again only when the run took a new decisio
 
 // ---- T4.24 (engine), T4.25 --------------------------------------------------------------------------------
 // T4.24
-test('T4.24 with onQuestion block every question and a leftover warning blocks', async () => {
+test('T4.24 with onQuestion block questions block and a leftover warning ships', async () => {
   const a = await run(withNt({ onQuestion: 'block' }), { plans: [planWith([clear()])] });
   assert.equal(a.rep[0].status, 'blocked');
   assert.match(prompt(a.calls, 'blocked'), /<!-- devflow-questions -->/);
   const b = await run(withNt({ onQuestion: 'block', maxReviewRounds: 1 }), { review: always(finding('warning')) });
-  assert.equal(b.rep[0].status, 'blocked');
+  assert.equal(b.rep[0].status, 'pr');
+  assert.equal(b.rep[0].risk, 'high');
 });
 
 // T4.25

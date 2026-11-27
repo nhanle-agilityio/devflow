@@ -209,7 +209,22 @@ Then call the Workflow tool with name `devflow:next-task-engine` and `args = { c
 
 ## Workflow `next-task-engine.js`
 
-Plain JS, no `Date.now()`/`Math.random()`, no filesystem (the `claimId` therefore comes in as an argument). Within one run, tasks run **sequentially** in one working tree (the main checkout, or the worktree when `isolated`); parallelism is across sessions (see Parallel work). Every agent gets the config in its prompt. Every agent returns structured output (schemas below); a stage that fails marks the issue blocked and moves on to the next issue.
+Plain JS, no `Date.now()`/`Math.random()`, no filesystem (the `claimId` therefore comes in as an argument). Within one run, tasks run **sequentially** in one working tree (the main checkout, or the worktree when `isolated`); parallelism is across sessions (see Parallel work). Every agent gets the config in its prompt. The engine normalizes every structured agent result recursively, trimming strings, removing one pair of wrapping double quotes and unescaping enclosed quotes. Claim spec paths must match the configured spec directory and Markdown path pattern.
+
+### Blocking policy
+
+| Category | When the run stops |
+| --- | --- |
+| `owner-question` | The classifier keeps a question for the owner, including irreversible actions, skipping checks, dropping a required row, destructive Git operations, actions outside the repository and every question in block mode. |
+| `config-block` | The configured question policy requires blocking on a missing epic or spec read. |
+| `check-failed` | Configured checks still fail after the fix rounds. |
+| `verify-failed` | Verification still fails after its corrective round. |
+| `budget` | The run reaches its agent-call ceiling. |
+| `mcp-down` | GitHub is unreachable. The run stops without changing labels. |
+| `retries-exhausted` | The third consecutive attempt encounters a transient failure. |
+| `missing-requirement` | Required secrets, credentials, permissions or environment settings are unavailable. |
+
+A retreat parks uncommitted changes, pushes the issue branch if it has commits, releases the claim and restores the ready label. One issue comment records the stage, reason and `<!-- devflow-retry count=<n> -->`. A successful Ship resets an existing marker to zero. The third transient failure and exhausted check or verification rounds file one run-error bug for triage. Self-consistency failures proceed with a recorded decision and the PR label `decisions:review`. Unresolved review findings ship in **Open review findings** on a `risk:high`, `decisions:review` PR for a human to merge.
 
 **Notes.** Each result row carries `notes`: facts the engine records as they happen (a lane that continued after an issue that did not ship, a resumed branch, a parent that merged meanwhile, QA tests that did not fail first, manual checks not passing). The skill prints them verbatim; `/devflow:report` and the summary rely on them instead of inferred stories.
 

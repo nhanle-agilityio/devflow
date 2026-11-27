@@ -115,7 +115,8 @@ test('M2.6 refuses protected branch names and missing configuration', (t) => {
   assert.match(missing.error, /config/i);
 });
 
-test('M2.7 the engine resumes one scoped alternate and blocks on two', async (t) => {
+// #198: two scoped alternates no longer block; the run continues on one picked by name and records it.
+test('M2.7 the engine resumes one scoped alternate and picks one of two', async (t) => {
   const r = repo(t);
   const old = 'feat/105-old-slug';
   r.git('switch', '-c', old);
@@ -140,10 +141,12 @@ test('M2.7 the engine resumes one scoped alternate and blocks on two', async (t)
   r.commit('other', 'work', 'fix(#105): another attempt');
   r.git('switch', 'main');
   const second = await run({ ...BASE, issues: [105] }, options);
-  assert.equal(second.rep[0].status, 'blocked');
-  assert.equal(second.rep[0].questionCount, 1);
-  assert.match(second.rep[0].reason, /feat\/105-old-slug/);
-  assert.match(second.rep[0].reason, /feat\/105-other-slug/);
+  assert.ok(!(second.rep[0].status === 'blocked' && second.rep[0].questionCount), 'no branch question');
+  const note = second.rep[0].notes.find((n) => n.startsWith('several branches match #105'));
+  assert.ok(note, JSON.stringify(second.rep[0]));
+  assert.match(note, /feat\/105-old-slug/);
+  assert.match(note, /feat\/105-other-slug/);
+  assert.match(note, /continued on feat\/105-old-slug/);
   assert.equal(r.git('branch', '--show-current'), 'main');
 });
 

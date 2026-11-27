@@ -285,7 +285,7 @@ function runPrBody(args) {
   const { template } = optionsFor(args, ['template']);
   const {
     issue, type, scope, summary, how, riskLine, stackLine, isFix, rootCause, tests, checks,
-    verification, manualChecks, reviewNotes, decisions, assumptions, outOfScope, reviewTrace, runMarker, closes,
+    verification, manualChecks, reviewNotes, openFindings, decisions, assumptions, outOfScope, reviewTrace, runMarker, closes,
   } = JSON.parse(fs.readFileSync(0, 'utf8'));
   const isLine = (value) => typeof value === 'string' && !/[\r\n]/.test(value);
   if (!isLine(issue?.title) || !isLine(type) || !isLine(scope) || !isLine(runMarker) ||
@@ -332,6 +332,7 @@ function runPrBody(args) {
     const rendered = section === 'Risk' ? content : withoutComments(content);
     body.push(`${heading}\n\n${rendered || 'None'}`);
   }
+  if (openFindings) body.push(`## Open review findings\n\n${withoutComments(openFindings)}`);
   body.push(`## Review\n\n${reviewTrace.join('\n')}`, runMarker, closes.map((number) => `Closes #${number}`).join('\n'));
   const subject = issue.title.replace(/^\s*\[[^\]\r\n]+\]\s+T\d+:\s*/i, '');
   const title = Array.from(`${type}(${scope}): ${subject}`).slice(0, 72).join('').trimEnd();

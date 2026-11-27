@@ -250,14 +250,14 @@ test('A3.9 search for the hidden marker and reuse an existing bug before creatin
     'creation is conditional on there being no existing bug');
 });
 
-test('A3.10 an unanswerable question, budget block or claim block files no bug', async () => {
-  for (const [options, reason] of [
-    [{ question: { ...QUESTION, reversible: false } }, /open question/],
-    [{ nextTask: { maxAgentCalls: 1 } }, /budget/i],
-    [{ claimMissing: true }, /^Claim:/],
+test('A3.10 an unanswerable question, budget block or missing claim files no bug', async () => {
+  for (const [options, reason, status] of [
+    [{ question: { ...QUESTION, reversible: false } }, /open question/, 'blocked'],
+    [{ nextTask: { maxAgentCalls: 1 } }, /budget/i, 'blocked'],
+    [{ claimMissing: true }, /^retry: Claim:/, 'skipped'],
   ]) {
     const { report, calls } = await run(options);
-    assert.equal(report[0].status, 'blocked');
+    assert.equal(report[0].status, status);
     assert.match(report[0].reason, reason);
     assert.deepEqual(bugPrompts(calls), []);
     assert.ok(calls.every(({ prompt }) => !prompt.includes('devflow-run-error')));
